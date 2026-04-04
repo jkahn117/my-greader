@@ -1,0 +1,34 @@
+{
+  "name": "2026-04-04-my-greader",
+  "type": "module",
+  "scripts": {
+    "build:css": "tailwindcss -i src/styles.css -o public/styles.css --minify",
+    "dev:css": "tailwindcss -i src/styles.css -o public/styles.css --watch",
+    "dev": "pnpm build:css && vite",
+    "build": "pnpm build:css && vite build",
+    "preview": "$npm_execpath run build && vite preview",
+    "deploy": "$npm_execpath run build && wrangler deploy",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "fast-xml-parser": "^5.5.10",
+    "hono": "^4.12.10",
+    "rss-parser": "^3.13.0",
+    "vitest": "^4.1.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.2.3",
+    "@cloudflare/vitest-pool-workers": "^0.14.1",
+    "@tailwindcss/cli": "^4.2.2",
+    "@types/node": "^25.5.2",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^6.3.5",
+    "vite-ssr-components": "^0.5.2",
+    "wrangler": "^4.17.0"
+  }
+}

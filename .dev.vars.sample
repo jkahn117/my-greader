@@ -1,0 +1,15 @@
+# Copy this file to .dev.vars and fill in values for local development.
+# .dev.vars is gitignored — never commit real secrets.
+# Run `wrangler types` after editing .dev.vars to regenerate TypeScript types.
+
+# Cloudflare Access audience tag — get from Access app settings.
+# Not required locally; leave as placeholder if testing without Access.
+CF_ACCESS_AUD=placeholder
+
+# Set to "true" to bypass Cloudflare Access JWT check in local dev.
+# Never set in production.
+DEV_MODE=true
+
+# Temporary hardcoded token for Phase 2 GReader API testing (replaced in Phase 8).
+# Use this as the password in Current's FreshRSS settings to test locally.
+HARDCODED_TOKEN=dev-token-replace-me

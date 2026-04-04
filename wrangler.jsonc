@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-greader",
+  "compatibility_date": "2025-08-03",
+  "main": "./src/index.tsx",
+
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./public"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rss-reader",
+      "database_id": "63efba50-bf5f-497c-8f1e-e0c4c341546d", // fill after: wrangler d1 create rss-reader
+      "migrations_dir": "./drizzle"
+    }
+  ],
+
+  "triggers": {
+    "crons": [
+      "*/30 * * * *", // feed fetcher
+      "0 3 * * 0"     // weekly article cleanup (Sundays 03:00 UTC)
+    ]
+  },
+
+  "vars": {
+    // Days to retain articles before the cleanup cron removes them
+    "ITEM_RETENTION_DAYS": "30"
+  }
+
+  // Secrets — set via: wrangler secret put <NAME>
+  // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
+  // DEV_MODE       — set to "true" in .dev.vars to bypass Access JWT check; never set in prod
+}
