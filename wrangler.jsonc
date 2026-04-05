@@ -28,7 +28,9 @@
 
   "vars": {
     // Days to retain articles before the cleanup cron removes them
-    "ITEM_RETENTION_DAYS": "30"
+    "ITEM_RETENTION_DAYS": "30",
+    // Set to "true" to log exhaustive request+response traces — override via dashboard to disable
+    "TRACE_REQUESTS": false
   }
 
   // Secrets — set via: wrangler secret put <NAME>

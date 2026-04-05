@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { traceMiddleware } from './middleware/trace'
 import { tokenMiddleware } from './middleware/token'
 import { accessMiddleware } from './middleware/access'
 import { greader } from './handlers/greader'
@@ -19,6 +20,9 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 // ---------------------------------------------------------------------------
 // GReader API (hardcoded token auth — replaced with D1 lookup in Phase 8)
 // ---------------------------------------------------------------------------
+
+// Trace all requests when TRACE_REQUESTS=true (set in .dev.vars, never in prod)
+app.use('*', traceMiddleware)
 
 // /reader/* requires token auth; /accounts/ClientLogin does not (it IS the auth entry point)
 app.use('/reader/*', tokenMiddleware)
