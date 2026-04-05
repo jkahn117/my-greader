@@ -10,6 +10,11 @@ const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
 const FETCH_CONCURRENCY = 6;         // matches Cloudflare's simultaneous open connections limit
 const ERROR_THRESHOLD = 5;           // consecutive failures before a feed is deactivated
 
+type FeedResult =
+  | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
+  | { feedId: string; feedTitle: string; status: "not_modified" }
+  | { feedId: string; feedTitle: string; status: "error"; error: string };
+
 // ---------------------------------------------------------------------------
 // Entry point — dispatches on cron schedule string
 // ---------------------------------------------------------------------------
@@ -57,32 +62,55 @@ export async function fetchFeeds(env: Env): Promise<void> {
 
   logger.info("starting feed fetch cycle", { feedCount: rows.length });
 
-  let succeeded = 0;
-  let failed = 0;
+  const feedResults: FeedResult[] = [];
 
   // Process feeds in batches of 6 — respects the simultaneous open connections limit
   for (let i = 0; i < rows.length; i += FETCH_CONCURRENCY) {
     const batch = rows.slice(i, i + FETCH_CONCURRENCY);
-    const results = await Promise.allSettled(
+    const settled = await Promise.allSettled(
       batch.map((feed) => fetchAndStoreFeed(feed, env)),
     );
 
-    for (let j = 0; j < results.length; j++) {
-      const result = results[j];
+    for (let j = 0; j < settled.length; j++) {
+      const result = settled[j];
       if (result.status === "fulfilled") {
-        succeeded++;
+        const r = result.value;
+        if (r.status === "error") {
+          logger.error("feed fetch failed", { feedId: r.feedId, feedTitle: r.feedTitle, error: r.error });
+        }
+        feedResults.push(r);
       } else {
-        failed++;
-        logger.error("feed fetch error", {
+        const error = String(result.reason);
+        logger.error("feed fetch threw", { feedId: batch[j].id, feedUrl: batch[j].feedUrl, error });
+        feedResults.push({
           feedId: batch[j].id,
-          feedUrl: batch[j].feedUrl,
-          err: String(result.reason),
+          feedTitle: batch[j].title ?? batch[j].feedUrl,
+          status: "error",
+          error,
         });
       }
     }
   }
 
-  logger.info("feed fetch cycle complete", { succeeded, failed });
+  const succeeded = feedResults.filter((r) => r.status === "ok").length;
+  const notModified = feedResults.filter((r) => r.status === "not_modified").length;
+  const failed = feedResults.filter((r) => r.status === "error").length;
+  const newArticles = feedResults.reduce(
+    (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
+    0,
+  );
+
+  logger.info("feed fetch cycle complete", { succeeded, notModified, failed, newArticles });
+
+  // Optional per-feed detail log — enable with CRON_LOG_DETAIL=true
+  if ((env.CRON_LOG_DETAIL as string) === "true") {
+    const detail = feedResults.map((r) => {
+      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
+      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
+      return `${r.feedTitle}: error — ${r.error}`;
+    });
+    logger.info("feed fetch detail", { feeds: detail });
+  }
 }
 
 export async function fetchAndStoreFeed(
@@ -97,10 +125,11 @@ export async function fetchAndStoreFeed(
     consecutiveErrors: number;
   },
   env: Env,
-): Promise<void> {
+): Promise<FeedResult> {
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
   const metrics = createMetrics(env.READER_METRICS);
   const db = getDb(env.DB);
+  const feedTitle = feed.title ?? feed.feedUrl;
 
   const start = performance.now();
 
@@ -141,15 +170,14 @@ export async function fetchAndStoreFeed(
       .update(feeds)
       .set({ lastFetchedAt: Date.now() })
       .where(eq(feeds.id, feed.id));
-    logger.info("feed not modified (304)");
-    return;
+    return { feedId: feed.id, feedTitle, status: "not_modified" };
   }
 
   if (!response.ok) {
     const errorMessage = `HTTP ${response.status}`;
     logger.warn("feed returned non-OK status", { status: response.status });
     await recordError(errorMessage);
-    return;
+    return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
   const xml = await response.text();
@@ -167,7 +195,7 @@ export async function fetchAndStoreFeed(
       error: errorMessage,
     });
     await recordError(errorMessage);
-    throw e;
+    return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
   // Capture conditional request headers for future fetches
@@ -187,47 +215,39 @@ export async function fetchAndStoreFeed(
     })
     .where(eq(feeds.id, feed.id));
 
+  // Compute item IDs and content in parallel (crypto only, no D1 subrequests)
+  const now = Date.now();
+  const itemRows = (
+    await Promise.all(
+      (parsed.items ?? []).map(async (item) => {
+        const guid = item.guid ?? item.link;
+        if (!guid) return null;
+        return {
+          id: await deriveItemId(guid),
+          feedId: feed.id,
+          title: item.title ?? null,
+          url: item.link ?? null,
+          content: trimContent(
+            item.content ?? item["content:encoded"] ?? item.summary ?? item.contentSnippet ?? "",
+            MAX_CONTENT_BYTES,
+          ),
+          author: item.creator ?? item.author ?? null,
+          publishedAt: item.isoDate ? new Date(item.isoDate).getTime() : now,
+          fetchedAt: now,
+        };
+      }),
+    )
+  ).filter((r): r is NonNullable<typeof r> => r !== null);
+
+  // Insert all items in a single D1 batch — one subrequest regardless of count
   let newItems = 0;
-
-  for (const item of (parsed.items ?? [])) {
-    const guid = item.guid ?? item.link;
-    if (!guid) continue;
-
-    const id = await deriveItemId(guid);
-    const content = trimContent(
-      item.content ??
-        item["content:encoded"] ??
-        item.summary ??
-        item.contentSnippet ??
-        "",
-      MAX_CONTENT_BYTES,
-    );
-
-    const publishedAt = item.isoDate
-      ? new Date(item.isoDate).getTime()
-      : Date.now();
-
-    const result = await db
-      .insert(items)
-      .values({
-        id,
-        feedId: feed.id,
-        title: item.title ?? null,
-        url: item.link ?? null,
-        content,
-        author: item.creator ?? item.author ?? null,
-        publishedAt,
-        fetchedAt: Date.now(),
-      })
-      .onConflictDoNothing();
-
-    if (result.meta.changes > 0) newItems++;
+  if (itemRows.length > 0) {
+    const stmts = itemRows.map((row) => db.insert(items).values(row).onConflictDoNothing());
+    // db.batch requires a non-empty tuple — cast needed due to Drizzle's strict overload
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const batchResults = await db.batch(stmts as unknown as [any, ...any[]]);
+    newItems = batchResults.reduce((sum, r) => sum + r.meta.changes, 0);
   }
-
-  logger.info("feed fetched", {
-    totalItems: parsed.items?.length ?? 0,
-    newItems,
-  });
 
   metrics.recordParse({
     feedId: feed.id,
@@ -235,6 +255,8 @@ export async function fetchAndStoreFeed(
     durationMs: performance.now() - start,
     articleCount: newItems,
   });
+
+  return { feedId: feed.id, feedTitle, status: "ok", newItems };
 }
 
 // ---------------------------------------------------------------------------
