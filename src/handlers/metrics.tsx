@@ -117,7 +117,7 @@ handler.get("/app/metrics", async (c) => {
       feedId: String(r.feedId ?? ""),
       feedName: feedNameMap.get(String(r.feedId ?? "")) ?? String(r.feedId ?? ""),
       error: String(r.error ?? ""),
-      timestamp: String(r.timestamp ?? ""),
+      timestamp: new Date(String(r.timestamp ?? "")).getTime() || 0,
     }));
 
     const readsByDay = readResult.data.map((r) => ({

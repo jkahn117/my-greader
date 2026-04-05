@@ -11,7 +11,12 @@ const greader = new Hono<{ Bindings: Env; Variables: Variables }>();
 greader.get("/reader/api/0/user-info", (c) => {
   const userId = c.get("userId");
   const email = c.get("email");
-  return c.json({ userId, userName: email, userProfileId: userId, userEmail: email });
+  return c.json({
+    userId,
+    userName: email,
+    userProfileId: userId,
+    userEmail: email,
+  });
 });
 
 greader.route("/", auth);

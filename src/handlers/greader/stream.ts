@@ -1,8 +1,8 @@
-import { Hono } from "hono";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { Hono, type Context } from "hono";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
-import { decodeContinuation, encodeContinuation, toGreaderItemId } from "../../lib/crypto";
+import { decodeContinuation, encodeContinuation, normalizeItemId, toGreaderItemId } from "../../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../../db/schema";
 import { parseStreamId, streamContentsSchema, streamIdsSchema } from "./helpers";
 import type { Variables } from "./helpers";
@@ -168,5 +168,82 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
     ...(continuation ? { continuation } : {}),
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET|POST /reader/api/0/stream/items/contents
+// ---------------------------------------------------------------------------
+// Fetches full article content for a specific list of item IDs.
+// Clients use this after stream/items/ids to efficiently fetch only the
+// articles they don't yet have locally.
+
+type HonoCtx = Context<{ Bindings: Env; Variables: Variables }>;
+
+async function handleStreamItemsContents(c: HonoCtx) {
+  const logger = createLogger({
+    path: "/reader/api/0/stream/items/contents",
+    userId: c.get("userId"),
+  });
+  const db = getDb(c.env.DB);
+  const userId = c.get("userId");
+
+  // IDs come as repeated `i` params (GET) or form fields (POST)
+  let rawIds: string[] = [];
+  if (c.req.method === "POST") {
+    const body = await c.req.parseBody({ all: true });
+    const i = body["i"];
+    rawIds = Array.isArray(i) ? (i as string[]) : i ? [i as string] : [];
+  } else {
+    rawIds = c.req.queries("i") ?? [];
+  }
+
+  const itemIds = rawIds.map(normalizeItemId).filter(Boolean);
+  if (itemIds.length === 0) return c.json({ id: "user/-/state/com.google/reading-list", items: [] });
+
+  const rows = await db
+    .select({
+      item: items,
+      feedId: feeds.id,
+      feedTitle: feeds.title,
+      htmlUrl: feeds.htmlUrl,
+      isRead: itemState.isRead,
+      isStarred: itemState.isStarred,
+    })
+    .from(items)
+    .innerJoin(feeds, eq(items.feedId, feeds.id))
+    .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+    .leftJoin(itemState, and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)))
+    .where(and(eq(subscriptions.userId, userId), inArray(items.id, itemIds)));
+
+  logger.info("stream/items/contents", { requested: itemIds.length, found: rows.length });
+
+  return c.json({
+    id: "user/-/state/com.google/reading-list",
+    items: rows.map((r) => {
+      const categories = ["user/-/state/com.google/reading-list"];
+      if (r.isRead) categories.push("user/-/state/com.google/read");
+      if (r.isStarred) categories.push("user/-/state/com.google/starred");
+
+      return {
+        id: toGreaderItemId(r.item.id),
+        title: r.item.title ?? "",
+        canonical: [{ href: r.item.url ?? "" }],
+        alternate: [{ href: r.item.url ?? "", type: "text/html" }],
+        summary: { content: r.item.content ?? "" },
+        author: r.item.author ?? "",
+        published: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
+        updated: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
+        origin: {
+          streamId: `feed/${r.feedId}`,
+          title: r.feedTitle ?? "",
+          htmlUrl: r.htmlUrl ?? "",
+        },
+        categories,
+      };
+    }),
+  });
+}
+
+stream.get("/reader/api/0/stream/items/contents", handleStreamItemsContents);
+stream.post("/reader/api/0/stream/items/contents", handleStreamItemsContents);
 
 export { stream };

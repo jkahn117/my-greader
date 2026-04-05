@@ -16,11 +16,11 @@ interface ReadStat {
   reads: number;
 }
 
-interface ParseFailure {
+export interface ParseFailure {
   feedId: string;
   feedName: string;
   error: string;
-  timestamp: string;
+  timestamp: number;
 }
 
 interface StatusData {
@@ -210,7 +210,7 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
                   {r.feedName}
                 </td>
                 <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-                  <time datetime={r.timestamp}>{r.timestamp}</time>
+                  <time datetime={String(r.timestamp)}>{new Date(r.timestamp).toISOString()}</time>
                 </td>
                 <td class="py-3 font-mono text-xs text-destructive break-all">
                   {r.error || <span class="italic text-muted-foreground">no message</span>}
