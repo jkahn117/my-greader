@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import { eq, isNull } from "drizzle-orm";
+import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
@@ -8,7 +8,6 @@ import { feeds, items, itemState, subscriptions } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
 const FETCH_CONCURRENCY = 6;         // matches Cloudflare's simultaneous open connections limit
-const INITIAL_FETCH_LIMIT = 20;      // max articles stored on a feed's first fetch
 const ERROR_THRESHOLD = 5;           // consecutive failures before a feed is deactivated
 
 // ---------------------------------------------------------------------------
@@ -51,7 +50,10 @@ export async function fetchFeeds(env: Env): Promise<void> {
     })
     .from(feeds)
     .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-    .where(isNull(feeds.deactivatedAt));
+    .where(isNull(feeds.deactivatedAt))
+    // Prioritise never-fetched feeds first, then longest-stale — ensures
+    // all feeds rotate through fairly even if the worker times out mid-run
+    .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
 
   logger.info("starting feed fetch cycle", { feedCount: rows.length });
 
@@ -187,14 +189,7 @@ export async function fetchAndStoreFeed(
 
   let newItems = 0;
 
-  // On first fetch, cap to the most recent articles to avoid a large initial
-  // blast of SHA-256 hashes and D1 writes that can exceed CPU limits
-  const isFirstFetch = !feed.lastFetchedAt;
-  const itemsToProcess = isFirstFetch
-    ? (parsed.items ?? []).slice(0, INITIAL_FETCH_LIMIT)
-    : (parsed.items ?? []);
-
-  for (const item of itemsToProcess) {
+  for (const item of (parsed.items ?? [])) {
     const guid = item.guid ?? item.link;
     if (!guid) continue;
 
@@ -231,9 +226,7 @@ export async function fetchAndStoreFeed(
 
   logger.info("feed fetched", {
     totalItems: parsed.items?.length ?? 0,
-    processedItems: itemsToProcess.length,
     newItems,
-    cappedOnFirstFetch: isFirstFetch,
   });
 
   metrics.recordParse({
