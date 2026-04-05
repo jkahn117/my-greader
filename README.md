@@ -37,7 +37,21 @@ wrangler d1 migrations apply rss-reader --remote  # production
 
 # 3. Set the Cloudflare Access audience tag as a secret
 wrangler secret put CF_ACCESS_AUD
+
+# 4. Set the Cloudflare API token for the status dashboard (Analytics Engine Read)
+wrangler secret put CF_API_TOKEN
 ```
+
+**Creating the `CF_API_TOKEN`:**
+
+1. Go to [Cloudflare dashboard](https://dash.cloudflare.com/profile/api-tokens) → **My Profile → API Tokens → Create Token**
+2. Use **Create Custom Token**
+3. Set permissions:
+   - `Account` → `Account Analytics` → **Read**
+4. Set **Account Resources** → Include → your account
+5. Copy the generated token and run `wrangler secret put CF_API_TOKEN`
+
+Also set your account ID as a var in `wrangler.jsonc` under `CF_ACCOUNT_ID` (found in the Cloudflare dashboard sidebar).
 
 Then in the Cloudflare dashboard:
 - Create an Access application scoped to your Worker's domain
@@ -76,6 +90,8 @@ pnpm deploy     # compiles CSS + vite build + wrangler deploy
 | `pnpm deploy` | Build + deploy to Cloudflare |
 | `pnpm test` | Run vitest suite (42 tests) |
 | `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config |
+| `pnpm studio` | Open Drizzle Studio against local D1 (run `wrangler dev` first) |
+| `pnpm format` | Format all TypeScript source files with Prettier |
 
 ## Docs
 

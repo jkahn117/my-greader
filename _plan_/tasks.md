@@ -152,6 +152,22 @@
 
 ---
 
+### Phase 9 — Metrics & Status Dashboard ✅
+
+- [x] `src/lib/metrics.ts` — `createMetrics()` factory; typed events: `ParseEvent`, `ReadEvent`, `SubscriptionEvent`; WAE write binding; no-op guard when binding absent
+- [x] `src/lib/wae.ts` — `queryWae()` client for Analytics Engine SQL API (REST, Bearer token)
+- [x] `src/handlers/cron.ts` — `recordParse()` on success/failure with duration + article count
+- [x] `src/handlers/greader.ts` — `recordRead()` on `edit-tag` when `isRead=1`; `recordSubscription()` on all three `subscription/edit` actions
+- [x] `src/views/status.tsx` — Status tab: 3 KPI tiles (reads, parses, failures 7d), reads-by-day table, parse-per-feed table; `StatusUnconfigured` shown when credentials missing
+- [x] `src/handlers/status.tsx` — `GET /app/status`; parallel WAE queries; error boundary
+- [x] `wrangler.jsonc` — `CF_ACCOUNT_ID` var; `CF_API_TOKEN` secret comment
+- [x] Status tab enabled in nav (`tabs.tsx`)
+- [x] `src/middleware/trace.ts` — exhaustive request+response trace middleware; toggled via `TRACE_REQUESTS` env var
+- [ ] `wrangler secret put CF_API_TOKEN` — set Cloudflare API token (Account Analytics Read permission)
+- [ ] Set `CF_ACCOUNT_ID` in `wrangler.jsonc`
+
+---
+
 ### Phase 8 — Wire Real Token Auth ✅
 
 - [x] `src/middleware/token.ts`: SHA-256 hash lookup in `api_tokens WHERE revoked_at IS NULL`; updates `last_used_at` on every authenticated request

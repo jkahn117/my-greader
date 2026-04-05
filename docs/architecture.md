@@ -8,10 +8,12 @@ src/
   middleware/
     access.ts            — Cloudflare Access JWT verification middleware (UI routes)
     token.ts             — GReader API token middleware (SHA-256 hash lookup)
+    trace.ts             — exhaustive request+response trace middleware (TRACE_REQUESTS=true)
   handlers/
     greader.ts           — all GReader API endpoints
     cron.ts              — scheduled feed fetcher + article cleanup
-    tokens.tsx           — GET /app, POST /tokens/generate, DELETE /tokens/:id
+    metrics.tsx          — GET /app/metrics (Analytics Engine dashboard)
+    tokens.tsx           — GET /app/access, POST /tokens/generate, DELETE /tokens/:id
     feeds_ui.tsx         — GET /app/feeds
     import.tsx           — POST /import (OPML)
   views/
@@ -19,15 +21,18 @@ src/
     app.tsx              — top-level page: header + tabs + content
     access.tsx           — Access tab (token list + generate form)
     feeds.tsx            — Feed tab (subscription list + OPML import)
+    metrics.tsx          — Metrics tab (KPI tiles + parse/read tables)
     import.tsx           — ImportResult htmx fragment
     components/
       header.tsx         — email badge + logout link
-      tabs.tsx           — Status / Feed / Access tab nav
+      tabs.tsx           — Metrics / Feed / Access tab nav
   lib/
     crypto.ts            — SHA-256, item ID helpers, continuation tokens
     db.ts                — Drizzle client factory
     logger.ts            — structured JSON logger
+    metrics.ts           — Workers Analytics Engine write client (createMetrics factory)
     opml.ts              — OPML parser (fast-xml-parser)
+    wae.ts               — Analytics Engine SQL API query client
   db/
     schema.ts            — Drizzle schema for all 6 tables
   types/
@@ -53,14 +58,18 @@ src/
 ```jsonc
 {
   "d1_databases": [{ "binding": "DB", "database_name": "rss-reader" }],
+  "analytics_engine_datasets": [{ "binding": "READER_METRICS", "dataset": "rss-reader-data" }],
   "triggers": {
     "crons": ["*/30 * * * *", "0 3 * * 0"]
   },
   "vars": {
-    "ITEM_RETENTION_DAYS": "30"
+    "ITEM_RETENTION_DAYS": "30",  // days before articles are purged
+    "TRACE_REQUESTS": "false",    // set "true" to enable full request/response logging
+    "CF_ACCOUNT_ID": ""           // Cloudflare account ID for WAE SQL API queries
   }
   // Secrets (wrangler secret put):
   // CF_ACCESS_AUD  — Cloudflare Access audience tag
+  // CF_API_TOKEN   — Cloudflare API token (Account Analytics Read) for metrics dashboard
   // DEV_MODE       — set "true" in .dev.vars only; bypasses Access JWT locally
 }
 ```
@@ -95,7 +104,7 @@ CREATE TABLE subscriptions (
   user_id  TEXT NOT NULL REFERENCES users(id),
   feed_id  TEXT NOT NULL REFERENCES feeds(id),
   title    TEXT,     -- user's custom title, overrides feed default if set
-  folder   TEXT,     -- maps to GReader labels
+  folder   TEXT,     -- maps to GReader labels; one folder per subscription
   UNIQUE (user_id, feed_id)
 );
 
@@ -140,6 +149,21 @@ CREATE TABLE api_tokens (
 
 ---
 
+## Analytics Engine Schema
+
+Events are written via the `READER_METRICS` binding using `createMetrics()` in `src/lib/metrics.ts`.
+All events share one dataset. Positional schema:
+
+| Event | index1 | index2 | index3 | double1 | double2 | blob1 |
+|---|---|---|---|---|---|---|
+| `parse` | `"parse"` | feedId | `"success"\|"failure"` | durationMs | articleCount | error (on failure) |
+| `read` | `"read"` | userId | — | — | — | articleId |
+| `subscription` | `"subscription"` | userId | feedId | — | — | — | action (index4), folder (blob1) |
+
+Queried via the Cloudflare Analytics Engine SQL API in `src/lib/wae.ts` using `CF_API_TOKEN`.
+
+---
+
 ## Auth
 
 Management UI routes (`/app/*`, `/tokens/*`, `/import`) are protected by `accessMiddleware` in
@@ -172,6 +196,7 @@ switch (event.cron) {
 4. On `200` — parse RSS/Atom with `rss-parser`, upsert new items
 5. Content trimmed to 50KB before insert; `onConflictDoNothing` for dedup
 6. Per-feed errors are logged and isolated — one bad feed never blocks others
+7. `recordParse()` emitted on success and failure with duration + article count
 
 ### Article cleanup (`0 3 * * 0`)
 

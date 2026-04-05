@@ -100,6 +100,28 @@ per-user — article content is stored once in `items`.
 
 ---
 
+## Why Workers Analytics Engine (not D1 counters or Logpush) for metrics
+
+Three options were considered:
+
+1. **D1 counters** — increment rows on every parse/read event. Simple, but adds write load to the
+   same D1 database used for feed content, and aggregate queries (sum, group by day) get expensive
+   as rows accumulate. D1 is optimised for structured app data, not time-series event streams.
+
+2. **Logpush / `wrangler tail`** — the structured logger already emits JSON. Logpush could ship
+   logs to R2 or a third-party. Useful for debugging but not for a live dashboard without a
+   separate query layer.
+
+3. **Workers Analytics Engine** — purpose-built for high-volume event writes with cheap aggregation
+   queries. The write binding is fire-and-forget (no `await` needed, no D1 contention). The SQL API
+   lets you query directly from a Worker handler. One-minute ingestion lag is fine for a dashboard.
+
+WAE's main constraint is its positional schema — columns are `index1..N`, `double1..N`, `blob1..N`
+rather than named fields. This is mitigated by documenting the schema in `src/lib/metrics.ts` and
+`docs/architecture.md` as the single source of truth.
+
+---
+
 ## Build order rationale
 
 Recommended sequence:
