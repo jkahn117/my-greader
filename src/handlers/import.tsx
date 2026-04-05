@@ -118,12 +118,16 @@ handler.post('/import', async (c) => {
   // Re-query the updated subscription list for OOB swap
   const updatedSubs = await db
     .select({
-      id:            subscriptions.id,
-      title:         sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl:       feeds.feedUrl,
-      htmlUrl:       feeds.htmlUrl,
-      folder:        subscriptions.folder,
-      lastFetchedAt: feeds.lastFetchedAt,
+      id:                subscriptions.id,
+      feedId:            feeds.id,
+      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:           feeds.feedUrl,
+      htmlUrl:           feeds.htmlUrl,
+      folder:            subscriptions.folder,
+      lastFetchedAt:     feeds.lastFetchedAt,
+      consecutiveErrors: feeds.consecutiveErrors,
+      lastError:         feeds.lastError,
+      deactivatedAt:     feeds.deactivatedAt,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))

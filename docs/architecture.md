@@ -94,8 +94,11 @@ CREATE TABLE feeds (
   html_url          TEXT,
   title             TEXT,
   last_fetched_at   INTEGER,
-  etag              TEXT,         -- for conditional HTTP requests
-  last_modified     TEXT          -- for conditional HTTP requests
+  etag                TEXT,           -- for conditional HTTP requests
+  last_modified       TEXT,           -- for conditional HTTP requests
+  consecutive_errors  INTEGER DEFAULT 0 NOT NULL,
+  last_error          TEXT,           -- most recent error message
+  deactivated_at      INTEGER         -- NULL = active; set after 5 consecutive errors
 );
 
 -- Per-user feed subscriptions
@@ -198,7 +201,9 @@ switch (event.cron) {
 4. On `200` — parse RSS/Atom with `rss-parser`, upsert new items
 5. Content trimmed to 50KB before insert; `onConflictDoNothing` for dedup
 6. Per-feed errors are logged and isolated — one bad feed never blocks others
-7. `recordParse()` emitted on success and failure with duration + article count
+7. On failure: increments `consecutive_errors`, sets `last_error`; deactivates feed at 5
+8. On success: resets `consecutive_errors = 0`, clears `last_error`
+9. `recordParse()` emitted on success and failure with duration + article count
 
 ### Article cleanup (`0 3 * * 1`)
 

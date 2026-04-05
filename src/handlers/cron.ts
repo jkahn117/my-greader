@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
@@ -9,6 +9,7 @@ import { feeds, items, itemState, subscriptions } from "../db/schema";
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
 const FETCH_CONCURRENCY = 6;         // matches Cloudflare's simultaneous open connections limit
 const INITIAL_FETCH_LIMIT = 20;      // max articles stored on a feed's first fetch
+const ERROR_THRESHOLD = 5;           // consecutive failures before a feed is deactivated
 
 // ---------------------------------------------------------------------------
 // Entry point — dispatches on cron schedule string
@@ -36,7 +37,7 @@ export async function fetchFeeds(env: Env): Promise<void> {
   const logger = createLogger({ cron: "fetchFeeds" });
   const db = getDb(env.DB);
 
-  // Each unique feed is fetched once regardless of subscriber count
+  // Each unique active feed is fetched once regardless of subscriber count
   const rows = await db
     .selectDistinct({
       id: feeds.id,
@@ -46,9 +47,11 @@ export async function fetchFeeds(env: Env): Promise<void> {
       etag: feeds.etag,
       lastModified: feeds.lastModified,
       lastFetchedAt: feeds.lastFetchedAt,
+      consecutiveErrors: feeds.consecutiveErrors,
     })
     .from(feeds)
-    .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id));
+    .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+    .where(isNull(feeds.deactivatedAt));
 
   logger.info("starting feed fetch cycle", { feedCount: rows.length });
 
@@ -89,6 +92,7 @@ export async function fetchAndStoreFeed(
     etag: string | null;
     lastModified: string | null;
     lastFetchedAt: number | null;
+    consecutiveErrors: number;
   },
   env: Env,
 ): Promise<void> {
@@ -97,6 +101,27 @@ export async function fetchAndStoreFeed(
   const db = getDb(env.DB);
 
   const start = performance.now();
+
+  // Records a fetch/parse failure, increments consecutive error count,
+  // and deactivates the feed once ERROR_THRESHOLD is reached.
+  async function recordError(errorMessage: string): Promise<void> {
+    const next = feed.consecutiveErrors + 1;
+    const deactivate = next >= ERROR_THRESHOLD;
+    await db
+      .update(feeds)
+      .set({
+        consecutiveErrors: next,
+        lastError: errorMessage,
+        ...(deactivate ? { deactivatedAt: Date.now() } : {}),
+      })
+      .where(eq(feeds.id, feed.id));
+    if (deactivate) {
+      logger.warn("feed deactivated after repeated errors", {
+        consecutiveErrors: next,
+        lastError: errorMessage,
+      });
+    }
+  }
 
   const headers: Record<string, string> = {
     "User-Agent": "my-greader/1.0 (+https://github.com)",
@@ -119,7 +144,9 @@ export async function fetchAndStoreFeed(
   }
 
   if (!response.ok) {
+    const errorMessage = `HTTP ${response.status}`;
     logger.warn("feed returned non-OK status", { status: response.status });
+    await recordError(errorMessage);
     return;
   }
 
@@ -130,13 +157,14 @@ export async function fetchAndStoreFeed(
   try {
     parsed = await parser.parseString(xml);
   } catch (e) {
+    const errorMessage = (e as Error).message;
     metrics.recordParse({
       feedId: feed.id,
       status: ParseStatus.FAILURE,
       durationMs: performance.now() - start,
-      error: (e as Error).message,
+      error: errorMessage,
     });
-
+    await recordError(errorMessage);
     throw e;
   }
 
@@ -150,6 +178,8 @@ export async function fetchAndStoreFeed(
       title: parsed.title ?? feed.title,
       htmlUrl: parsed.link ?? feed.htmlUrl,
       lastFetchedAt: Date.now(),
+      consecutiveErrors: 0,
+      lastError: null,
       ...(newEtag != null ? { etag: newEtag } : {}),
       ...(newLastModified != null ? { lastModified: newLastModified } : {}),
     })

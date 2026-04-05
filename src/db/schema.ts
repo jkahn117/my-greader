@@ -10,13 +10,16 @@ export const users = sqliteTable('users', {
 // Canonical feed registry — shared across all users.
 // Each unique feed URL is fetched once regardless of subscriber count.
 export const feeds = sqliteTable('feeds', {
-  id:             text('id').primaryKey(),
-  feedUrl:        text('feed_url').unique().notNull(),
-  htmlUrl:        text('html_url'),
-  title:          text('title'),
-  lastFetchedAt:  integer('last_fetched_at'),
-  etag:           text('etag'),           // for conditional HTTP requests
-  lastModified:   text('last_modified'),  // for conditional HTTP requests
+  id:                text('id').primaryKey(),
+  feedUrl:           text('feed_url').unique().notNull(),
+  htmlUrl:           text('html_url'),
+  title:             text('title'),
+  lastFetchedAt:     integer('last_fetched_at'),
+  etag:              text('etag'),            // for conditional HTTP requests
+  lastModified:      text('last_modified'),   // for conditional HTTP requests
+  consecutiveErrors: integer('consecutive_errors').notNull().default(0),
+  lastError:         text('last_error'),      // most recent error message
+  deactivatedAt:     integer('deactivated_at'), // NULL = active; set after threshold
 })
 
 // Per-user feed subscriptions

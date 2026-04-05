@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
-import { asc, eq, sql } from 'drizzle-orm'
+import { asc, eq, isNull, sql } from 'drizzle-orm'
 import { getDb } from '../lib/db'
 import { createLogger } from '../lib/logger'
 import { feeds, subscriptions } from '../db/schema'
+import { fetchFeeds } from './cron'
 import { App } from '../views/app'
-import { FeedTab } from '../views/feeds'
+import { FeedRow, FeedTab } from '../views/feeds'
 
 type Variables = { userId: string; email: string }
 
@@ -22,13 +23,17 @@ handler.get('/app/feeds', async (c) => {
 
   const subs = await db
     .select({
-      id:            subscriptions.id,
+      id:                subscriptions.id,
+      feedId:            feeds.id,
       // Use the user's custom subscription title if set, otherwise the feed's title
-      title:         sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl:       feeds.feedUrl,
-      htmlUrl:       feeds.htmlUrl,
-      folder:        subscriptions.folder,
-      lastFetchedAt: feeds.lastFetchedAt,
+      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:           feeds.feedUrl,
+      htmlUrl:           feeds.htmlUrl,
+      folder:            subscriptions.folder,
+      lastFetchedAt:     feeds.lastFetchedAt,
+      consecutiveErrors: feeds.consecutiveErrors,
+      lastError:         feeds.lastError,
+      deactivatedAt:     feeds.deactivatedAt,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
@@ -42,6 +47,73 @@ handler.get('/app/feeds', async (c) => {
       <FeedTab subs={subs} />
     </App>,
   )
+})
+
+// ---------------------------------------------------------------------------
+// POST /feeds/sync — manually trigger a full feed fetch cycle
+// ---------------------------------------------------------------------------
+
+handler.post('/feeds/sync', async (c) => {
+  const logger = createLogger({ path: '/feeds/sync', userId: c.get('userId') })
+  logger.info('manual sync triggered')
+  // Run in the background so the response returns immediately
+  c.executionCtx.waitUntil(fetchFeeds(c.env))
+  return c.html(
+    <p class="text-sm text-muted-foreground">
+      Sync started — refresh the page in a moment to see updated fetch times.
+    </p>
+  )
+})
+
+// ---------------------------------------------------------------------------
+// POST /feeds/:id/reactivate — manually reactivate a deactivated feed
+// ---------------------------------------------------------------------------
+
+handler.post('/feeds/:id/reactivate', async (c) => {
+  const { id } = c.req.param()
+  const userId = c.get('userId')
+  const logger = createLogger({ path: `/feeds/${id}/reactivate`, userId })
+  const db = getDb(c.env.DB)
+
+  // Verify the feed belongs to one of this user's subscriptions
+  const sub = await db
+    .select({ feedId: subscriptions.feedId })
+    .from(subscriptions)
+    .innerJoin(feeds, eq(feeds.id, subscriptions.feedId))
+    .where(eq(subscriptions.userId, userId))
+    .get()
+
+  if (!sub) return c.text('Not found', 404)
+
+  await db
+    .update(feeds)
+    .set({ deactivatedAt: null, consecutiveErrors: 0, lastError: null })
+    .where(eq(feeds.id, id))
+
+  logger.info('feed reactivated', { feedId: id })
+
+  // Return updated row fragment for htmx swap
+  const updated = await db
+    .select({
+      id:                subscriptions.id,
+      feedId:            feeds.id,
+      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:           feeds.feedUrl,
+      htmlUrl:           feeds.htmlUrl,
+      folder:            subscriptions.folder,
+      lastFetchedAt:     feeds.lastFetchedAt,
+      consecutiveErrors: feeds.consecutiveErrors,
+      lastError:         feeds.lastError,
+      deactivatedAt:     feeds.deactivatedAt,
+    })
+    .from(subscriptions)
+    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+    .where(eq(subscriptions.userId, userId))
+    .get()
+
+  if (!updated) return c.text('Not found', 404)
+
+  return c.html(<FeedRow sub={updated} />)
 })
 
 export { handler as feedsUiHandler }

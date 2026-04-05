@@ -36,6 +36,7 @@ app.route('/', greader)
 // All management UI routes require a valid Cloudflare Access JWT
 app.use('/app/*',    accessMiddleware)
 app.use('/tokens/*', accessMiddleware)
+app.use('/feeds/*',  accessMiddleware)
 app.use('/import',   accessMiddleware)
 
 app.route('/', metricsHandler)  // GET /app/metrics
