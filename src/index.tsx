@@ -6,6 +6,7 @@ import { greader } from './handlers/greader'
 import { tokensHandler } from './handlers/tokens'
 import { feedsUiHandler } from './handlers/feeds_ui'
 import { importHandler } from './handlers/import'
+import { metricsHandler } from './handlers/metrics'
 import { scheduled } from './handlers/cron'
 
 // Hono context variables set by middleware
@@ -37,14 +38,19 @@ app.use('/app/*',    accessMiddleware)
 app.use('/tokens/*', accessMiddleware)
 app.use('/import',   accessMiddleware)
 
+app.route('/', metricsHandler)  // GET /app/metrics
+
 // Logout: redirect to Cloudflare Access logout endpoint on the same domain
 app.get('/auth/logout', (c) => {
   const { protocol, host } = new URL(c.req.url)
   return c.redirect(`${protocol}//${host}/cdn-cgi/access/logout`)
 })
 
+// /app → redirect to default tab (metrics)
+app.get('/app', (c) => c.redirect('/app/metrics'))
+
 // Management UI routes
-app.route('/', tokensHandler)   // GET /app, POST /tokens/generate, DELETE /tokens/:id
+app.route('/', tokensHandler)   // GET /app/access, POST /tokens/generate, DELETE /tokens/:id
 app.route('/', feedsUiHandler)  // GET /app/feeds
 app.route('/', importHandler)   // POST /import
 

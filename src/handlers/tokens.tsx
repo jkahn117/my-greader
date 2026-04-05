@@ -13,14 +13,14 @@ type Variables = { userId: string; email: string }
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>()
 
 // ---------------------------------------------------------------------------
-// GET /app — Access tab (token management)
+// GET /app/access — Access tab (token management)
 // ---------------------------------------------------------------------------
 
-handler.get('/app', async (c) => {
+handler.get('/app/access', async (c) => {
   const userId = c.get('userId')
   const email  = c.get('email')
   const db     = getDb(c.env.DB)
-  const logger = createLogger({ path: '/app', userId })
+  const logger = createLogger({ path: '/app/access', userId })
 
   const tokens = await db
     .select()

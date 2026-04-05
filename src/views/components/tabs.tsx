@@ -1,4 +1,4 @@
-export type ActiveTab = 'status' | 'feed' | 'access'
+export type ActiveTab = 'metrics' | 'feed' | 'access'
 
 interface TabItemProps {
   href: string
@@ -34,9 +34,9 @@ export function Tabs({ active }: { active: ActiveTab }) {
   return (
     <nav class="border-b border-border bg-card">
       <div class="mx-auto flex max-w-4xl gap-1 px-4">
-        <TabItem href="#"          label="Status" active={active === 'status'} disabled />
-        <TabItem href="/app/feeds" label="Feed"   active={active === 'feed'} />
-        <TabItem href="/app"       label="Access" active={active === 'access'} />
+        <TabItem href="/app/metrics" label="Metrics" active={active === 'metrics'} />
+        <TabItem href="/app/feeds"  label="Feed"    active={active === 'feed'} />
+        <TabItem href="/app/access" label="Access"  active={active === 'access'} />
       </div>
     </nav>
   )
