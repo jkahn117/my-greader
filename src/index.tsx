@@ -26,8 +26,11 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 app.use('*', traceMiddleware)
 
 // /reader/* requires token auth; /accounts/ClientLogin does not (it IS the auth entry point)
+// Both bare paths and the /api/greader.php/* prefix used by FreshRSS clients (e.g. Current) are supported.
 app.use('/reader/*', tokenMiddleware)
+app.use('/api/greader.php/reader/*', tokenMiddleware)
 app.route('/', greader)
+app.route('/api/greader.php', greader)
 
 // ---------------------------------------------------------------------------
 // Management UI (Cloudflare Access protected)

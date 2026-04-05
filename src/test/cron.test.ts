@@ -106,7 +106,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -124,7 +124,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://atom.example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -141,7 +141,7 @@ describe('fetchAndStoreFeed', () => {
     const before = Date.now()
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: 'abc123', lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: 'abc123', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -165,7 +165,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: 'W/"abc123"', lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: 'W/"abc123"', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -182,7 +182,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -203,7 +203,7 @@ describe('fetchAndStoreFeed', () => {
     )
     const feedId  = await seedFeed('https://example.com/feed.xml')
     const feedRow = { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-      htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null }
+      htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 }
 
     await fetchAndStoreFeed(feedRow, env)
     await fetchAndStoreFeed(feedRow, env)
@@ -230,7 +230,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )
 
@@ -246,7 +246,7 @@ describe('fetchAndStoreFeed', () => {
 
     await expect(fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
       env,
     )).resolves.toBeUndefined()
 
