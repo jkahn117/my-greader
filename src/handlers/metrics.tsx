@@ -1,6 +1,9 @@
 import { Hono } from "hono";
+import { inArray } from "drizzle-orm";
+import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { queryWae } from "../lib/wae";
+import { feeds } from "../db/schema";
 import { App } from "../views/app";
 import { MetricsTab, MetricsUnconfigured } from "../views/metrics";
 
@@ -30,7 +33,7 @@ handler.get("/app/metrics", async (c) => {
   }
 
   try {
-    const [parseResult, readResult] = await Promise.all([
+    const [parseResult, readResult, failureResult] = await Promise.all([
       // Parse stats per feed: successes, failures, avg duration, total articles
       queryWae(
         accountId,
@@ -42,7 +45,7 @@ handler.get("/app/metrics", async (c) => {
           countIf(blob2 = 'failure')     AS failures,
           avg(double1)                   AS avgDurationMs,
           sum(double2)                   AS totalArticles
-        FROM READER_METRICS
+        FROM "rss-reader-data"
         WHERE index1 = 'parse'
           AND timestamp > NOW() - INTERVAL '7' DAY
         GROUP BY feedId
@@ -58,21 +61,63 @@ handler.get("/app/metrics", async (c) => {
         SELECT
           toDate(timestamp)  AS date,
           count()            AS reads
-        FROM READER_METRICS
+        FROM "rss-reader-data"
         WHERE index1 = 'read'
           AND timestamp > NOW() - INTERVAL '7' DAY
         GROUP BY date
         ORDER BY date DESC
         `,
       ),
+      // Recent parse failures: feed, timestamp, error message
+      queryWae(
+        accountId,
+        apiToken,
+        `
+        SELECT
+          blob1      AS feedId,
+          blob3      AS error,
+          timestamp
+        FROM "rss-reader-data"
+        WHERE index1 = 'parse'
+          AND blob2 = 'failure'
+          AND timestamp > NOW() - INTERVAL '7' DAY
+        ORDER BY timestamp DESC
+        LIMIT 50
+        `,
+      ),
     ]);
 
-    const parseStats = parseResult.data.map((r) => ({
+    const rawParseStats = parseResult.data.map((r) => ({
       feedId: String(r.feedId ?? ""),
       successes: Number(r.successes ?? 0),
       failures: Number(r.failures ?? 0),
       avgDurationMs: Number(r.avgDurationMs ?? 0),
       totalArticles: Number(r.totalArticles ?? 0),
+    }));
+
+    // Look up feed titles from D1 for the feeds in the parse results
+    const feedIds = rawParseStats.map((r) => r.feedId).filter(Boolean);
+    const db = getDb(c.env.DB);
+    const feedRows = feedIds.length
+      ? await db
+          .select({ id: feeds.id, title: feeds.title, feedUrl: feeds.feedUrl })
+          .from(feeds)
+          .where(inArray(feeds.id, feedIds))
+      : [];
+    const feedNameMap = new Map(
+      feedRows.map((f) => [f.id, f.title ?? f.feedUrl]),
+    );
+
+    const parseStats = rawParseStats.map((r) => ({
+      ...r,
+      feedName: feedNameMap.get(r.feedId) ?? r.feedId,
+    }));
+
+    const parseFailures = failureResult.data.map((r) => ({
+      feedId: String(r.feedId ?? ""),
+      feedName: feedNameMap.get(String(r.feedId ?? "")) ?? String(r.feedId ?? ""),
+      error: String(r.error ?? ""),
+      timestamp: String(r.timestamp ?? ""),
     }));
 
     const readsByDay = readResult.data.map((r) => ({
@@ -92,7 +137,7 @@ handler.get("/app/metrics", async (c) => {
     return c.html(
       <App email={email} active="metrics">
         <MetricsTab
-          data={{ parseStats, readsByDay, totalReads7d, totalParses7d, totalFailures7d }}
+          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d }}
         />
       </App>,
     );

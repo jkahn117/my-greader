@@ -4,6 +4,7 @@
 
 interface ParseStat {
   feedId: string;
+  feedName: string;
   successes: number;
   failures: number;
   avgDurationMs: number;
@@ -15,8 +16,16 @@ interface ReadStat {
   reads: number;
 }
 
+interface ParseFailure {
+  feedId: string;
+  feedName: string;
+  error: string;
+  timestamp: string;
+}
+
 interface StatusData {
   parseStats: ParseStat[];
+  parseFailures: ParseFailure[];
   readsByDay: ReadStat[];
   totalReads7d: number;
   totalParses7d: number;
@@ -69,7 +78,7 @@ function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
             <thead>
               <tr class="border-b border-border">
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                  Feed ID
+                  Feed
                 </th>
                 <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
                   Successes
@@ -88,8 +97,8 @@ function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
             <tbody>
               {rows.map((r) => (
                 <tr class="border-b border-border last:border-0">
-                  <td class="py-3 pr-4 font-mono text-xs text-foreground truncate max-w-[160px]">
-                    {r.feedId}
+                  <td class="py-3 pr-4 text-sm text-foreground truncate max-w-[200px]" title={r.feedId}>
+                    {r.feedName}
                   </td>
                   <td class="py-3 pr-4 text-right text-foreground">{r.successes}</td>
                   <td class="py-3 pr-4 text-right">
@@ -164,6 +173,58 @@ function ReadsByDayCard({ rows }: { rows: ReadStat[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Parse failures card
+// ---------------------------------------------------------------------------
+
+function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div class="rounded-lg border border-destructive/40 bg-card shadow-sm">
+      <div class="border-b border-destructive/40 px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Parse failures{" "}
+          <span class="text-muted-foreground font-normal text-sm">
+            (last 7 days, most recent first)
+          </span>
+        </h2>
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                When
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Error
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr class="border-b border-border last:border-0">
+                <td class="py-3 pr-4 text-foreground truncate max-w-[160px]" title={r.feedId}>
+                  {r.feedName}
+                </td>
+                <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
+                  <time datetime={r.timestamp}>{r.timestamp}</time>
+                </td>
+                <td class="py-3 font-mono text-xs text-destructive break-all">
+                  {r.error || <span class="italic text-muted-foreground">no message</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Unconfigured state — shown when CF_ACCOUNT_ID / CF_API_TOKEN are missing
 // ---------------------------------------------------------------------------
 
@@ -211,6 +272,7 @@ export function MetricsTab({ data }: { data: StatusData }) {
 
       <ReadsByDayCard rows={data.readsByDay} />
       <ParseStatsCard rows={data.parseStats} />
+      <ParseFailuresCard rows={data.parseFailures} />
     </div>
   );
 }

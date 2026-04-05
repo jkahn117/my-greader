@@ -14,10 +14,7 @@ interface TokenRowProps {
 /** Single row — has its own ID so htmx can target it for revoke */
 export function TokenRow({ token }: TokenRowProps) {
   const lastUsed = token.lastUsedAt
-    ? new Date(token.lastUsedAt).toLocaleString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-        hour: '2-digit', minute: '2-digit',
-      })
+    ? <time datetime={String(token.lastUsedAt)}>{new Date(token.lastUsedAt).toISOString()}</time>
     : 'Never'
 
   return (

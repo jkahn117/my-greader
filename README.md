@@ -60,8 +60,9 @@ Access must protect the management UI while allowing Current to reach the GReade
 **App 1 — GReader API bypass** (create this first)
 1. Zero Trust → Access → Applications → Add an application → **Self-hosted**
 2. Application domain: `reader.iamjkahn.com`, paths: `/accounts/*` and `/reader/*`
-3. Add a policy: **Action = Bypass**, Include = **Everyone**
-4. No audience tag needed — note it is not used here
+3. Add a policy — **critical**: set **Action = Bypass** (not Allow), Include = **Everyone**
+   > If Action is not set to Bypass, Access will redirect API requests to the login page
+4. No audience tag needed — this app does not issue JWTs
 
 **App 2 — Management UI** (catch-all)
 1. Add another Self-hosted application
