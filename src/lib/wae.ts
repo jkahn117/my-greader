@@ -33,6 +33,8 @@ export async function queryWae(
 
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
+    // 422 means the dataset schema doesn't exist yet (no data written) — treat as empty
+    if (res.status === 422) return { data: [], meta: [] };
     throw new Error(`WAE query failed (${res.status}): ${text}`);
   }
 

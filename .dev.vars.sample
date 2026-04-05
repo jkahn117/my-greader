@@ -10,6 +10,5 @@ CF_ACCESS_AUD=placeholder
 # Never set in production.
 DEV_MODE=true
 
-# Temporary hardcoded token for Phase 2 GReader API testing (replaced in Phase 8).
-# Use this as the password in Current's FreshRSS settings to test locally.
-HARDCODED_TOKEN=dev-token-replace-me
+# Cloudflare API token with Analytics Engine Read permission (status dashboard)
+CF_API_TOKEN=placeholder

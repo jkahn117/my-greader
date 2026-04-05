@@ -6,6 +6,10 @@
 
   "compatibility_flags": ["nodejs_compat"],
 
+  "observability": {
+    "enabled": true
+  },
+
   "assets": {
     "directory": "./public"
   },
@@ -22,7 +26,7 @@
   "triggers": {
     "crons": [
       "*/30 * * * *", // feed fetcher
-      "0 3 * * 0"     // weekly article cleanup (Sundays 03:00 UTC)
+      "0 3 * * 1" // weekly article cleanup (Mondays 03:00 UTC)
     ]
   },
 
@@ -32,12 +36,11 @@
     // Set to "true" to log exhaustive request+response traces — override via dashboard to disable
     "TRACE_REQUESTS": false,
     // Cloudflare account ID — used to query the Analytics Engine SQL API for the status dashboard
-    "CF_ACCOUNT_ID": ""
+    "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694"
   },
 
   // Secrets — set via: wrangler secret put <NAME>
   // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
-  // DEV_MODE       — set to "true" in .dev.vars to bypass Access JWT check; never set in prod
   // CF_API_TOKEN   — Cloudflare API token with Analytics Engine Read permission (status dashboard)
 
   "analytics_engine_datasets": [
@@ -45,5 +48,15 @@
       "binding": "READER_METRICS",
       "dataset": "rss-reader-data"
     }
-  ]
+  ],
+
+  "routes": [
+    {
+      "custom_domain": true,
+      "zone_name": "iamjkahn.com",
+      "pattern": "reader.iamjkahn.com"
+    }
+  ],
+
+  "workers_dev": false
 }

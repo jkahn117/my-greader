@@ -37,11 +37,11 @@ handler.get("/app/metrics", async (c) => {
         apiToken,
         `
         SELECT
-          index2                          AS feedId,
-          countIf(index3 = 'success')     AS successes,
-          countIf(index3 = 'failure')     AS failures,
-          avg(double1)                    AS avgDurationMs,
-          sum(double2)                    AS totalArticles
+          blob1                          AS feedId,
+          countIf(blob2 = 'success')     AS successes,
+          countIf(blob2 = 'failure')     AS failures,
+          avg(double1)                   AS avgDurationMs,
+          sum(double2)                   AS totalArticles
         FROM READER_METRICS
         WHERE index1 = 'parse'
           AND timestamp > NOW() - INTERVAL '7' DAY

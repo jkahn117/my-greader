@@ -19,7 +19,7 @@ export async function scheduled(
   switch (event.cron) {
     case "*/30 * * * *":
       return fetchFeeds(env);
-    case "0 3 * * 0":
+    case "0 3 * * 1":
       return purgeOldItems(env);
     default:
       createLogger().warn("unknown cron schedule", { cron: event.cron });

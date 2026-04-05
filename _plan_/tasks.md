@@ -24,13 +24,13 @@
 
 - [x] `wrangler d1 create rss-reader` — copy the returned `database_id` into `wrangler.jsonc`
 - [x] `wrangler d1 migrations apply rss-reader --local` — apply schema to local dev DB
-- [ ] `wrangler d1 migrations apply rss-reader --remote` — apply schema to production DB
-- [ ] Create a Cloudflare Access application scoped to the Worker's domain
-- [ ] Set Access policy: allow only your personal email
-- [ ] Copy the Access **Audience Tag** from the Access application settings
-- [ ] `wrangler secret put CF_ACCESS_AUD` — paste the audience tag
-- [ ] Add a custom domain to the Worker in the Cloudflare dashboard
-- [ ] Point the Cloudflare Access application at that custom domain
+- [x] `wrangler d1 migrations apply rss-reader --remote` — apply schema to production DB
+- [x] Create a Cloudflare Access application scoped to the Worker's domain
+- [x] Set Access policy: allow only your personal email
+- [x] Copy the Access **Audience Tag** from the Access application settings
+- [x] `wrangler secret put CF_ACCESS_AUD` — paste the audience tag
+- [x] Add a custom domain to the Worker in the Cloudflare dashboard
+- [x] Point the Cloudflare Access application at that custom domain
 
 ---
 
@@ -41,8 +41,8 @@
 - **Tabs** (just below header):
   - **Status** — disabled placeholder (future dashboard)
   - **Feed** — two cards on one page:
-    - *Manage feeds*: read-only table of subscriptions (title, URL, folder, last fetched)
-    - *Import OPML*: file upload, submit button, results list (imported / duplicates / errors)
+    - _Manage feeds_: read-only table of subscriptions (title, URL, folder, last fetched)
+    - _Import OPML_: file upload, submit button, results list (imported / duplicates / errors)
   - **Access** — token management:
     - Generate new token (name input + button, raw token shown once via htmx swap)
     - Active tokens list (name, last used, revoke button per row)
@@ -135,9 +135,9 @@
 ### Phase 6 — Feed Management UI ✅
 
 - [x] `src/views/feeds.tsx` — Feed tab with two cards
-- [x] *Manage feeds card*: server-rendered table of subscriptions (title, URL, folder, last fetched)
+- [x] _Manage feeds card_: server-rendered table of subscriptions (title, URL, folder, last fetched)
 - [x] `src/handlers/feeds_ui.tsx`: `GET /app/feeds` — query subscriptions joined with feeds for display
-- [x] *Import OPML card*: file upload form, `hx-post="/import"`, `#import-result` target (handler in Phase 7)
+- [x] _Import OPML card_: file upload form, `hx-post="/import"`, `#import-result` target (handler in Phase 7)
 
 ---
 

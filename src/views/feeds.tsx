@@ -7,12 +7,9 @@ export interface SubscriptionRow {
   lastFetchedAt: number | null
 }
 
-function formatDate(ts: number | null): string {
-  if (!ts) return 'Never'
-  return new Date(ts).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
+function formatDate(ts: number | null) {
+  if (!ts) return <span>Never</span>
+  return <time datetime={String(ts)}>{new Date(ts).toISOString()}</time>
 }
 
 // ---------------------------------------------------------------------------

@@ -53,11 +53,24 @@ wrangler secret put CF_API_TOKEN
 
 Also set your account ID as a var in `wrangler.jsonc` under `CF_ACCOUNT_ID` (found in the Cloudflare dashboard sidebar).
 
-Then in the Cloudflare dashboard:
-- Create an Access application scoped to your Worker's domain
-- Set an Access policy allowing only your email
-- Copy the Audience Tag into the `CF_ACCESS_AUD` secret above
-- Add a custom domain to the Worker and point the Access application at it
+**Cloudflare Access setup:**
+
+Access must protect the management UI while allowing Current to reach the GReader API without a browser session. Do this with two Access applications on the same subdomain, matched by path. Access evaluates most-specific path first.
+
+**App 1 — GReader API bypass** (create this first)
+1. Zero Trust → Access → Applications → Add an application → **Self-hosted**
+2. Application domain: `reader.iamjkahn.com`, paths: `/accounts/*` and `/reader/*`
+3. Add a policy: **Action = Bypass**, Include = **Everyone**
+4. No audience tag needed — note it is not used here
+
+**App 2 — Management UI** (catch-all)
+1. Add another Self-hosted application
+2. Application domain: `reader.iamjkahn.com` (no path — catches everything else)
+3. Add a policy: **Action = Allow**, Include = **Emails** → your email address
+4. Copy the **Audience Tag** from this application's settings
+5. Run `wrangler secret put CF_ACCESS_AUD` and paste the tag
+
+Also add a custom domain to the Worker in the Cloudflare dashboard and point both Access applications at it.
 
 ## Local development
 

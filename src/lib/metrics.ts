@@ -1,5 +1,6 @@
-// Metrics for Cloudflare Workers
-// Send metrics to Workers Analytics Engine
+// Metrics for Cloudflare Workers Analytics Engine.
+// Free plan limit: 1 index per data point.
+// Schema: index1 = event type (discriminator); dimensions go in blobs.
 
 import { createLogger } from "./logger";
 
@@ -28,61 +29,60 @@ export enum ParseStatus {
   FAILURE = "failure",
 }
 
-// indexes: [event, feedId, status]
-// doubles: [durationMs, articleCount]
-// blobs:   [error]
+// index1:  "parse"
+// blob1:   feedId
+// blob2:   status ("success" | "failure")
+// blob3:   error message (failure only)
+// double1: durationMs
+// double2: articleCount
 function parseEventToDataPoint(binding: AnalyticsEngineDataset, e: ParseEvent) {
   binding.writeDataPoint({
-    indexes: ["parse", e.feedId, e.status],
+    indexes: ["parse"],
+    blobs: [e.feedId, e.status, e.error ?? ""],
     doubles: [e.durationMs, e.articleCount ?? 0],
-    ...(e.error ? { blobs: [e.error] } : {}),
   });
 }
 
-// indexes:  [event, userId]
-// blobs:    [articleId]
+// index1: "read"
+// blob1:  userId
+// blob2:  articleId
 function readEventToDataPoint(binding: AnalyticsEngineDataset, e: ReadEvent) {
   binding.writeDataPoint({
-    indexes: ["read", e.userId],
-    blobs: [e.articleId],
+    indexes: ["read"],
+    blobs: [e.userId, e.articleId],
   });
 }
 
-// indexes: [event, userId, feedId, action]
-// blobs:   [folder]
+// index1: "subscription"
+// blob1:  userId
+// blob2:  feedId
+// blob3:  action ("subscribe" | "unsubscribe" | "edit")
+// blob4:  folder (empty string if none)
 function subscriptionEventToDataPoint(
   binding: AnalyticsEngineDataset,
   e: SubscriptionEvent,
 ) {
   binding.writeDataPoint({
-    indexes: ["subscription", e.userId, e.feedId, e.action],
-    ...(e.folder ? { blobs: [e.folder] } : {}),
+    indexes: ["subscription"],
+    blobs: [e.userId, e.feedId, e.action, e.folder ?? ""],
   });
 }
 
 export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
-  const logger = createLogger({ metrics: "createMetrics" });
-  if (!binding) {
-    logger.warn("No analytics binding, skipping");
-  }
+  const logger = createLogger({ lib: "metrics" });
+  if (!binding) logger.debug("No analytics binding, metrics are a no-op");
 
   return {
     recordParse(e: ParseEvent) {
-      if (!binding) {
-        return;
-      }
+      if (!binding) return;
       parseEventToDataPoint(binding, e);
     },
     recordRead(e: ReadEvent) {
-      if (!binding) {
-        return;
-      }
+      if (!binding) return;
       readEventToDataPoint(binding, e);
     },
     recordSubscription(e: SubscriptionEvent) {
-      if (!binding) {
-        return;
-      }
+      if (!binding) return;
       subscriptionEventToDataPoint(binding, e);
     },
   };

@@ -60,7 +60,7 @@ src/
   "d1_databases": [{ "binding": "DB", "database_name": "rss-reader" }],
   "analytics_engine_datasets": [{ "binding": "READER_METRICS", "dataset": "rss-reader-data" }],
   "triggers": {
-    "crons": ["*/30 * * * *", "0 3 * * 0"]
+    "crons": ["*/30 * * * *", "0 3 * * 1"]
   },
   "vars": {
     "ITEM_RETENTION_DAYS": "30",  // days before articles are purged
@@ -154,11 +154,13 @@ CREATE TABLE api_tokens (
 Events are written via the `READER_METRICS` binding using `createMetrics()` in `src/lib/metrics.ts`.
 All events share one dataset. Positional schema:
 
-| Event | index1 | index2 | index3 | double1 | double2 | blob1 |
-|---|---|---|---|---|---|---|
-| `parse` | `"parse"` | feedId | `"success"\|"failure"` | durationMs | articleCount | error (on failure) |
-| `read` | `"read"` | userId | — | — | — | articleId |
-| `subscription` | `"subscription"` | userId | feedId | — | — | — | action (index4), folder (blob1) |
+Free plan limit: 1 index per data point. Event type is the sole index; dimensions use blobs.
+
+| Event | index1 | blob1 | blob2 | blob3 | blob4 | double1 | double2 |
+|---|---|---|---|---|---|---|---|
+| `parse` | `"parse"` | feedId | `"success"\|"failure"` | error msg | — | durationMs | articleCount |
+| `read` | `"read"` | userId | articleId | — | — | — | — |
+| `subscription` | `"subscription"` | userId | feedId | action | folder | — | — |
 
 Queried via the Cloudflare Analytics Engine SQL API in `src/lib/wae.ts` using `CF_API_TOKEN`.
 
@@ -198,7 +200,7 @@ switch (event.cron) {
 6. Per-feed errors are logged and isolated — one bad feed never blocks others
 7. `recordParse()` emitted on success and failure with duration + article count
 
-### Article cleanup (`0 3 * * 0`)
+### Article cleanup (`0 3 * * 1`)
 
-Runs Sundays 03:00 UTC. Deletes articles older than `ITEM_RETENTION_DAYS` (default: 30).
+Runs Mondays 03:00 UTC. Deletes articles older than `ITEM_RETENTION_DAYS` (default: 30).
 Prunes `item_state` first to satisfy the FK constraint, then `items`.
