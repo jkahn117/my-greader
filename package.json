@@ -9,7 +9,8 @@
     "preview": "$npm_execpath run build && vite preview",
     "deploy": "$npm_execpath run build && wrangler deploy",
     "test": "vitest run",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "studio": "drizzle-kit studio --config drizzle.local.config.ts"
   },
   "dependencies": {
     "drizzle-kit": "^0.31.10",
@@ -24,7 +25,9 @@
     "@cloudflare/vite-plugin": "^1.2.3",
     "@cloudflare/vitest-pool-workers": "^0.14.1",
     "@tailwindcss/cli": "^4.2.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.2",
+    "better-sqlite3": "^12.8.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "vite": "^6.3.5",
