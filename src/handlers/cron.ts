@@ -7,6 +7,8 @@ import { deriveItemId } from "../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
+const FETCH_CONCURRENCY = 6;         // matches Cloudflare's simultaneous open connections limit
+const INITIAL_FETCH_LIMIT = 20;      // max articles stored on a feed's first fetch
 
 // ---------------------------------------------------------------------------
 // Entry point — dispatches on cron schedule string
@@ -53,18 +55,25 @@ export async function fetchFeeds(env: Env): Promise<void> {
   let succeeded = 0;
   let failed = 0;
 
-  for (const feed of rows) {
-    try {
-      await fetchAndStoreFeed(feed, env);
-      succeeded++;
-    } catch (err) {
-      // Isolate failures — one bad feed must not block others
-      logger.error("feed fetch error", {
-        feedId: feed.id,
-        feedUrl: feed.feedUrl,
-        err: String(err),
-      });
-      failed++;
+  // Process feeds in batches of 6 — respects the simultaneous open connections limit
+  for (let i = 0; i < rows.length; i += FETCH_CONCURRENCY) {
+    const batch = rows.slice(i, i + FETCH_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map((feed) => fetchAndStoreFeed(feed, env)),
+    );
+
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j];
+      if (result.status === "fulfilled") {
+        succeeded++;
+      } else {
+        failed++;
+        logger.error("feed fetch error", {
+          feedId: batch[j].id,
+          feedUrl: batch[j].feedUrl,
+          err: String(result.reason),
+        });
+      }
     }
   }
 
@@ -148,7 +157,14 @@ export async function fetchAndStoreFeed(
 
   let newItems = 0;
 
-  for (const item of parsed.items ?? []) {
+  // On first fetch, cap to the most recent articles to avoid a large initial
+  // blast of SHA-256 hashes and D1 writes that can exceed CPU limits
+  const isFirstFetch = !feed.lastFetchedAt;
+  const itemsToProcess = isFirstFetch
+    ? (parsed.items ?? []).slice(0, INITIAL_FETCH_LIMIT)
+    : (parsed.items ?? []);
+
+  for (const item of itemsToProcess) {
     const guid = item.guid ?? item.link;
     if (!guid) continue;
 
@@ -185,7 +201,9 @@ export async function fetchAndStoreFeed(
 
   logger.info("feed fetched", {
     totalItems: parsed.items?.length ?? 0,
+    processedItems: itemsToProcess.length,
     newItems,
+    cappedOnFirstFetch: isFirstFetch,
   });
 
   metrics.recordParse({
