@@ -55,6 +55,28 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
             : sub.title ?? '(untitled)'
           }
           <StatusBadge sub={sub} />
+          {sub.deactivatedAt
+            ? (
+              <button
+                hx-post={`/feeds/${sub.feedId}/reactivate`}
+                hx-target={`#feed-${sub.feedId}`}
+                hx-swap="outerHTML"
+                class="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              >
+                Reactivate
+              </button>
+            )
+            : (
+              <button
+                hx-post={`/feeds/${sub.feedId}/deactivate`}
+                hx-target={`#feed-${sub.feedId}`}
+                hx-swap="outerHTML"
+                class="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 underline-offset-2 hover:underline transition-opacity"
+              >
+                Deactivate
+              </button>
+            )
+          }
         </div>
         {sub.lastError && (
           <p class="mt-0.5 text-xs text-muted-foreground truncate max-w-xs" title={sub.lastError}>
@@ -65,25 +87,8 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
       <td class="py-3 pr-4 text-muted-foreground">
         {sub.folder ?? <span class="italic">None</span>}
       </td>
-      <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
+      <td class="py-3 text-muted-foreground whitespace-nowrap">
         {formatDate(sub.lastFetchedAt)}
-      </td>
-      <td class="py-3 pr-4 max-w-xs truncate text-muted-foreground">
-        <a href={sub.feedUrl} target="_blank" rel="noopener noreferrer" class="hover:underline font-mono text-xs">
-          {sub.feedUrl}
-        </a>
-      </td>
-      <td class="py-3 text-right">
-        {sub.deactivatedAt && (
-          <button
-            hx-post={`/feeds/${sub.feedId}/reactivate`}
-            hx-target={`#feed-${sub.feedId}`}
-            hx-swap="outerHTML"
-            class="rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground transition-opacity hover:opacity-80"
-          >
-            Reactivate
-          </button>
-        )}
       </td>
     </tr>
   )
@@ -113,11 +118,9 @@ export function SubscriptionListContent({ subs, oob }: { subs: SubscriptionRow[]
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Title</th>
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Folder</th>
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last fetched</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">URL</th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody class="group">
               {subs.map(sub => <FeedRow sub={sub} />)}
             </tbody>
           </table>

@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { asc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { getDb } from '../lib/db'
 import { createLogger } from '../lib/logger'
 import { feeds, subscriptions } from '../db/schema'
@@ -109,6 +109,55 @@ handler.post('/feeds/:id/reactivate', async (c) => {
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
     .where(eq(subscriptions.userId, userId))
+    .get()
+
+  if (!updated) return c.text('Not found', 404)
+
+  return c.html(<FeedRow sub={updated} />)
+})
+
+// ---------------------------------------------------------------------------
+// POST /feeds/:id/deactivate — manually deactivate an active feed
+// ---------------------------------------------------------------------------
+
+handler.post('/feeds/:id/deactivate', async (c) => {
+  const { id } = c.req.param()
+  const userId = c.get('userId')
+  const logger = createLogger({ path: `/feeds/${id}/deactivate`, userId })
+  const db = getDb(c.env.DB)
+
+  // Verify the feed belongs to one of this user's subscriptions
+  const sub = await db
+    .select({ feedId: subscriptions.feedId })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, id)))
+    .get()
+
+  if (!sub) return c.text('Not found', 404)
+
+  await db
+    .update(feeds)
+    .set({ deactivatedAt: Date.now() })
+    .where(eq(feeds.id, id))
+
+  logger.info('feed deactivated', { feedId: id })
+
+  const updated = await db
+    .select({
+      id:                subscriptions.id,
+      feedId:            feeds.id,
+      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:           feeds.feedUrl,
+      htmlUrl:           feeds.htmlUrl,
+      folder:            subscriptions.folder,
+      lastFetchedAt:     feeds.lastFetchedAt,
+      consecutiveErrors: feeds.consecutiveErrors,
+      lastError:         feeds.lastError,
+      deactivatedAt:     feeds.deactivatedAt,
+    })
+    .from(subscriptions)
+    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+    .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, id)))
     .get()
 
   if (!updated) return c.text('Not found', 404)
