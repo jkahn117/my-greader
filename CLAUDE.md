@@ -35,6 +35,8 @@ Current connects to this backend using its **FreshRSS** sync option (custom serv
 - All file types indent by **two spaces**
 - Always prefer Tailwind v4 CSS conventions for using CSS variable names
 - Always Typescript, strict mode
+- Always use semicolons at the end of lines in TypeScript
+- Always use double quotes
 - Utilize comments to clearly and concisely explain
 - Only use `pnpm` for package management
 - Use **Zod v4** (`import { z } from 'zod'`) for all API input validation (query params, form bodies)
