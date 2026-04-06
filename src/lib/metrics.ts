@@ -24,6 +24,14 @@ export interface SubscriptionEvent {
   folder?: string;
 }
 
+export interface CycleEvent {
+  totalActiveFeeds: number;
+  dueFeeds: number;
+  checkedFeeds: number;
+  newArticles: number;
+  failedFeeds: number;
+}
+
 export enum ParseStatus {
   SUCCESS = "success",
   FAILURE = "failure",
@@ -68,6 +76,19 @@ function subscriptionEventToDataPoint(
   });
 }
 
+// index1:   "cycle"
+// double1:  totalActiveFeeds
+// double2:  dueFeeds
+// double3:  checkedFeeds
+// double4:  newArticles
+// double5:  failedFeeds
+function cycleEventToDataPoint(binding: AnalyticsEngineDataset, e: CycleEvent) {
+  binding.writeDataPoint({
+    indexes: ["cycle"],
+    doubles: [e.totalActiveFeeds, e.dueFeeds, e.checkedFeeds, e.newArticles, e.failedFeeds],
+  });
+}
+
 export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
   const logger = createLogger({ lib: "metrics" });
   if (!binding) logger.debug("No analytics binding, metrics are a no-op");
@@ -84,6 +105,10 @@ export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
     recordSubscription(e: SubscriptionEvent) {
       if (!binding) return;
       subscriptionEventToDataPoint(binding, e);
+    },
+    recordCycle(e: CycleEvent) {
+      if (!binding) return;
+      cycleEventToDataPoint(binding, e);
     },
   };
 }

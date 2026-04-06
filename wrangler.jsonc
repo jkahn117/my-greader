@@ -33,8 +33,6 @@
   "vars": {
     // Days to retain articles before the cleanup cron removes them
     "ITEM_RETENTION_DAYS": "30",
-    // Set to "true" to emit a per-feed summary log at the end of each cron cycle
-    "CRON_LOG_DETAIL": "false",
     // Cloudflare account ID — used to query the Analytics Engine SQL API for the status dashboard
     "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694"
   },
@@ -47,6 +45,14 @@
     {
       "binding": "READER_METRICS",
       "dataset": "rss-reader-data"
+    }
+  ],
+
+  "workflows": [
+    {
+      "name": "feed-polling",
+      "binding": "FEED_POLLING_WORKFLOW",
+      "class_name": "FeedPollingWorkflow"
     }
   ],
 

@@ -4,7 +4,7 @@
 
 import { env } from 'cloudflare:workers'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchAndStoreFeed, fetchFeeds, purgeOldItems } from '../handlers/cron'
+import { fetchAndStoreFeed, purgeOldItems } from '../handlers/cron'
 import { getDb } from '../lib/db'
 import { feeds, items, itemState, subscriptions, users } from '../db/schema'
 import { deriveItemId } from '../lib/crypto'
@@ -106,7 +106,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -124,7 +124,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://atom.example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -141,7 +141,7 @@ describe('fetchAndStoreFeed', () => {
     const before = Date.now()
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: 'abc123', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: 'abc123', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -165,7 +165,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: 'W/"abc123"', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: 'W/"abc123"', lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -182,7 +182,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -203,7 +203,7 @@ describe('fetchAndStoreFeed', () => {
     )
     const feedId  = await seedFeed('https://example.com/feed.xml')
     const feedRow = { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-      htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 }
+      htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 }
 
     await fetchAndStoreFeed(feedRow, env)
     await fetchAndStoreFeed(feedRow, env)
@@ -230,7 +230,7 @@ describe('fetchAndStoreFeed', () => {
 
     await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
     )
 
@@ -244,11 +244,12 @@ describe('fetchAndStoreFeed', () => {
     mockFetch('', 500)
     const feedId = await seedFeed('https://example.com/feed.xml')
 
-    await expect(fetchAndStoreFeed(
+    const result = await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://example.com/feed.xml', title: null,
-        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0 },
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
       env,
-    )).resolves.toBeUndefined()
+    )
+    expect(result.status).toBe('error')
 
     const db     = getDb(env.DB)
     const stored = await db.select().from(items).all()
@@ -257,48 +258,21 @@ describe('fetchAndStoreFeed', () => {
 })
 
 // ---------------------------------------------------------------------------
-// fetchFeeds — integration: only fetches feeds with active subscriptions
+// fetchAndStoreFeed — error propagation (network-level throw)
 // ---------------------------------------------------------------------------
 
-describe('fetchFeeds', () => {
-  it('only fetches feeds with active subscriptions', async () => {
-    mockFetch(RSS_FEED)
-    await seedUser()
+describe('fetchAndStoreFeed error handling', () => {
+  it('throws on network error (Workflow step retries)', async () => {
+    // Network errors propagate out — the Workflow step retry mechanism handles them.
+    // Only HTTP-level errors (non-OK responses) are caught and returned as FeedResult.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('Network error')))
+    const feedId = await seedFeed('https://bad.example.com/feed.xml', 'Bad Feed')
 
-    // Two feeds, only one subscribed
-    const subscribedId   = await seedFeed('https://subscribed.example.com/feed.xml', 'Subscribed Feed')
-    const unsubscribedId = await seedFeed('https://unsub.example.com/feed.xml', 'Unsub Feed')
-    await seedSubscription(subscribedId)
-
-    const mockFetchFn = vi.fn().mockResolvedValue(new Response(RSS_FEED, { status: 200 }))
-    vi.stubGlobal('fetch', mockFetchFn)
-
-    await fetchFeeds(env)
-
-    // fetch should only have been called once (for the subscribed feed)
-    expect(mockFetchFn).toHaveBeenCalledTimes(1)
-    expect(mockFetchFn.mock.calls[0][0]).toBe('https://subscribed.example.com/feed.xml')
-  })
-
-  it('continues after a feed throws an error', async () => {
-    await seedUser()
-    const feed1 = await seedFeed('https://bad.example.com/feed.xml', 'Bad Feed')
-    const feed2 = await seedFeed('https://good.example.com/feed.xml', 'Good Feed')
-    await seedSubscription(feed1)
-    await seedSubscription(feed2)
-
-    const mockFetchFn = vi.fn()
-      .mockRejectedValueOnce(new Error('Network error'))
-      .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 }))
-    vi.stubGlobal('fetch', mockFetchFn)
-
-    // Should not throw even though one feed fails
-    await expect(fetchFeeds(env)).resolves.toBeUndefined()
-
-    // Good feed should have items
-    const db     = getDb(env.DB)
-    const stored = await db.select().from(items).all()
-    expect(stored.length).toBeGreaterThan(0)
+    await expect(fetchAndStoreFeed(
+      { id: feedId, feedUrl: 'https://bad.example.com/feed.xml', title: null,
+        htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30 },
+      env,
+    )).rejects.toThrow('Network error')
   })
 })
 

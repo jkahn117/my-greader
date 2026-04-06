@@ -7,6 +7,7 @@ import { feedsUiHandler } from './handlers/feeds_ui'
 import { importHandler } from './handlers/import'
 import { metricsHandler } from './handlers/metrics'
 import { scheduled } from './handlers/cron'
+import { FeedPollingWorkflow } from './workflows/feed_polling'
 
 // Hono context variables set by middleware
 type Variables = {
@@ -56,8 +57,10 @@ app.route('/', importHandler)   // POST /import
 
 app.get('/', (c) => c.text('OK'))
 
-// Workers module export — fetch handler + scheduled cron handler
+// Workers module export — fetch handler + scheduled cron handler + Workflow class
 export default {
   fetch:     app.fetch.bind(app),
   scheduled,
 }
+
+export { FeedPollingWorkflow }

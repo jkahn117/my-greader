@@ -1,0 +1,1 @@
+ALTER TABLE `feeds` ADD `check_interval_minutes` integer DEFAULT 30 NOT NULL;

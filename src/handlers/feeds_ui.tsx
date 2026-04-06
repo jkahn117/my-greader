@@ -3,7 +3,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { getDb } from '../lib/db'
 import { createLogger } from '../lib/logger'
 import { feeds, subscriptions } from '../db/schema'
-import { fetchFeeds } from './cron'
+import { triggerFeedPollingWorkflow } from './cron'
 import { App } from '../views/app'
 import { FeedRow, FeedTab } from '../views/feeds'
 
@@ -23,17 +23,18 @@ handler.get('/app/feeds', async (c) => {
 
   const subs = await db
     .select({
-      id:                subscriptions.id,
-      feedId:            feeds.id,
+      id:                   subscriptions.id,
+      feedId:               feeds.id,
       // Use the user's custom subscription title if set, otherwise the feed's title
-      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl:           feeds.feedUrl,
-      htmlUrl:           feeds.htmlUrl,
-      folder:            subscriptions.folder,
-      lastFetchedAt:     feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-      lastError:         feeds.lastError,
-      deactivatedAt:     feeds.deactivatedAt,
+      title:                sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:              feeds.feedUrl,
+      htmlUrl:              feeds.htmlUrl,
+      folder:               subscriptions.folder,
+      lastFetchedAt:        feeds.lastFetchedAt,
+      consecutiveErrors:    feeds.consecutiveErrors,
+      lastError:            feeds.lastError,
+      deactivatedAt:        feeds.deactivatedAt,
+      checkIntervalMinutes: feeds.checkIntervalMinutes,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
@@ -56,8 +57,8 @@ handler.get('/app/feeds', async (c) => {
 handler.post('/feeds/sync', async (c) => {
   const logger = createLogger({ path: '/feeds/sync', userId: c.get('userId') })
   logger.info('manual sync triggered')
-  // Run in the background so the response returns immediately
-  c.executionCtx.waitUntil(fetchFeeds(c.env))
+  // Trigger the Workflow — returns immediately, fetch runs asynchronously
+  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env))
   return c.html(
     <p class="text-sm text-muted-foreground">
       Sync started — refresh the page in a moment to see updated fetch times.
@@ -87,7 +88,7 @@ handler.post('/feeds/:id/reactivate', async (c) => {
 
   await db
     .update(feeds)
-    .set({ deactivatedAt: null, consecutiveErrors: 0, lastError: null })
+    .set({ deactivatedAt: null, consecutiveErrors: 0, lastError: null, checkIntervalMinutes: 30 })
     .where(eq(feeds.id, id))
 
   logger.info('feed reactivated', { feedId: id })
@@ -95,16 +96,17 @@ handler.post('/feeds/:id/reactivate', async (c) => {
   // Return updated row fragment for htmx swap
   const updated = await db
     .select({
-      id:                subscriptions.id,
-      feedId:            feeds.id,
-      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl:           feeds.feedUrl,
-      htmlUrl:           feeds.htmlUrl,
-      folder:            subscriptions.folder,
-      lastFetchedAt:     feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-      lastError:         feeds.lastError,
-      deactivatedAt:     feeds.deactivatedAt,
+      id:                   subscriptions.id,
+      feedId:               feeds.id,
+      title:                sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:              feeds.feedUrl,
+      htmlUrl:              feeds.htmlUrl,
+      folder:               subscriptions.folder,
+      lastFetchedAt:        feeds.lastFetchedAt,
+      consecutiveErrors:    feeds.consecutiveErrors,
+      lastError:            feeds.lastError,
+      deactivatedAt:        feeds.deactivatedAt,
+      checkIntervalMinutes: feeds.checkIntervalMinutes,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
@@ -144,16 +146,17 @@ handler.post('/feeds/:id/deactivate', async (c) => {
 
   const updated = await db
     .select({
-      id:                subscriptions.id,
-      feedId:            feeds.id,
-      title:             sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl:           feeds.feedUrl,
-      htmlUrl:           feeds.htmlUrl,
-      folder:            subscriptions.folder,
-      lastFetchedAt:     feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-      lastError:         feeds.lastError,
-      deactivatedAt:     feeds.deactivatedAt,
+      id:                   subscriptions.id,
+      feedId:               feeds.id,
+      title:                sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl:              feeds.feedUrl,
+      htmlUrl:              feeds.htmlUrl,
+      folder:               subscriptions.folder,
+      lastFetchedAt:        feeds.lastFetchedAt,
+      consecutiveErrors:    feeds.consecutiveErrors,
+      lastError:            feeds.lastError,
+      deactivatedAt:        feeds.deactivatedAt,
+      checkIntervalMinutes: feeds.checkIntervalMinutes,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))

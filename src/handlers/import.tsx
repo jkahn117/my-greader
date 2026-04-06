@@ -124,10 +124,11 @@ handler.post('/import', async (c) => {
       feedUrl:           feeds.feedUrl,
       htmlUrl:           feeds.htmlUrl,
       folder:            subscriptions.folder,
-      lastFetchedAt:     feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-      lastError:         feeds.lastError,
-      deactivatedAt:     feeds.deactivatedAt,
+      lastFetchedAt:        feeds.lastFetchedAt,
+      consecutiveErrors:    feeds.consecutiveErrors,
+      lastError:            feeds.lastError,
+      deactivatedAt:        feeds.deactivatedAt,
+      checkIntervalMinutes: feeds.checkIntervalMinutes,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))

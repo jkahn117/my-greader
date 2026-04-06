@@ -4,7 +4,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 
 ## Stack
 
-- **Runtime**: Cloudflare Workers + D1 (SQLite) + static assets
+- **Runtime**: Cloudflare Workers + D1 (SQLite) + Workflows + static assets
 - **Router**: Hono with JSX server-rendering
 - **UI**: htmx (vendored) + Tailwind CSS v4 — no React
 - **Feed parsing**: rss-parser
@@ -22,6 +22,25 @@ Password:    <API token generated from /app>
 ```
 
 Current treats this Worker as a FreshRSS instance. It speaks standard GReader protocol — no FreshRSS installation required.
+
+## Feed polling
+
+Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each run:
+
+1. Queries feeds whose poll interval has elapsed (stale-first ordering)
+2. Processes them in sequential batches of 20, fetching each batch concurrently
+3. Emits a `cycle` event to Analytics Engine for the Metrics dashboard
+
+**Adaptive backoff** — `check_interval_minutes` per feed, default 30 min:
+
+- New content found → reset to 30 min (or feed's `<ttl>` if longer)
+- No new content / 304 → interval doubles, capped at 4 hours
+- Feed-supplied `<ttl>` is respected as a floor (up to 24 hours)
+- Errors do not affect the interval — feeds retry at the same frequency
+
+Workflows are used rather than a plain cron loop because each sequential step runs in its
+own Worker invocation with a fresh subrequest budget, bypassing the 50-subrequest-per-invocation
+limit on the free plan.
 
 ## One-time setup
 

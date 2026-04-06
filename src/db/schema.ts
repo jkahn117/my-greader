@@ -17,9 +17,10 @@ export const feeds = sqliteTable('feeds', {
   lastFetchedAt:     integer('last_fetched_at'),
   etag:              text('etag'),            // for conditional HTTP requests
   lastModified:      text('last_modified'),   // for conditional HTTP requests
-  consecutiveErrors: integer('consecutive_errors').notNull().default(0),
-  lastError:         text('last_error'),      // most recent error message
-  deactivatedAt:     integer('deactivated_at'), // NULL = active; set after threshold
+  consecutiveErrors:    integer('consecutive_errors').notNull().default(0),
+  lastError:            text('last_error'),      // most recent error message
+  deactivatedAt:        integer('deactivated_at'), // NULL = active; set after threshold
+  checkIntervalMinutes: integer('check_interval_minutes').notNull().default(30), // adaptive polling backoff
 })
 
 // Per-user feed subscriptions

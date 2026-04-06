@@ -23,6 +23,15 @@ export interface ParseFailure {
   timestamp: number;
 }
 
+export interface CycleStat {
+  cycleCount: number;
+  avgActiveFeeds: number;
+  avgDueFeeds: number;
+  avgCheckedFeeds: number;
+  avgNewArticles: number;
+  avgFailedFeeds: number;
+}
+
 interface StatusData {
   parseStats: ParseStat[];
   parseFailures: ParseFailure[];
@@ -30,6 +39,7 @@ interface StatusData {
   totalReads7d: number;
   totalParses7d: number;
   totalFailures7d: number;
+  cycleStat: CycleStat | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +235,56 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Cycle health card — adaptive polling summary
+// ---------------------------------------------------------------------------
+
+function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
+  if (!stat || stat.cycleCount === 0) {
+    return (
+      <div class="rounded-lg border border-border bg-card shadow-sm">
+        <div class="border-b border-border px-6 py-4">
+          <h2 class="text-base font-semibold text-foreground">
+            Cycle health <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          </h2>
+        </div>
+        <p class="px-6 py-6 text-center text-sm text-muted-foreground">
+          No cycle data yet — runs after the first Workflow execution.
+        </p>
+      </div>
+    );
+  }
+
+  const fmt = (n: number) => n.toFixed(1);
+
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Cycle health{" "}
+          <span class="text-muted-foreground font-normal text-sm">
+            (last 7 days · {stat.cycleCount} cycles)
+          </span>
+        </h2>
+      </div>
+      <div class="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
+        {[
+          { label: "Avg active feeds", value: fmt(stat.avgActiveFeeds) },
+          { label: "Avg due/cycle", value: fmt(stat.avgDueFeeds) },
+          { label: "Avg checked/cycle", value: fmt(stat.avgCheckedFeeds) },
+          { label: "Avg new articles/cycle", value: fmt(stat.avgNewArticles) },
+          { label: "Avg failed/cycle", value: fmt(stat.avgFailedFeeds) },
+        ].map(({ label, value }) => (
+          <div class="bg-card px-6 py-4">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Unconfigured state — shown when CF_ACCOUNT_ID / CF_API_TOKEN are missing
 // ---------------------------------------------------------------------------
 
@@ -270,6 +330,7 @@ export function MetricsTab({ data }: { data: StatusData }) {
         />
       </div>
 
+      <CycleHealthCard stat={data.cycleStat} />
       <ReadsByDayCard rows={data.readsByDay} />
       <ParseStatsCard rows={data.parseStats} />
       <ParseFailuresCard rows={data.parseFailures} />

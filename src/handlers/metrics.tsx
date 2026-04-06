@@ -5,7 +5,7 @@ import { createLogger } from "../lib/logger";
 import { queryWae } from "../lib/wae";
 import { feeds } from "../db/schema";
 import { App } from "../views/app";
-import { MetricsTab, MetricsUnconfigured } from "../views/metrics";
+import { CycleStat, MetricsTab, MetricsUnconfigured } from "../views/metrics";
 
 type Variables = { userId: string; email: string };
 
@@ -33,7 +33,7 @@ handler.get("/app/metrics", async (c) => {
   }
 
   try {
-    const [parseResult, readResult, failureResult] = await Promise.all([
+    const [parseResult, readResult, failureResult, cycleResult] = await Promise.all([
       // Parse stats per feed: successes, failures, avg duration, total articles
       queryWae(
         accountId,
@@ -85,6 +85,23 @@ handler.get("/app/metrics", async (c) => {
         LIMIT 50
         `,
       ),
+      // Cycle stats: one row per cron run, last 7 days
+      queryWae(
+        accountId,
+        apiToken,
+        `
+        SELECT
+          avg(double1)  AS avgActiveFeeds,
+          avg(double2)  AS avgDueFeeds,
+          avg(double3)  AS avgCheckedFeeds,
+          avg(double4)  AS avgNewArticles,
+          avg(double5)  AS avgFailedFeeds,
+          count()       AS cycleCount
+        FROM "rss-reader-data"
+        WHERE index1 = 'cycle'
+          AND timestamp > NOW() - INTERVAL '7' DAY
+        `,
+      ),
     ]);
 
     const rawParseStats = parseResult.data.map((r) => ({
@@ -132,12 +149,24 @@ handler.get("/app/metrics", async (c) => {
     );
     const totalFailures7d = parseStats.reduce((sum, r) => sum + r.failures, 0);
 
-    logger.info("metrics loaded", { totalReads7d, totalParses7d });
+    const cycleRow = cycleResult.data[0];
+    const cycleStat: CycleStat | null = cycleRow
+      ? {
+          cycleCount: Number(cycleRow.cycleCount ?? 0),
+          avgActiveFeeds: Number(cycleRow.avgActiveFeeds ?? 0),
+          avgDueFeeds: Number(cycleRow.avgDueFeeds ?? 0),
+          avgCheckedFeeds: Number(cycleRow.avgCheckedFeeds ?? 0),
+          avgNewArticles: Number(cycleRow.avgNewArticles ?? 0),
+          avgFailedFeeds: Number(cycleRow.avgFailedFeeds ?? 0),
+        }
+      : null;
+
+    logger.info("metrics loaded", { totalReads7d, totalParses7d, cycleStat });
 
     return c.html(
       <App email={email} active="metrics">
         <MetricsTab
-          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d }}
+          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat }}
         />
       </App>,
     );

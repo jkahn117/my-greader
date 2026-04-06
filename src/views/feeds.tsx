@@ -9,6 +9,36 @@ export interface SubscriptionRow {
   consecutiveErrors: number
   lastError: string | null
   deactivatedAt: number | null
+  checkIntervalMinutes: number
+}
+
+// Poll interval badge — colour reflects how backed-off the feed is
+function PollIntervalBadge({ minutes }: { minutes: number }) {
+  let label: string;
+  let cls: string;
+
+  if (minutes <= 30) {
+    label = "30m";
+    cls = "bg-green-500/10 text-green-700";
+  } else if (minutes <= 60) {
+    label = "1h";
+    cls = "bg-green-500/10 text-green-700";
+  } else if (minutes <= 120) {
+    label = "2h";
+    cls = "bg-yellow-500/10 text-yellow-700";
+  } else if (minutes <= 240) {
+    label = "4h";
+    cls = "bg-yellow-500/10 text-yellow-700";
+  } else {
+    label = "8h";
+    cls = "bg-muted text-muted-foreground";
+  }
+
+  return (
+    <span class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
+      {label}
+    </span>
+  )
 }
 
 function formatDate(ts: number | null) {
@@ -87,8 +117,11 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
       <td class="py-3 pr-4 text-muted-foreground">
         {sub.folder ?? <span class="italic">None</span>}
       </td>
-      <td class="py-3 text-muted-foreground whitespace-nowrap">
+      <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
         {formatDate(sub.lastFetchedAt)}
+      </td>
+      <td class="py-3 text-muted-foreground">
+        {!sub.deactivatedAt && <PollIntervalBadge minutes={sub.checkIntervalMinutes} />}
       </td>
     </tr>
   )
@@ -118,6 +151,7 @@ export function SubscriptionListContent({ subs, oob }: { subs: SubscriptionRow[]
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Title</th>
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Folder</th>
                 <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last fetched</th>
+                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Poll</th>
               </tr>
             </thead>
             <tbody class="group">

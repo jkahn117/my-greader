@@ -15,6 +15,13 @@
       "when": 1775419017070,
       "tag": "0001_furry_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1775439481897,
+      "tag": "0002_empty_norman_osborn",
+      "breakpoints": true
     }
   ]
 }

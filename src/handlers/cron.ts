@@ -1,16 +1,19 @@
 import Parser from "rss-parser";
-import { asc, eq, isNull, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
-import { feeds, items, itemState, subscriptions } from "../db/schema";
+import { feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
-const FETCH_CONCURRENCY = 6;         // matches Cloudflare's simultaneous open connections limit
 const ERROR_THRESHOLD = 5;           // consecutive failures before a feed is deactivated
+const MIN_INTERVAL_MINUTES = 30;
+const MAX_INTERVAL_MINUTES = 240;    // 4 hours — cap on our own backoff
+const MAX_TTL_MINUTES = 1440;        // 24 hours — sanity cap on feed-supplied TTL hints
+const BACKOFF_MULTIPLIER = 2;
 
-type FeedResult =
+export type FeedResult =
   | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
   | { feedId: string; feedTitle: string; status: "not_modified" }
   | { feedId: string; feedTitle: string; status: "error"; error: string };
@@ -25,7 +28,7 @@ export async function scheduled(
 ): Promise<void> {
   switch (event.cron) {
     case "*/30 * * * *":
-      return fetchFeeds(env);
+      return triggerFeedPollingWorkflow(env);
     case "0 3 * * 1":
       return purgeOldItems(env);
     default:
@@ -34,84 +37,18 @@ export async function scheduled(
 }
 
 // ---------------------------------------------------------------------------
-// Feed fetcher — runs every 30 minutes
+// Trigger the FeedPollingWorkflow — replaces the old inline fetchFeeds loop
 // ---------------------------------------------------------------------------
 
-export async function fetchFeeds(env: Env): Promise<void> {
-  const logger = createLogger({ cron: "fetchFeeds" });
-  const db = getDb(env.DB);
-
-  // Each unique active feed is fetched once regardless of subscriber count
-  const rows = await db
-    .selectDistinct({
-      id: feeds.id,
-      feedUrl: feeds.feedUrl,
-      title: feeds.title,
-      htmlUrl: feeds.htmlUrl,
-      etag: feeds.etag,
-      lastModified: feeds.lastModified,
-      lastFetchedAt: feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-    })
-    .from(feeds)
-    .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-    .where(isNull(feeds.deactivatedAt))
-    // Prioritise never-fetched feeds first, then longest-stale — ensures
-    // all feeds rotate through fairly even if the worker times out mid-run
-    .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
-
-  logger.info("starting feed fetch cycle", { feedCount: rows.length });
-
-  const feedResults: FeedResult[] = [];
-
-  // Process feeds in batches of 6 — respects the simultaneous open connections limit
-  for (let i = 0; i < rows.length; i += FETCH_CONCURRENCY) {
-    const batch = rows.slice(i, i + FETCH_CONCURRENCY);
-    const settled = await Promise.allSettled(
-      batch.map((feed) => fetchAndStoreFeed(feed, env)),
-    );
-
-    for (let j = 0; j < settled.length; j++) {
-      const result = settled[j];
-      if (result.status === "fulfilled") {
-        const r = result.value;
-        if (r.status === "error") {
-          logger.error("feed fetch failed", { feedId: r.feedId, feedTitle: r.feedTitle, error: r.error });
-        }
-        feedResults.push(r);
-      } else {
-        const error = String(result.reason);
-        logger.error("feed fetch threw", { feedId: batch[j].id, feedUrl: batch[j].feedUrl, error });
-        feedResults.push({
-          feedId: batch[j].id,
-          feedTitle: batch[j].title ?? batch[j].feedUrl,
-          status: "error",
-          error,
-        });
-      }
-    }
-  }
-
-  const succeeded = feedResults.filter((r) => r.status === "ok").length;
-  const notModified = feedResults.filter((r) => r.status === "not_modified").length;
-  const failed = feedResults.filter((r) => r.status === "error").length;
-  const newArticles = feedResults.reduce(
-    (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
-    0,
-  );
-
-  logger.info("feed fetch cycle complete", { succeeded, notModified, failed, newArticles });
-
-  // Optional per-feed detail log — enable with CRON_LOG_DETAIL=true
-  if ((env.CRON_LOG_DETAIL as string) === "true") {
-    const detail = feedResults.map((r) => {
-      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
-      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
-      return `${r.feedTitle}: error — ${r.error}`;
-    });
-    logger.info("feed fetch detail", { feeds: detail });
-  }
+export async function triggerFeedPollingWorkflow(env: Env): Promise<void> {
+  const logger = createLogger({ cron: "triggerFeedPollingWorkflow" });
+  const instance = await env.FEED_POLLING_WORKFLOW.create();
+  logger.info("feed polling workflow started", { instanceId: instance.id });
 }
+
+// ---------------------------------------------------------------------------
+// Feed fetcher — called by FeedPollingWorkflow per feed step
+// ---------------------------------------------------------------------------
 
 export async function fetchAndStoreFeed(
   feed: {
@@ -123,6 +60,7 @@ export async function fetchAndStoreFeed(
     lastModified: string | null;
     lastFetchedAt: number | null;
     consecutiveErrors: number;
+    checkIntervalMinutes: number;
   },
   env: Env,
 ): Promise<FeedResult> {
@@ -135,6 +73,7 @@ export async function fetchAndStoreFeed(
 
   // Records a fetch/parse failure, increments consecutive error count,
   // and deactivates the feed once ERROR_THRESHOLD is reached.
+  // Does NOT modify checkIntervalMinutes — error frequency is unchanged.
   async function recordError(errorMessage: string): Promise<void> {
     const next = feed.consecutiveErrors + 1;
     const deactivate = next >= ERROR_THRESHOLD;
@@ -165,10 +104,11 @@ export async function fetchAndStoreFeed(
   const response = await fetch(feed.feedUrl, { headers });
 
   if (response.status === 304) {
-    // Feed unchanged — just record the check time
+    // Feed unchanged — back off
+    const newInterval = Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
     await db
       .update(feeds)
-      .set({ lastFetchedAt: Date.now() })
+      .set({ lastFetchedAt: Date.now(), checkIntervalMinutes: newInterval })
       .where(eq(feeds.id, feed.id));
     return { feedId: feed.id, feedTitle, status: "not_modified" };
   }
@@ -201,19 +141,6 @@ export async function fetchAndStoreFeed(
   // Capture conditional request headers for future fetches
   const newEtag = response.headers.get("ETag");
   const newLastModified = response.headers.get("Last-Modified");
-
-  await db
-    .update(feeds)
-    .set({
-      title: parsed.title ?? feed.title,
-      htmlUrl: parsed.link ?? feed.htmlUrl,
-      lastFetchedAt: Date.now(),
-      consecutiveErrors: 0,
-      lastError: null,
-      ...(newEtag != null ? { etag: newEtag } : {}),
-      ...(newLastModified != null ? { lastModified: newLastModified } : {}),
-    })
-    .where(eq(feeds.id, feed.id));
 
   // Compute item IDs and content in parallel (crypto only, no D1 subrequests)
   const now = Date.now();
@@ -249,6 +176,30 @@ export async function fetchAndStoreFeed(
     newItems = batchResults.reduce((sum, r) => sum + r.meta.changes, 0);
   }
 
+  // Compute interval from backoff, then floor-raise by feed's TTL hint if present.
+  // TTL = "don't check before N minutes" — we respect it even when it exceeds our max.
+  const feedTtlMinutes = parsed.ttl
+    ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
+    : 0;
+  const backoffInterval = newItems > 0
+    ? MIN_INTERVAL_MINUTES
+    : Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
+  const newInterval = Math.max(backoffInterval, feedTtlMinutes);
+
+  await db
+    .update(feeds)
+    .set({
+      title: parsed.title ?? feed.title,
+      htmlUrl: parsed.link ?? feed.htmlUrl,
+      lastFetchedAt: now,
+      consecutiveErrors: 0,
+      lastError: null,
+      checkIntervalMinutes: newInterval,
+      ...(newEtag != null ? { etag: newEtag } : {}),
+      ...(newLastModified != null ? { lastModified: newLastModified } : {}),
+    })
+    .where(eq(feeds.id, feed.id));
+
   metrics.recordParse({
     feedId: feed.id,
     status: ParseStatus.SUCCESS,
@@ -260,7 +211,7 @@ export async function fetchAndStoreFeed(
 }
 
 // ---------------------------------------------------------------------------
-// Article cleanup — runs weekly (Sundays 03:00 UTC)
+// Article cleanup — runs weekly (Mondays 03:00 UTC)
 // ---------------------------------------------------------------------------
 
 export async function purgeOldItems(env: Env): Promise<void> {
