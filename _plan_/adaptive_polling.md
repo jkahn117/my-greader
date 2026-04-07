@@ -109,6 +109,73 @@ ORDER BY COALESCE(feeds.last_fetched_at, 0) ASC  -- oldest first
 
 ---
 
+## Capacity Analysis
+
+### Per-step subrequest budget
+
+| Plan | Budget per invocation | Feeds per step (`budget/2 × safety`) | Notes |
+|------|-----------------------|--------------------------------------|-------|
+| Free | 50 | **20** (40 subreqs used) | 10-subreq safety margin |
+| Paid | 1,000 | **~490** (980 subreqs used) | Could process in 1–2 steps |
+
+Current `FEEDS_PER_STEP = 20` is deliberately conservative for the free plan. On a paid plan, it
+could be raised to ~490, collapsing a 1,000-feed Workflow from 51 steps to ~3.
+
+### Step count and total feed capacity
+
+There is **no hard cap on the number of sequential steps** in a Cloudflare Workflow. The ceiling
+is practical, not a quota: each step adds wall-clock latency before the cycle completes.
+
+| Feeds | Steps (free, 20/step) | Approximate wall time |
+|-------|-----------------------|-----------------------|
+| 20 | 2 (query + 1 batch) | ~2–5s |
+| 100 | 7 | ~7–15s |
+| 500 | 27 | ~30–60s |
+| 1,000 | 52 | ~1–2 min |
+| 5,000 | 252 | ~5–10 min |
+
+A 30-minute cron window comfortably supports thousands of feeds on the free plan.
+The paid plan (490/step) handles the same 5,000 feeds in ~12 steps / under a minute.
+
+### Effective load vs. registered feeds: feed chattiness
+
+Adaptive backoff means the **number of feeds checked per cycle is smaller than the total feed
+count**. The ratio depends on how frequently feeds publish.
+
+Assumptions used below:
+- Chatty feed: publishes daily or more (The Verge, Hacker News) → stays at 30 min
+- Normal feed: publishes 2–3×/week → backs off to ~60–120 min within a day or two
+- Quiet feed: publishes weekly or less → reaches 240 min cap within a week
+- Dead feed: no new content in months → pinned at 240 min (8 checks/day)
+
+| Feed type | Check interval | Checks per day | % of 30-min cycles |
+|-----------|---------------|----------------|--------------------|
+| Chatty | 30 min | 48 | 100% |
+| Normal | 60–120 min | 12–24 | 25–50% |
+| Quiet | 240 min | 6 | 12.5% |
+| Dead | 240 min | 6 | 12.5% |
+
+For a realistic personal reader with 200 feeds — say 10% chatty, 40% normal, 50% quiet:
+- Chatty (20 feeds): 960 fetches/day
+- Normal (80 feeds): ~1,280 fetches/day (avg 16/day)
+- Quiet (100 feeds): 600 fetches/day
+- **Total: ~2,840 fetches/day across 200 feeds** ≈ ~6 feeds due per 30-min cycle on average
+
+That fits easily within a single batch step. Backoff makes the effective per-cycle load
+much lower than the registered feed count implies.
+
+### D1 and Worker invocation limits (free plan)
+
+| Metric | Free quota | Estimated usage (200 feeds) |
+|--------|-----------|------------------------------|
+| D1 reads | 5M/day | ~17K/day (reads per fetch) |
+| D1 writes | 100K/day | ~3K/day |
+| Worker requests | 100K/day | ~100/day (Workflow steps + cron) |
+
+None of these are the binding constraint at realistic personal-reader scale.
+
+---
+
 ## Open Questions / Future Work
 
 - **History-based scheduling** (FreshRSS approach): derive check interval from observed
