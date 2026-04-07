@@ -11,7 +11,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 - **Auth**: Cloudflare Access (management UI) + SHA-256 API tokens (GReader clients)
 - **Schema/migrations**: Drizzle ORM
 
-## Connecting Current
+## Connecting Current and other RSS readers
 
 In Current: **Settings → Sync → FreshRSS**
 
@@ -70,13 +70,14 @@ wrangler secret put CF_API_TOKEN
 4. Set **Account Resources** → Include → your account
 5. Copy the generated token and run `wrangler secret put CF_API_TOKEN`
 
-Also set your account ID as a var in `wrangler.jsonc` under `CF_ACCOUNT_ID` (found in the Cloudflare dashboard sidebar).
+Also set your account ID as a var in `wrangler.jsonc` under `CF_ACCOUNT_ID` (found in the Cloudflare dashboard sidebar), and set `DISPLAY_TIMEZONE` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the metrics dashboard groups reads by the correct local day.
 
 **Cloudflare Access setup:**
 
 Access must protect the management UI while allowing Current to reach the GReader API without a browser session. Do this with two Access applications on the same subdomain, matched by path. Access evaluates most-specific path first.
 
 **App 1 — GReader API bypass** (create this first)
+
 1. Zero Trust → Access → Applications → Add an application → **Self-hosted**
 2. Application domain: `reader.iamjkahn.com`, path: `/api/greader.php/*`
 3. Add a policy — **critical**: set **Action = Bypass** (not Allow), Include = **Everyone**
@@ -84,6 +85,7 @@ Access must protect the management UI while allowing Current to reach the GReade
 4. No audience tag needed — this app does not issue JWTs
 
 **App 2 — Management UI** (catch-all)
+
 1. Add another Self-hosted application
 2. Application domain: `reader.iamjkahn.com` (no path — catches everything else)
 3. Add a policy: **Action = Allow**, Include = **Emails** → your email address
@@ -115,16 +117,16 @@ pnpm deploy     # compiles CSS + vite build + wrangler deploy
 
 ## Scripts
 
-| Script | Description |
-|---|---|
-| `pnpm dev` | Compile CSS, start local Worker dev server |
-| `pnpm dev:css` | Watch mode CSS compilation |
-| `pnpm build` | Compile CSS + production Worker build |
-| `pnpm deploy` | Build + deploy to Cloudflare |
-| `pnpm test` | Run vitest suite (42 tests) |
-| `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config |
-| `pnpm studio` | Open Drizzle Studio against local D1 (run `wrangler dev` first) |
-| `pnpm format` | Format all TypeScript source files with Prettier |
+| Script            | Description                                                     |
+| ----------------- | --------------------------------------------------------------- |
+| `pnpm dev`        | Compile CSS, start local Worker dev server                      |
+| `pnpm dev:css`    | Watch mode CSS compilation                                      |
+| `pnpm build`      | Compile CSS + production Worker build                           |
+| `pnpm deploy`     | Build + deploy to Cloudflare                                    |
+| `pnpm test`       | Run vitest suite (42 tests)                                     |
+| `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config     |
+| `pnpm studio`     | Open Drizzle Studio against local D1 (run `wrangler dev` first) |
+| `pnpm format`     | Format all TypeScript source files with Prettier                |
 
 ## Docs
 

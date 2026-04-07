@@ -34,7 +34,9 @@
     // Days to retain articles before the cleanup cron removes them
     "ITEM_RETENTION_DAYS": "30",
     // Cloudflare account ID — used to query the Analytics Engine SQL API for the status dashboard
-    "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694"
+    "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694",
+    // IANA timezone for the metrics dashboard (e.g. "America/New_York"). Defaults to UTC if unset.
+    "DISPLAY_TIMEZONE": "America/Chicago"
   },
 
   // Secrets — set via: wrangler secret put <NAME>

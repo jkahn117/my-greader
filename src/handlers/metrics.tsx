@@ -21,6 +21,7 @@ handler.get("/app/metrics", async (c) => {
 
   const accountId = (c.env as unknown as Record<string, string>).CF_ACCOUNT_ID;
   const apiToken = (c.env as unknown as Record<string, string>).CF_API_TOKEN;
+  const tz = (c.env as unknown as Record<string, string>).DISPLAY_TIMEZONE || "UTC";
 
   // Render a graceful placeholder if credentials aren't set
   if (!accountId || !apiToken) {
@@ -53,14 +54,14 @@ handler.get("/app/metrics", async (c) => {
         LIMIT 100
         `,
       ),
-      // Reads grouped by day
+      // Reads grouped by day, in the configured local timezone
       queryWae(
         accountId,
         apiToken,
         `
         SELECT
-          toDate(timestamp)  AS date,
-          count()            AS reads
+          toDate(timestamp, '${tz}')  AS date,
+          count()                     AS reads
         FROM "rss-reader-data"
         WHERE index1 = 'read'
           AND timestamp > NOW() - INTERVAL '7' DAY

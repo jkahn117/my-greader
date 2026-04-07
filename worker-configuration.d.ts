@@ -10,6 +10,7 @@ declare namespace Cloudflare {
 		READER_METRICS: AnalyticsEngineDataset;
 		ITEM_RETENTION_DAYS: "30";
 		CF_ACCOUNT_ID: "0fd0283d83ecc1b5c563c57c91893694";
+		DISPLAY_TIMEZONE: string;
 		CF_ACCESS_AUD: string;
 		DEV_MODE: string;
 		CF_API_TOKEN: string;
