@@ -21,6 +21,7 @@ export const feeds = sqliteTable('feeds', {
   lastError:            text('last_error'),      // most recent error message
   deactivatedAt:        integer('deactivated_at'), // NULL = active; set after threshold
   checkIntervalMinutes: integer('check_interval_minutes').notNull().default(30), // adaptive polling backoff
+  lastNewItemAt:        integer('last_new_item_at'), // last time new articles were stored
 })
 
 // Per-user feed subscriptions

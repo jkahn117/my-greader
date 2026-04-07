@@ -32,6 +32,11 @@ export interface CycleStat {
   avgFailedFeeds: number;
 }
 
+interface IntervalDistRow {
+  minutes: number;
+  count: number;
+}
+
 interface StatusData {
   parseStats: ParseStat[];
   parseFailures: ParseFailure[];
@@ -40,6 +45,7 @@ interface StatusData {
   totalParses7d: number;
   totalFailures7d: number;
   cycleStat: CycleStat | null;
+  intervalDist: IntervalDistRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +81,10 @@ function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
-          Feed parse activity <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          Feed parse activity{" "}
+          <span class="text-muted-foreground font-normal text-sm">
+            (last 7 days)
+          </span>
         </h2>
       </div>
       <div class="px-6 py-2">
@@ -97,7 +106,7 @@ function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
                   Failures
                 </th>
                 <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Avg duration
+                  Avg parse duration
                 </th>
                 <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
                   Articles
@@ -107,10 +116,15 @@ function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
             <tbody>
               {rows.map((r) => (
                 <tr class="border-b border-border last:border-0">
-                  <td class="py-3 pr-4 text-sm text-foreground truncate max-w-[200px]" title={r.feedId}>
+                  <td
+                    class="py-3 pr-4 text-sm text-foreground truncate max-w-50"
+                    title={r.feedId}
+                  >
                     {r.feedName}
                   </td>
-                  <td class="py-3 pr-4 text-right text-foreground">{r.successes}</td>
+                  <td class="py-3 pr-4 text-right text-foreground">
+                    {r.successes}
+                  </td>
                   <td class="py-3 pr-4 text-right">
                     <span
                       class={
@@ -147,7 +161,10 @@ function ReadsByDayCard({ rows }: { rows: ReadStat[] }) {
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
-          Reads by day <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          Reads by day{" "}
+          <span class="text-muted-foreground font-normal text-sm">
+            (last 7 days)
+          </span>
         </h2>
       </div>
       <div class="px-6 py-2">
@@ -216,14 +233,21 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
           <tbody>
             {rows.map((r) => (
               <tr class="border-b border-border last:border-0">
-                <td class="py-3 pr-4 text-foreground truncate max-w-[160px]" title={r.feedId}>
+                <td
+                  class="py-3 pr-4 text-foreground truncate max-w-40"
+                  title={r.feedId}
+                >
                   {r.feedName}
                 </td>
                 <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-                  <time datetime={String(r.timestamp)}>{new Date(r.timestamp).toISOString()}</time>
+                  <time datetime={String(r.timestamp)}>
+                    {new Date(r.timestamp).toISOString()}
+                  </time>
                 </td>
                 <td class="py-3 font-mono text-xs text-destructive break-all">
-                  {r.error || <span class="italic text-muted-foreground">no message</span>}
+                  {r.error || (
+                    <span class="italic text-muted-foreground">no message</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -244,7 +268,10 @@ function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
       <div class="rounded-lg border border-border bg-card shadow-sm">
         <div class="border-b border-border px-6 py-4">
           <h2 class="text-base font-semibold text-foreground">
-            Cycle health <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+            Cycle health{" "}
+            <span class="text-muted-foreground font-normal text-sm">
+              (last 7 days)
+            </span>
           </h2>
         </div>
         <p class="px-6 py-6 text-center text-sm text-muted-foreground">
@@ -275,10 +302,70 @@ function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
           { label: "Avg failed/cycle", value: fmt(stat.avgFailedFeeds) },
         ].map(({ label, value }) => (
           <div class="bg-card px-6 py-4">
-            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {label}
+            </p>
             <p class="mt-1 text-2xl font-semibold text-foreground">{value}</p>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Poll interval distribution — how backed-off the feed fleet is
+// ---------------------------------------------------------------------------
+
+function intervalLabel(minutes: number): string {
+  if (minutes <= 30) return "30 min";
+  if (minutes <= 60) return "1 h";
+  if (minutes <= 120) return "2 h";
+  if (minutes <= 240) return "4 h";
+  return `${minutes} min`;
+}
+
+function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
+  if (rows.length === 0) return null;
+  const total = rows.reduce((s, r) => s + r.count, 0);
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Poll interval distribution{" "}
+          <span class="text-muted-foreground font-normal text-sm">
+            (active feeds)
+          </span>
+        </h2>
+      </div>
+      <div class="px-6 py-4 space-y-3">
+        {rows.map((r) => {
+          const pct = total > 0 ? Math.round((r.count / total) * 100) : 0;
+          const barClass =
+            r.minutes <= 30
+              ? "bg-green-500"
+              : r.minutes <= 120
+                ? "bg-yellow-400"
+                : "bg-orange-400";
+          return (
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-foreground font-medium">
+                  {intervalLabel(r.minutes)}
+                </span>
+                <span class="text-muted-foreground">
+                  {r.count} feed{r.count !== 1 ? "s" : ""} · {pct}%
+                </span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  class={`h-full rounded-full ${barClass}`}
+                  style={`width:${pct}%`}
+                />
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -295,8 +382,15 @@ export function MetricsUnconfigured() {
         Analytics not configured
       </p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Set <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">CF_ACCOUNT_ID</code> and{" "}
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">CF_API_TOKEN</code> to enable this dashboard.
+        Set{" "}
+        <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+          CF_ACCOUNT_ID
+        </code>{" "}
+        and{" "}
+        <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+          CF_API_TOKEN
+        </code>{" "}
+        to enable this dashboard.
       </p>
     </div>
   );
@@ -311,14 +405,8 @@ export function MetricsTab({ data }: { data: StatusData }) {
     <div class="space-y-8">
       {/* KPI row */}
       <div class="grid grid-cols-3 gap-4">
-        <StatCard
-          label="Reads (7d)"
-          value={data.totalReads7d}
-        />
-        <StatCard
-          label="Parses (7d)"
-          value={data.totalParses7d}
-        />
+        <StatCard label="Reads (7d)" value={data.totalReads7d} />
+        <StatCard label="Parses (7d)" value={data.totalParses7d} />
         <StatCard
           label="Parse failures (7d)"
           value={data.totalFailures7d}
@@ -331,6 +419,7 @@ export function MetricsTab({ data }: { data: StatusData }) {
       </div>
 
       <CycleHealthCard stat={data.cycleStat} />
+      <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
       <ParseStatsCard rows={data.parseStats} />
       <ParseFailuresCard rows={data.parseFailures} />

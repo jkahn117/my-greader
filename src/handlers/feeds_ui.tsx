@@ -35,6 +35,7 @@ handler.get('/app/feeds', async (c) => {
       lastError:            feeds.lastError,
       deactivatedAt:        feeds.deactivatedAt,
       checkIntervalMinutes: feeds.checkIntervalMinutes,
+      lastNewItemAt:        feeds.lastNewItemAt,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
@@ -107,6 +108,7 @@ handler.post('/feeds/:id/reactivate', async (c) => {
       lastError:            feeds.lastError,
       deactivatedAt:        feeds.deactivatedAt,
       checkIntervalMinutes: feeds.checkIntervalMinutes,
+      lastNewItemAt:        feeds.lastNewItemAt,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
@@ -157,6 +159,7 @@ handler.post('/feeds/:id/deactivate', async (c) => {
       lastError:            feeds.lastError,
       deactivatedAt:        feeds.deactivatedAt,
       checkIntervalMinutes: feeds.checkIntervalMinutes,
+      lastNewItemAt:        feeds.lastNewItemAt,
     })
     .from(subscriptions)
     .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))

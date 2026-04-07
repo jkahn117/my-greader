@@ -61,6 +61,7 @@ export async function fetchAndStoreFeed(
     lastFetchedAt: number | null;
     consecutiveErrors: number;
     checkIntervalMinutes: number;
+    lastNewItemAt: number | null;
   },
   env: Env,
 ): Promise<FeedResult> {
@@ -195,6 +196,7 @@ export async function fetchAndStoreFeed(
       consecutiveErrors: 0,
       lastError: null,
       checkIntervalMinutes: newInterval,
+      ...(newItems > 0 ? { lastNewItemAt: now } : {}),
       ...(newEtag != null ? { etag: newEtag } : {}),
       ...(newLastModified != null ? { lastModified: newLastModified } : {}),
     })

@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { queryWae } from "../lib/wae";
-import { feeds } from "../db/schema";
+import { feeds, subscriptions } from "../db/schema";
 import { App } from "../views/app";
 import { CycleStat, MetricsTab, MetricsUnconfigured } from "../views/metrics";
 
@@ -105,6 +105,26 @@ handler.get("/app/metrics", async (c) => {
       ),
     ]);
 
+    // D1 query — poll interval distribution across active subscribed feeds
+    const userId = c.get("userId");
+    const db = getDb(c.env.DB);
+
+    const intervalDistRows = await db
+      .select({
+        checkIntervalMinutes: feeds.checkIntervalMinutes,
+        count: sql<number>`count(*)`,
+      })
+      .from(subscriptions)
+      .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+      .where(and(eq(subscriptions.userId, userId), isNull(feeds.deactivatedAt)))
+      .groupBy(feeds.checkIntervalMinutes)
+      .orderBy(asc(feeds.checkIntervalMinutes));
+
+    const intervalDist = intervalDistRows.map((r) => ({
+      minutes: r.checkIntervalMinutes,
+      count:   Number(r.count),
+    }));
+
     const rawParseStats = parseResult.data.map((r) => ({
       feedId: String(r.feedId ?? ""),
       successes: Number(r.successes ?? 0),
@@ -115,7 +135,6 @@ handler.get("/app/metrics", async (c) => {
 
     // Look up feed titles from D1 for the feeds in the parse results
     const feedIds = rawParseStats.map((r) => r.feedId).filter(Boolean);
-    const db = getDb(c.env.DB);
     const feedRows = feedIds.length
       ? await db
           .select({ id: feeds.id, title: feeds.title, feedUrl: feeds.feedUrl })
@@ -167,7 +186,7 @@ handler.get("/app/metrics", async (c) => {
     return c.html(
       <App email={email} active="metrics">
         <MetricsTab
-          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat }}
+          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat, intervalDist }}
         />
       </App>,
     );

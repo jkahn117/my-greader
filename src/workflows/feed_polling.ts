@@ -62,6 +62,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             lastFetchedAt: feeds.lastFetchedAt,
             consecutiveErrors: feeds.consecutiveErrors,
             checkIntervalMinutes: feeds.checkIntervalMinutes,
+            lastNewItemAt: feeds.lastNewItemAt,
           })
           .from(feeds)
           .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
