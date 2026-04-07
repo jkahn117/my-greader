@@ -14,11 +14,52 @@ type Params = Record<string, never>;
 // Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
 const FEEDS_PER_STEP = 20;
 
-// Inside a WorkflowEntrypoint, env bindings are RPC stubs that must be disposed
-// after use. TypeScript types don't reflect this — cast to force `using` support.
-// See: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle
-function asDisposable<T>(binding: T): T & Disposable {
-  return binding as T & Disposable;
+// ---------------------------------------------------------------------------
+// asDisposable
+//
+// Background: inside a WorkflowEntrypoint, `this.env.DB` and similar bindings
+// are not plain objects — at runtime they are RPC stubs (proxy objects) that
+// hold an open connection back to the Cloudflare runtime. These stubs must be
+// explicitly "disposed" (connection closed) when a step finishes, otherwise
+// the runtime logs a warning: "RPC result not disposed".
+//
+// TypeScript's `using` declaration (TC39 Explicit Resource Management) handles
+// disposal automatically: when a `using x = ...` variable goes out of scope,
+// it calls `x[Symbol.dispose]()`. This requires the object to implement the
+// `Disposable` interface (i.e. have a `[Symbol.dispose]` method).
+//
+// The problem: Cloudflare's TypeScript types for bindings like `D1Database` do
+// not declare `[Symbol.dispose]`, even though the runtime object actually has
+// it (the stub inherits it from `StubBase`). So TypeScript won't let you write
+// `using d1 = this.env.DB` without an explicit cast.
+//
+// The previous approach was a bare cast: `binding as T & Disposable`. This
+// tells TypeScript "trust me, it's disposable" but adds nothing at runtime. If
+// the Cloudflare runtime ever ships a version where the stub doesn't have
+// `[Symbol.dispose]` — or if it's called in a context where bindings are plain
+// objects — `using` will throw "Object not disposable" at runtime, which is
+// exactly what broke polling today.
+//
+// This safe version:
+//   1. Checks at runtime whether [Symbol.dispose] is already present.
+//   2. If yes — returns the binding as-is. Disposal will work normally.
+//   3. If no  — wraps the binding via Object.create() (prototype chain, not a
+//      copy) so all original methods stay accessible, then adds a no-op
+//      [Symbol.dispose]. The `using` statement will call the no-op on exit,
+//      which is harmless. The binding may not be "properly" disposed, but the
+//      step won't crash.
+// ---------------------------------------------------------------------------
+function asDisposable<T extends object>(binding: T): T & Disposable {
+  if (typeof (binding as unknown as Disposable)[Symbol.dispose] === "function") {
+    // Binding already implements Disposable — safe to use directly
+    return binding as T & Disposable;
+  }
+  // Runtime doesn't expose [Symbol.dispose] on this binding. Wrap it so the
+  // `using` declaration compiles and runs without throwing. The wrapper
+  // inherits all properties/methods from the original via the prototype chain.
+  const wrapper = Object.create(binding) as T & Disposable;
+  wrapper[Symbol.dispose] = () => {};
+  return wrapper;
 }
 
 // ---------------------------------------------------------------------------
@@ -26,20 +67,60 @@ function asDisposable<T>(binding: T): T & Disposable {
 //
 // Triggered every 30 minutes by the cron handler.
 //
-// Sequential step design: concurrent fan-out inside a single step shares that
-// step's subrequest budget. Sequential steps each run in a new Worker
-// invocation with a fresh budget. We therefore batch feeds into groups of
-// FEEDS_PER_STEP — feeds within a batch are fetched concurrently, batches are
-// processed one at a time.
+// Why Workflows instead of a plain cron handler?
+// A single Worker invocation on the free plan has a budget of 50 subrequests.
+// Each feed fetch costs ~2 (1 HTTP GET + 1 D1 batch write). A plain cron
+// handler would hit the limit after ~25 feeds. Workflows solve this because
+// each sequential step.do() runs in its own fresh Worker invocation with its
+// own fresh 50-subrequest budget. There is no limit on the number of steps.
 //
-// Each step accesses env bindings via `using` to ensure RPC stubs are
-// disposed when the step returns, avoiding the "RPC result not disposed"
-// runtime warning.
+// Batching strategy:
+//   - Feeds within a batch are fetched concurrently (Promise.allSettled) to
+//     minimise wall time. Concurrent fetches within one step share that step's
+//     budget, so batch size = floor(50 / 2) - safety margin = 20.
+//   - Batches are processed sequentially (one step.do per batch), each in a
+//     fresh invocation, so total feed count is not constrained by subrequests.
+//
+// Error handling:
+//   - Individual feed failures are caught inside Promise.allSettled and
+//     returned as FeedResult { status: "error" }. They do not fail the step.
+//   - Step-level failures (e.g. D1 outage, binding error) will be retried by
+//     the Workflow runtime before propagating.
+//   - run() wraps everything in a try/catch that logs the full error message
+//     and emits a WAE cycle_error event so failures are visible on the
+//     metrics dashboard without digging through raw logs.
 // ---------------------------------------------------------------------------
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
     const logger = createLogger({ workflow: "FeedPollingWorkflow", instanceId: event.instanceId });
+
+    try {
+      await this.#poll(step, logger);
+    } catch (err) {
+      // Log the full error including stack so it appears in structured logs
+      // (without this, Cloudflare only records "run" as the error message).
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      logger.error("feed polling workflow failed", { error: errorMessage, stack });
+
+      // Best-effort: emit a WAE cycle_error event so the metrics dashboard
+      // shows a failure count and last error message without manual log review.
+      try {
+        using metricsDataset = asDisposable(this.env.READER_METRICS);
+        createMetrics(metricsDataset).recordCycleError({ error: errorMessage });
+      } catch {
+        // Don't mask the original error if metrics emission itself fails
+      }
+
+      throw err;
+    }
+  }
+
+  async #poll(
+    step: WorkflowStep,
+    logger: ReturnType<typeof createLogger>,
+  ): Promise<void> {
 
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
@@ -116,11 +197,12 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchIndex = Math.floor(i / FEEDS_PER_STEP);
 
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
-        // Bind once per step and dispose on exit — each is an RPC stub at runtime
         using d1 = asDisposable(this.env.DB);
         using metricsDataset = asDisposable(this.env.READER_METRICS);
         const stepEnv = { DB: d1, READER_METRICS: metricsDataset } as unknown as Env;
 
+        // Fetch all feeds in the batch concurrently. allSettled ensures one
+        // feed's network failure doesn't abort the rest of the batch.
         const settled = await Promise.allSettled(
           batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
         );

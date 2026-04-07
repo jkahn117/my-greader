@@ -32,6 +32,10 @@ export interface CycleEvent {
   failedFeeds: number;
 }
 
+export interface CycleErrorEvent {
+  error: string;
+}
+
 export enum ParseStatus {
   SUCCESS = "success",
   FAILURE = "failure",
@@ -89,6 +93,15 @@ function cycleEventToDataPoint(binding: AnalyticsEngineDataset, e: CycleEvent) {
   });
 }
 
+// index1: "cycle_error"
+// blob1:  error message (truncated to 256 chars)
+function cycleErrorEventToDataPoint(binding: AnalyticsEngineDataset, e: CycleErrorEvent) {
+  binding.writeDataPoint({
+    indexes: ["cycle_error"],
+    blobs: [e.error.slice(0, 256)],
+  });
+}
+
 export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
   const logger = createLogger({ lib: "metrics" });
   if (!binding) logger.debug("No analytics binding, metrics are a no-op");
@@ -109,6 +122,10 @@ export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
     recordCycle(e: CycleEvent) {
       if (!binding) return;
       cycleEventToDataPoint(binding, e);
+    },
+    recordCycleError(e: CycleErrorEvent) {
+      if (!binding) return;
+      cycleErrorEventToDataPoint(binding, e);
     },
   };
 }

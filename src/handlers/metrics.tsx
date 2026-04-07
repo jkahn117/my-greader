@@ -34,7 +34,7 @@ handler.get("/app/metrics", async (c) => {
   }
 
   try {
-    const [parseResult, readResult, failureResult, cycleResult] = await Promise.all([
+    const [parseResult, readResult, failureResult, cycleResult, cycleErrorResult] = await Promise.all([
       // Parse stats per feed: successes, failures, avg duration, total articles
       queryWae(
         accountId,
@@ -100,6 +100,19 @@ handler.get("/app/metrics", async (c) => {
           count()       AS cycleCount
         FROM "rss-reader-data"
         WHERE index1 = 'cycle'
+          AND timestamp > NOW() - INTERVAL '7' DAY
+        `,
+      ),
+      // Cycle errors: count + most recent error message, last 7 days
+      queryWae(
+        accountId,
+        apiToken,
+        `
+        SELECT
+          count()  AS errorCount,
+          anyLast(blob1) AS lastError
+        FROM "rss-reader-data"
+        WHERE index1 = 'cycle_error'
           AND timestamp > NOW() - INTERVAL '7' DAY
         `,
       ),
@@ -181,12 +194,18 @@ handler.get("/app/metrics", async (c) => {
         }
       : null;
 
-    logger.info("metrics loaded", { totalReads7d, totalParses7d, cycleStat });
+    const cycleErrorRow = cycleErrorResult.data[0];
+    const cycleErrors = {
+      count: Number(cycleErrorRow?.errorCount ?? 0),
+      lastError: String(cycleErrorRow?.lastError ?? ""),
+    };
+
+    logger.info("metrics loaded", { totalReads7d, totalParses7d, cycleStat, cycleErrors });
 
     return c.html(
       <App email={email} active="metrics">
         <MetricsTab
-          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat, intervalDist }}
+          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat, intervalDist, cycleErrors }}
         />
       </App>,
     );

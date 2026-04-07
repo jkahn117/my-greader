@@ -37,6 +37,11 @@ interface IntervalDistRow {
   count: number;
 }
 
+interface CycleErrors {
+  count: number;
+  lastError: string;
+}
+
 interface StatusData {
   parseStats: ParseStat[];
   parseFailures: ParseFailure[];
@@ -46,6 +51,7 @@ interface StatusData {
   totalFailures7d: number;
   cycleStat: CycleStat | null;
   intervalDist: IntervalDistRow[];
+  cycleErrors: CycleErrors;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,21 +268,35 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
 // Cycle health card — adaptive polling summary
 // ---------------------------------------------------------------------------
 
-function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
+function CycleHealthCard({ stat, errors }: { stat: CycleStat | null; errors: CycleErrors }) {
   if (!stat || stat.cycleCount === 0) {
     return (
-      <div class="rounded-lg border border-border bg-card shadow-sm">
-        <div class="border-b border-border px-6 py-4">
+      <div class={`rounded-lg border bg-card shadow-sm ${errors.count > 0 ? "border-destructive/60" : "border-border"}`}>
+        <div class="border-b border-border px-6 py-4 flex items-center justify-between gap-4">
           <h2 class="text-base font-semibold text-foreground">
             Cycle health{" "}
             <span class="text-muted-foreground font-normal text-sm">
               (last 7 days)
             </span>
           </h2>
+          {errors.count > 0 && (
+            <span class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+              {errors.count} workflow error{errors.count !== 1 ? "s" : ""}
+            </span>
+          )}
         </div>
         <p class="px-6 py-6 text-center text-sm text-muted-foreground">
-          No cycle data yet — runs after the first Workflow execution.
+          {errors.count > 0
+            ? `Workflow is failing — ${errors.lastError || "check logs for details"}`
+            : "No cycle data yet — runs after the first Workflow execution."}
         </p>
+        {errors.lastError && (
+          <div class="border-t border-destructive/20 px-6 py-3">
+            <p class="text-xs text-destructive font-mono truncate" title={errors.lastError}>
+              Last error: {errors.lastError}
+            </p>
+          </div>
+        )}
       </div>
     );
   }
@@ -284,14 +304,22 @@ function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
   const fmt = (n: number) => n.toFixed(1);
 
   return (
-    <div class="rounded-lg border border-border bg-card shadow-sm">
-      <div class="border-b border-border px-6 py-4">
+    <div class={`rounded-lg border bg-card shadow-sm ${errors.count > 0 ? "border-destructive/60" : "border-border"}`}>
+      <div class="border-b border-border px-6 py-4 flex items-center justify-between gap-4">
         <h2 class="text-base font-semibold text-foreground">
           Cycle health{" "}
           <span class="text-muted-foreground font-normal text-sm">
             (last 7 days · {stat.cycleCount} cycles)
           </span>
         </h2>
+        {errors.count > 0 && (
+          <span
+            class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive"
+            title={errors.lastError || undefined}
+          >
+            {errors.count} workflow error{errors.count !== 1 ? "s" : ""}
+          </span>
+        )}
       </div>
       <div class="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
         {[
@@ -309,6 +337,13 @@ function CycleHealthCard({ stat }: { stat: CycleStat | null }) {
           </div>
         ))}
       </div>
+      {errors.lastError && (
+        <div class="border-t border-destructive/20 px-6 py-3">
+          <p class="text-xs text-destructive font-mono truncate" title={errors.lastError}>
+            Last error: {errors.lastError}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -418,7 +453,7 @@ export function MetricsTab({ data }: { data: StatusData }) {
         />
       </div>
 
-      <CycleHealthCard stat={data.cycleStat} />
+      <CycleHealthCard stat={data.cycleStat} errors={data.cycleErrors} />
       <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
       <ParseStatsCard rows={data.parseStats} />
