@@ -60,7 +60,7 @@ handler.get("/app/metrics", async (c) => {
         apiToken,
         `
         SELECT
-          toDate(timestamp, '${tz}')  AS date,
+          toDate(toDateTime(timestamp, '${tz}'))  AS date,
           count()                     AS reads
         FROM "rss-reader-data"
         WHERE index1 = 'read'

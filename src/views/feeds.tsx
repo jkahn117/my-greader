@@ -42,11 +42,6 @@ function PollIntervalBadge({ minutes }: { minutes: number }) {
   )
 }
 
-function formatDate(ts: number | null) {
-  if (!ts) return <span class="text-muted-foreground italic">Never</span>
-  return <time datetime={String(ts)}>{new Date(ts).toISOString()}</time>
-}
-
 function relativeTime(ts: number | null): string {
   if (!ts) return "Never";
   const diffMs = Date.now() - ts;
@@ -133,7 +128,7 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
         {sub.folder ?? <span class="italic">None</span>}
       </td>
       <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-        {formatDate(sub.lastFetchedAt)}
+        {relativeTime(sub.lastFetchedAt)}
       </td>
       <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
         {relativeTime(sub.lastNewItemAt)}
