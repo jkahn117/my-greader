@@ -52,7 +52,10 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   if (addTag === "user/-/state/com.google/starred") updates.isStarred = 1;
   if (removeTag === "user/-/state/com.google/starred") updates.isStarred = 0;
 
-  if (Object.keys(updates).length === 0) return c.text("OK");
+  if (Object.keys(updates).length === 0) {
+    logger.debug("edit-tag: no recognised tag operation", { addTag, removeTag });
+    return c.text("OK");
+  }
 
   for (const itemId of itemIds) {
     await db

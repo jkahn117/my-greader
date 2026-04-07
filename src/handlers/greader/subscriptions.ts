@@ -197,8 +197,10 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
 
     const updates: Partial<typeof subscriptions.$inferInsert> = {};
     if (t !== undefined) updates.title = t;
-    if (a?.startsWith("user/-/label/")) updates.folder = a.slice("user/-/label/".length);
+    // Apply label changes: `a` adds a folder, `r` removes one.
+    // `a` takes precedence if both arrive in the same request.
     if (r?.startsWith("user/-/label/")) updates.folder = null;
+    if (a?.startsWith("user/-/label/")) updates.folder = a.slice("user/-/label/".length);
 
     if (Object.keys(updates).length > 0) {
       await db

@@ -14,6 +14,13 @@ type Params = Record<string, never>;
 // Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
 const FEEDS_PER_STEP = 20;
 
+// Inside a WorkflowEntrypoint, env bindings are RPC stubs that must be disposed
+// after use. TypeScript types don't reflect this — cast to force `using` support.
+// See: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle
+function asDisposable<T>(binding: T): T & Disposable {
+  return binding as T & Disposable;
+}
+
 // ---------------------------------------------------------------------------
 // FeedPollingWorkflow
 //
@@ -24,6 +31,10 @@ const FEEDS_PER_STEP = 20;
 // invocation with a fresh budget. We therefore batch feeds into groups of
 // FEEDS_PER_STEP — feeds within a batch are fetched concurrently, batches are
 // processed one at a time.
+//
+// Each step accesses env bindings via `using` to ensure RPC stubs are
+// disposed when the step returns, avoiding the "RPC result not disposed"
+// runtime warning.
 // ---------------------------------------------------------------------------
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
@@ -35,7 +46,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // ------------------------------------------------------------------
 
     const { dueFeeds, totalActiveFeeds } = await step.do("get-due-feeds", async () => {
-      const db = getDb(this.env.DB);
+      using d1 = asDisposable(this.env.DB);
+      const db = getDb(d1);
       const now = Date.now();
 
       const [due, activeCount] = await db.batch([
@@ -58,7 +70,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
               isNull(feeds.deactivatedAt),
               or(
                 isNull(feeds.lastFetchedAt),
-                // last_fetched_at + interval_ms <= now
                 lte(
                   sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
                   now,
@@ -104,8 +115,13 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchIndex = Math.floor(i / FEEDS_PER_STEP);
 
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
+        // Bind once per step and dispose on exit — each is an RPC stub at runtime
+        using d1 = asDisposable(this.env.DB);
+        using metricsDataset = asDisposable(this.env.READER_METRICS);
+        const stepEnv = { DB: d1, READER_METRICS: metricsDataset } as unknown as Env;
+
         const settled = await Promise.allSettled(
-          batch.map((feed) => fetchAndStoreFeed(feed, this.env)),
+          batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
         );
 
         return settled.map((s, j): FeedResult => {
@@ -135,7 +151,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     const failedFeeds = allResults.filter((r) => r.status === "error").length;
 
     await step.do("record-cycle", async () => {
-      const metrics = createMetrics(this.env.READER_METRICS);
+      using metricsDataset = asDisposable(this.env.READER_METRICS);
+      const metrics = createMetrics(metricsDataset);
       metrics.recordCycle({
         totalActiveFeeds,
         dueFeeds: dueFeeds.length,
