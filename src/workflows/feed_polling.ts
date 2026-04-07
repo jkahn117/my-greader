@@ -54,12 +54,13 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
     // Binding already implements Disposable — safe to use directly
     return binding as T & Disposable;
   }
-  // Runtime doesn't expose [Symbol.dispose] on this binding. Wrap it so the
-  // `using` declaration compiles and runs without throwing. The wrapper
-  // inherits all properties/methods from the original via the prototype chain.
-  const wrapper = Object.create(binding) as T & Disposable;
-  wrapper[Symbol.dispose] = () => {};
-  return wrapper;
+  // Runtime doesn't expose [Symbol.dispose] on this binding. Add a no-op
+  // directly onto the binding object (mutation) so that `this` is always the
+  // original binding when any of its methods are called. Using Object.create()
+  // instead would put methods on a prototype-wrapped copy, causing the runtime
+  // to reject calls with "Illegal invocation: incorrect `this` reference".
+  (binding as T & Disposable)[Symbol.dispose] = () => {};
+  return binding as T & Disposable;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,51 +128,59 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // ------------------------------------------------------------------
 
     const { dueFeeds, totalActiveFeeds } = await step.do("get-due-feeds", async () => {
-      using d1 = asDisposable(this.env.DB);
-      const db = getDb(d1);
-      const now = Date.now();
+      try {
+        using d1 = asDisposable(this.env.DB);
+        const db = getDb(d1);
+        const now = Date.now();
 
-      const [due, activeCount] = await db.batch([
-        db
-          .selectDistinct({
-            id: feeds.id,
-            feedUrl: feeds.feedUrl,
-            title: feeds.title,
-            htmlUrl: feeds.htmlUrl,
-            etag: feeds.etag,
-            lastModified: feeds.lastModified,
-            lastFetchedAt: feeds.lastFetchedAt,
-            consecutiveErrors: feeds.consecutiveErrors,
-            checkIntervalMinutes: feeds.checkIntervalMinutes,
-            lastNewItemAt: feeds.lastNewItemAt,
-          })
-          .from(feeds)
-          .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-          .where(
-            and(
-              isNull(feeds.deactivatedAt),
-              or(
-                isNull(feeds.lastFetchedAt),
-                lte(
-                  sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                  now,
+        const [due, activeCount] = await db.batch([
+          db
+            .selectDistinct({
+              id: feeds.id,
+              feedUrl: feeds.feedUrl,
+              title: feeds.title,
+              htmlUrl: feeds.htmlUrl,
+              etag: feeds.etag,
+              lastModified: feeds.lastModified,
+              lastFetchedAt: feeds.lastFetchedAt,
+              consecutiveErrors: feeds.consecutiveErrors,
+              checkIntervalMinutes: feeds.checkIntervalMinutes,
+              lastNewItemAt: feeds.lastNewItemAt,
+            })
+            .from(feeds)
+            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+            .where(
+              and(
+                isNull(feeds.deactivatedAt),
+                or(
+                  isNull(feeds.lastFetchedAt),
+                  lte(
+                    sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
+                    now,
+                  ),
                 ),
               ),
-            ),
-          )
-          .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
+            )
+            .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
 
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(feeds)
-          .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-          .where(isNull(feeds.deactivatedAt)),
-      ]);
+          db
+            .select({ count: sql<number>`count(*)` })
+            .from(feeds)
+            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+            .where(isNull(feeds.deactivatedAt)),
+        ]);
 
-      return {
-        dueFeeds: due,
-        totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
-      };
+        return {
+          dueFeeds: due,
+          totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
+        };
+      } catch (err) {
+        logger.error("get-due-feeds step failed", {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        throw err;
+      }
     });
 
     logger.info("feed polling cycle starting", {
@@ -197,25 +206,35 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchIndex = Math.floor(i / FEEDS_PER_STEP);
 
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
-        using d1 = asDisposable(this.env.DB);
-        using metricsDataset = asDisposable(this.env.READER_METRICS);
-        const stepEnv = { DB: d1, READER_METRICS: metricsDataset } as unknown as Env;
+        try {
+          using d1 = asDisposable(this.env.DB);
+          using metricsDataset = asDisposable(this.env.READER_METRICS);
+          const stepEnv = { DB: d1, READER_METRICS: metricsDataset } as unknown as Env;
 
-        // Fetch all feeds in the batch concurrently. allSettled ensures one
-        // feed's network failure doesn't abort the rest of the batch.
-        const settled = await Promise.allSettled(
-          batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
-        );
+          // Fetch all feeds in the batch concurrently. allSettled ensures one
+          // feed's network failure doesn't abort the rest of the batch.
+          const settled = await Promise.allSettled(
+            batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
+          );
 
-        return settled.map((s, j): FeedResult => {
-          if (s.status === "fulfilled") return s.value;
-          return {
-            feedId: batch[j].id,
-            feedTitle: batch[j].title ?? batch[j].feedUrl,
-            status: "error",
-            error: String(s.reason),
-          };
-        });
+          return settled.map((s, j): FeedResult => {
+            if (s.status === "fulfilled") return s.value;
+            return {
+              feedId: batch[j].id,
+              feedTitle: batch[j].title ?? batch[j].feedUrl,
+              status: "error",
+              error: String(s.reason),
+            };
+          });
+        } catch (err) {
+          logger.error(`fetch-batch-${batchIndex} step failed`, {
+            batchIndex,
+            batchSize: batch.length,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
+          throw err;
+        }
       });
 
       for (const r of batchResults) {
@@ -234,15 +253,23 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     const failedFeeds = allResults.filter((r) => r.status === "error").length;
 
     await step.do("record-cycle", async () => {
-      using metricsDataset = asDisposable(this.env.READER_METRICS);
-      const metrics = createMetrics(metricsDataset);
-      metrics.recordCycle({
-        totalActiveFeeds,
-        dueFeeds: dueFeeds.length,
-        checkedFeeds: allResults.length,
-        newArticles,
-        failedFeeds,
-      });
+      try {
+        using metricsDataset = asDisposable(this.env.READER_METRICS);
+        const metrics = createMetrics(metricsDataset);
+        metrics.recordCycle({
+          totalActiveFeeds,
+          dueFeeds: dueFeeds.length,
+          checkedFeeds: allResults.length,
+          newArticles,
+          failedFeeds,
+        });
+      } catch (err) {
+        logger.error("record-cycle step failed", {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        throw err;
+      }
     });
 
     const detail = allResults.map((r) => {
