@@ -1,13 +1,65 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
-import { decodeContinuation, encodeContinuation, normalizeItemId, toGreaderItemId } from "../../lib/crypto";
+import {
+  decodeContinuation,
+  encodeContinuation,
+  normalizeItemId,
+  toGreaderItemId,
+} from "../../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../../db/schema";
-import { parseStreamId, streamContentsSchema, streamIdsSchema } from "./helpers";
+import {
+  parseStreamId,
+  streamContentsSchema,
+  streamIdsSchema,
+} from "./helpers";
 import type { Variables } from "./helpers";
 
 const stream = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// ---------------------------------------------------------------------------
+// Shared condition builder
+// ---------------------------------------------------------------------------
+
+type BuildStreamConditionsArgs = {
+  streamId: ReturnType<typeof parseStreamId>;
+  userId: string;
+  excludeRead: boolean;
+  cursor: number | null;
+  db: ReturnType<typeof getDb>;
+};
+
+async function buildStreamConditions({
+  streamId,
+  userId,
+  excludeRead,
+  cursor,
+  db,
+}: BuildStreamConditionsArgs): Promise<SQL<unknown>[]> {
+  const conditions: SQL<unknown>[] = [eq(subscriptions.userId, userId)];
+
+  if (streamId.type === "feed") {
+    const feed = await db
+      .select({ id: feeds.id })
+      .from(feeds)
+      .where(
+        or(eq(feeds.id, streamId.value!), eq(feeds.feedUrl, streamId.value!)),
+      )
+      .get();
+    if (feed) conditions.push(eq(items.feedId, feed.id));
+  } else if (streamId.type === "folder") {
+    conditions.push(eq(subscriptions.folder, streamId.value!));
+  } else if (streamId.type === "starred") {
+    conditions.push(eq(itemState.isStarred, 1));
+  }
+
+  if (excludeRead) conditions.push(sql`COALESCE(${itemState.isRead}, 0) = 0`);
+  if (cursor !== null) conditions.push(lt(items.publishedAt, cursor));
+
+  return conditions;
+}
 
 // ---------------------------------------------------------------------------
 // GET /reader/api/0/stream/contents
@@ -29,25 +81,13 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
 
-  const conditions = [eq(subscriptions.userId, userId)];
-
-  if (streamId.type === "feed") {
-    // value may be feed ID or feed URL
-    const feed =
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.id, streamId.value!)).get()) ??
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.feedUrl, streamId.value!)).get());
-    if (feed) conditions.push(eq(items.feedId, feed.id));
-  } else if (streamId.type === "folder") {
-    conditions.push(eq(subscriptions.folder, streamId.value!));
-  } else if (streamId.type === "starred") {
-    conditions.push(eq(itemState.isStarred, 1));
-  }
-
-  if (excludeRead) {
-    // Treat missing item_state rows as unread
-    conditions.push(sql`COALESCE(${itemState.isRead}, 0) = 0`);
-  }
-  if (cursor !== null) conditions.push(lt(items.publishedAt, cursor));
+  const conditions = await buildStreamConditions({
+    streamId,
+    userId,
+    excludeRead,
+    cursor,
+    db,
+  });
 
   // Fetch n+1 to detect whether a next page exists
   const rows = await db
@@ -62,9 +102,12 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
     .from(items)
     .innerJoin(feeds, eq(items.feedId, feeds.id))
     .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-    .leftJoin(itemState, and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)))
+    .leftJoin(
+      itemState,
+      and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)),
+    )
     .where(and(...conditions))
-    .orderBy(desc(items.publishedAt))
+    .orderBy(desc(items.publishedAt), desc(items.id))
     .limit(n + 1);
 
   const hasMore = rows.length > n;
@@ -90,7 +133,9 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
         canonical: [{ href: r.item.url ?? "" }],
         summary: { content: r.item.content ?? "" },
         author: r.item.author ?? "",
-        published: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
+        published: r.item.publishedAt
+          ? Math.floor(r.item.publishedAt / 1000)
+          : 0,
         updated: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
         origin: {
           streamId: `feed/${r.feedId}`,
@@ -124,30 +169,25 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
 
-  const conditions = [eq(subscriptions.userId, userId)];
-
-  if (streamId.type === "feed") {
-    const feed =
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.id, streamId.value!)).get()) ??
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.feedUrl, streamId.value!)).get());
-    if (feed) conditions.push(eq(items.feedId, feed.id));
-  } else if (streamId.type === "folder") {
-    conditions.push(eq(subscriptions.folder, streamId.value!));
-  } else if (streamId.type === "starred") {
-    conditions.push(eq(itemState.isStarred, 1));
-  }
-
-  if (excludeRead) conditions.push(sql`COALESCE(${itemState.isRead}, 0) = 0`);
-  if (cursor !== null) conditions.push(lt(items.publishedAt, cursor));
+  const conditions = await buildStreamConditions({
+    streamId,
+    userId,
+    excludeRead,
+    cursor,
+    db,
+  });
 
   const rows = await db
     .select({ id: items.id, publishedAt: items.publishedAt })
     .from(items)
     .innerJoin(feeds, eq(items.feedId, feeds.id))
     .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-    .leftJoin(itemState, and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)))
+    .leftJoin(
+      itemState,
+      and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)),
+    )
     .where(and(...conditions))
-    .orderBy(desc(items.publishedAt))
+    .orderBy(desc(items.publishedAt), desc(items.id))
     .limit(n + 1);
 
   const hasMore = rows.length > n;
@@ -197,7 +237,8 @@ async function handleStreamItemsContents(c: HonoCtx) {
   }
 
   const itemIds = rawIds.map(normalizeItemId).filter(Boolean);
-  if (itemIds.length === 0) return c.json({ id: "user/-/state/com.google/reading-list", items: [] });
+  if (itemIds.length === 0)
+    return c.json({ id: "user/-/state/com.google/reading-list", items: [] });
 
   const rows = await db
     .select({
@@ -211,10 +252,16 @@ async function handleStreamItemsContents(c: HonoCtx) {
     .from(items)
     .innerJoin(feeds, eq(items.feedId, feeds.id))
     .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-    .leftJoin(itemState, and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)))
+    .leftJoin(
+      itemState,
+      and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)),
+    )
     .where(and(eq(subscriptions.userId, userId), inArray(items.id, itemIds)));
 
-  logger.info("stream/items/contents", { requested: itemIds.length, found: rows.length });
+  logger.info("stream/items/contents", {
+    requested: itemIds.length,
+    found: rows.length,
+  });
 
   return c.json({
     id: "user/-/state/com.google/reading-list",
@@ -230,7 +277,9 @@ async function handleStreamItemsContents(c: HonoCtx) {
         alternate: [{ href: r.item.url ?? "", type: "text/html" }],
         summary: { content: r.item.content ?? "" },
         author: r.item.author ?? "",
-        published: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
+        published: r.item.publishedAt
+          ? Math.floor(r.item.publishedAt / 1000)
+          : 0,
         updated: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
         origin: {
           streamId: `feed/${r.feedId}`,

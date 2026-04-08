@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
@@ -67,7 +67,9 @@ subs.get("/reader/api/0/tag/list", async (c) => {
   const folderRows = await db
     .selectDistinct({ folder: subscriptions.folder })
     .from(subscriptions)
-    .where(and(eq(subscriptions.userId, userId), isNotNull(subscriptions.folder)));
+    .where(
+      and(eq(subscriptions.userId, userId), isNotNull(subscriptions.folder)),
+    );
 
   logger.info("tag/list", { folders: folderRows.length });
 
@@ -93,20 +95,34 @@ subs.post("/reader/api/0/subscription/quickadd", async (c) => {
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
-  const feedUrl = typeof body["quickadd"] === "string" ? body["quickadd"].trim() : null;
+  const feedUrl =
+    typeof body["quickadd"] === "string" ? body["quickadd"].trim() : null;
 
   if (!feedUrl) {
     logger.warn("quickadd missing feedUrl");
     return c.text("Error", 400);
   }
 
-  await db.insert(feeds).values({ id: crypto.randomUUID(), feedUrl }).onConflictDoNothing();
-  const feed = await db.select().from(feeds).where(eq(feeds.feedUrl, feedUrl)).get();
+  await db
+    .insert(feeds)
+    .values({ id: crypto.randomUUID(), feedUrl })
+    .onConflictDoNothing();
+  const feed = await db
+    .select()
+    .from(feeds)
+    .where(eq(feeds.feedUrl, feedUrl))
+    .get();
   if (!feed) return c.text("Error", 500);
 
   await db
     .insert(subscriptions)
-    .values({ id: crypto.randomUUID(), userId, feedId: feed.id, title: null, folder: null })
+    .values({
+      id: crypto.randomUUID(),
+      userId,
+      feedId: feed.id,
+      title: null,
+      folder: null,
+    })
     .onConflictDoNothing();
 
   logger.info("quickadd subscribed", { feedUrl, feedId: feed.id });
@@ -139,7 +155,9 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
   const parsed = subscriptionEditSchema.safeParse(body);
 
   if (!parsed.success) {
-    logger.warn("subscription/edit bad request", { errors: parsed.error.issues });
+    logger.warn("subscription/edit bad request", {
+      errors: parsed.error.issues,
+    });
     return c.text("Error", 400);
   }
 
@@ -152,46 +170,89 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     const feedUrl = feedRef;
 
     // Upsert feed row (cron will populate title/content later)
-    let feed = await db.select().from(feeds).where(eq(feeds.feedUrl, feedUrl)).get();
+    let feed = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.feedUrl, feedUrl))
+      .get();
     if (!feed) {
-      await db.insert(feeds).values({ id: crypto.randomUUID(), feedUrl }).onConflictDoNothing();
-      feed = await db.select().from(feeds).where(eq(feeds.feedUrl, feedUrl)).get();
+      await db
+        .insert(feeds)
+        .values({ id: crypto.randomUUID(), feedUrl })
+        .onConflictDoNothing();
+      feed = await db
+        .select()
+        .from(feeds)
+        .where(eq(feeds.feedUrl, feedUrl))
+        .get();
     }
     if (!feed) return c.text("Error", 500);
 
-    const folder = a?.startsWith("user/-/label/") ? a.slice("user/-/label/".length) : null;
+    const folder = a?.startsWith("user/-/label/")
+      ? a.slice("user/-/label/".length)
+      : null;
 
     await db
       .insert(subscriptions)
-      .values({ id: crypto.randomUUID(), userId, feedId: feed.id, title: t ?? null, folder })
+      .values({
+        id: crypto.randomUUID(),
+        userId,
+        feedId: feed.id,
+        title: t ?? null,
+        folder,
+      })
       .onConflictDoNothing();
 
     logger.info("subscribed", { feedUrl, folder });
-    metrics.recordSubscription({ userId, feedId: feed.id, action: "subscribe", folder: folder ?? undefined });
+    metrics.recordSubscription({
+      userId,
+      feedId: feed.id,
+      action: "subscribe",
+      folder: folder ?? undefined,
+    });
   }
 
   if (ac === "unsubscribe") {
     // feedRef may be feed ID or URL — try both
-    const feed =
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.id, feedRef)).get()) ??
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.feedUrl, feedRef)).get());
+    const feed = await db
+      .select({ id: feeds.id })
+      .from(feeds)
+      .where(or(eq(feeds.id, feedRef), eq(feeds.feedUrl, feedRef)))
+      .get();
 
     if (feed) {
       await db
         .delete(subscriptions)
-        .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, feed.id)));
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            eq(subscriptions.feedId, feed.id),
+          ),
+        );
     }
 
     logger.info("unsubscribed", { feedRef });
     if (feed) {
-      metrics.recordSubscription({ userId, feedId: feed.id, action: "unsubscribe" });
+      metrics.recordSubscription({
+        userId,
+        feedId: feed.id,
+        action: "unsubscribe",
+      });
     }
   }
 
   if (ac === "edit") {
     const feed =
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.id, feedRef)).get()) ??
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.feedUrl, feedRef)).get());
+      (await db
+        .select({ id: feeds.id })
+        .from(feeds)
+        .where(eq(feeds.id, feedRef))
+        .get()) ??
+      (await db
+        .select({ id: feeds.id })
+        .from(feeds)
+        .where(eq(feeds.feedUrl, feedRef))
+        .get());
 
     if (!feed) return c.text("Error", 404);
 
@@ -200,13 +261,19 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     // Apply label changes: `a` adds a folder, `r` removes one.
     // `a` takes precedence if both arrive in the same request.
     if (r?.startsWith("user/-/label/")) updates.folder = null;
-    if (a?.startsWith("user/-/label/")) updates.folder = a.slice("user/-/label/".length);
+    if (a?.startsWith("user/-/label/"))
+      updates.folder = a.slice("user/-/label/".length);
 
     if (Object.keys(updates).length > 0) {
       await db
         .update(subscriptions)
         .set(updates)
-        .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, feed.id)));
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            eq(subscriptions.feedId, feed.id),
+          ),
+        );
     }
 
     logger.info("subscription edited", { feedRef, updates });

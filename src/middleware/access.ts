@@ -1,33 +1,38 @@
-import type { Context, Next } from 'hono'
-import { getDb } from '../lib/db'
-import { users } from '../db/schema'
-import { createLogger } from '../lib/logger'
+import type { Context, Next } from "hono";
+import { getDb } from "../lib/db";
+import { users } from "../db/schema";
+import { createLogger, Logger } from "../lib/logger";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface JwtHeader {
-  alg: string
-  kid: string
+  alg: string;
+  kid: string;
 }
 
 interface AccessJwtPayload {
-  iss: string             // "https://<team>.cloudflareaccess.com"
-  sub: string             // stable user UUID from Cloudflare Access
-  aud: string | string[]
-  email: string
-  iat: number
-  exp: number
+  iss: string; // "https://<team>.cloudflareaccess.com"
+  sub: string; // stable user UUID from Cloudflare Access
+  aud: string | string[];
+  email: string;
+  iat: number;
+  exp: number;
 }
 
 // Hardcoded dev identity — matches the token middleware Phase 2 constants
-export const DEV_USER_ID    = 'dev-user-id'
-export const DEV_USER_EMAIL = 'dev@localhost'
+export const DEV_USER_ID = "dev-user-id";
+export const DEV_USER_EMAIL = "dev@localhost";
 
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
+
+// In-memory cache for JWKS to persist for lifetime of isolate
+let jwksCache: { keys: (JsonWebKey & { kid: string })[] } | null = null;
+let jwksCachedAt = 0;
+const JWKS_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Cloudflare Access JWT verification middleware.
@@ -39,40 +44,42 @@ export const DEV_USER_EMAIL = 'dev@localhost'
  * injects a hardcoded dev user without any JWT check.
  */
 export async function accessMiddleware(c: Context, next: Next) {
-  const logger = createLogger({ path: c.req.path })
-  const env    = c.env as Env
+  const logger = createLogger({ path: c.req.path });
+  const env = c.env as Env;
 
   // Dev bypass — gated on DEV_MODE; never set in production
-  if (env.DEV_MODE === 'true') {
-    const db = getDb(env.DB)
-    await db.insert(users)
+  if (env.DEV_MODE === "true") {
+    const db = getDb(env.DB);
+    await db
+      .insert(users)
       .values({ id: DEV_USER_ID, email: DEV_USER_EMAIL, createdAt: Date.now() })
-      .onConflictDoNothing()
-    c.set('userId', DEV_USER_ID)
-    c.set('email',  DEV_USER_EMAIL)
-    return next()
+      .onConflictDoNothing();
+    c.set("userId", DEV_USER_ID);
+    c.set("email", DEV_USER_EMAIL);
+    return next();
   }
 
-  const jwtToken = c.req.header('Cf-Access-Jwt-Assertion')
+  const jwtToken = c.req.header("Cf-Access-Jwt-Assertion");
   if (!jwtToken) {
-    logger.warn('missing Cf-Access-Jwt-Assertion header')
-    return c.text('Unauthorized', 401)
+    logger.warn("missing Cf-Access-Jwt-Assertion header");
+    return c.text("Unauthorized", 401);
   }
 
-  const payload = await verifyAccessJwt(jwtToken, env.CF_ACCESS_AUD, logger)
+  const payload = await verifyAccessJwt(jwtToken, env.CF_ACCESS_AUD, logger);
   if (!payload) {
-    return c.text('Unauthorized', 401)
+    return c.text("Unauthorized", 401);
   }
 
   // Auto-provision user on first login — no admin required for single-user setup
-  const db = getDb(env.DB)
-  await db.insert(users)
+  const db = getDb(env.DB);
+  await db
+    .insert(users)
     .values({ id: payload.sub, email: payload.email, createdAt: Date.now() })
-    .onConflictDoNothing()
+    .onConflictDoNothing();
 
-  c.set('userId', payload.sub)
-  c.set('email',  payload.email)
-  await next()
+  c.set("userId", payload.sub);
+  c.set("email", payload.email);
+  await next();
 }
 
 // ---------------------------------------------------------------------------
@@ -84,106 +91,124 @@ async function verifyAccessJwt(
   audience: string,
   logger: ReturnType<typeof createLogger>,
 ): Promise<AccessJwtPayload | null> {
-  const parts = token.split('.')
+  const parts = token.split(".");
   if (parts.length !== 3) {
-    logger.warn('malformed JWT: wrong segment count')
-    return null
+    logger.warn("malformed JWT: wrong segment count");
+    return null;
   }
 
-  const [headerB64, payloadB64, sigB64] = parts
+  const [headerB64, payloadB64, sigB64] = parts;
 
-  let header: JwtHeader
-  let payload: AccessJwtPayload
+  let header: JwtHeader;
+  let payload: AccessJwtPayload;
   try {
-    header  = JSON.parse(b64urlToUtf8(headerB64))
-    payload = JSON.parse(b64urlToUtf8(payloadB64))
+    header = JSON.parse(b64urlToUtf8(headerB64));
+    payload = JSON.parse(b64urlToUtf8(payloadB64));
   } catch {
-    logger.warn('failed to decode JWT segments')
-    return null
+    logger.warn("failed to decode JWT segments");
+    return null;
   }
 
   // Audience validation
-  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(audience)) {
-    logger.warn('JWT audience mismatch', { aud })
-    return null
+    logger.warn("JWT audience mismatch", { aud });
+    return null;
   }
 
   // Expiry validation
   if (payload.exp < Math.floor(Date.now() / 1000)) {
-    logger.warn('JWT expired', { exp: payload.exp })
-    return null
+    logger.warn("JWT expired", { exp: payload.exp });
+    return null;
   }
 
   // Fetch JWKS from the Access certs endpoint — issuer URL is in the JWT itself
-  let jwks: { keys: (JsonWebKey & { kid: string })[] }
-  try {
-    const certsUrl = `${payload.iss}/cdn-cgi/access/certs`
-    const res = await fetch(certsUrl)
-    if (!res.ok) {
-      logger.error('failed to fetch Access JWKS', { status: res.status })
-      return null
-    }
-    jwks = await res.json() as typeof jwks
-  } catch (err) {
-    logger.error('error fetching Access JWKS', { err: String(err) })
-    return null
-  }
+  let jwks: { keys: (JsonWebKey & { kid: string })[] } | null = await fetchJwks(
+    payload.iss,
+    logger,
+  );
 
-  const jwk = jwks.keys.find(k => k.kid === header.kid)
+  if (!jwks) return null;
+
+  const jwk = jwks.keys.find((k) => k.kid === header.kid);
   if (!jwk) {
-    logger.warn('JWT kid not found in JWKS', { kid: header.kid })
-    return null
+    logger.warn("JWT kid not found in JWKS", { kid: header.kid });
+    return null;
   }
 
   // Import RSA public key and verify RS256 signature
-  let cryptoKey: CryptoKey
+  let cryptoKey: CryptoKey;
   try {
     cryptoKey = await crypto.subtle.importKey(
-      'jwk',
+      "jwk",
       jwk,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
       false,
-      ['verify'],
-    )
+      ["verify"],
+    );
   } catch (err) {
-    logger.error('failed to import JWKS public key', { err: String(err) })
-    return null
+    logger.error("failed to import JWKS public key", { err: String(err) });
+    return null;
   }
 
-  const signed    = new TextEncoder().encode(`${headerB64}.${payloadB64}`)
-  const signature = b64urlToBytes(sigB64)
+  const signed = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+  const signature = b64urlToBytes(sigB64);
 
   const valid = await crypto.subtle.verify(
-    { name: 'RSASSA-PKCS1-v1_5' },
+    { name: "RSASSA-PKCS1-v1_5" },
     cryptoKey,
     signature,
     signed,
-  )
+  );
 
   if (!valid) {
-    logger.warn('JWT signature verification failed')
-    return null
+    logger.warn("JWT signature verification failed");
+    return null;
   }
 
-  return payload
+  return payload;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Fetch JWKS */
+async function fetchJwks(
+  issuer: string,
+  logger: Logger,
+): Promise<{ keys: (JsonWebKey & { kid: string })[] } | null> {
+  if (jwksCache && Date.now() - jwksCachedAt < JWKS_TTL_MS) {
+    return jwksCache;
+  }
+
+  try {
+    const res = await fetch(`${issuer}/cdn-cgi/access/certs`);
+
+    if (!res.ok) {
+      logger.error("failed to fetch Access JWKS", { status: res.status });
+      return null;
+    }
+
+    jwksCache = await res.json();
+    jwksCachedAt = Date.now();
+    return jwksCache;
+  } catch (err) {
+    logger.error("error fetching Access JWKS", { err: String(err) });
+    return null;
+  }
+}
+
 /** Decodes a base64url string to a UTF-8 string */
 function b64urlToUtf8(b64url: string): string {
-  return atob(b64url.replace(/-/g, '+').replace(/_/g, '/'))
+  return atob(b64url.replace(/-/g, "+").replace(/_/g, "/"));
 }
 
 /** Decodes a base64url string to raw bytes */
 function b64urlToBytes(b64url: string): Uint8Array {
-  const binary = atob(b64url.replace(/-/g, '+').replace(/_/g, '/'))
-  const bytes  = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
+  const bytes = Uint8Array.from(
+    atob(b64url.replace(/-/g, "+").replace(/_/g, "/")),
+    (c) => c.charCodeAt(0),
+  );
+  return bytes;
 }

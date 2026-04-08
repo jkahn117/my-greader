@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { createMetrics } from "../../lib/metrics";
 import { normalizeItemId } from "../../lib/crypto";
-import { feeds, items, itemState, subscriptions } from "../../db/schema";
+import { feeds, itemState } from "../../db/schema";
 import { parseStreamId } from "./helpers";
 import type { Variables } from "./helpers";
 
@@ -38,7 +38,9 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   const { a, r } = parsed.data;
 
   // Collect item IDs — may be a single string or array
-  const rawIds = Array.isArray(body["i"]) ? (body["i"] as string[]) : [body["i"] as string];
+  const rawIds = Array.isArray(body["i"])
+    ? (body["i"] as string[])
+    : [body["i"] as string];
   const itemIds = rawIds.filter(Boolean).map(normalizeItemId);
 
   if (itemIds.length === 0) return c.text("Error", 400);
@@ -53,7 +55,10 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   if (removeTag === "user/-/state/com.google/starred") updates.isStarred = 0;
 
   if (Object.keys(updates).length === 0) {
-    logger.debug("edit-tag: no recognised tag operation", { addTag, removeTag });
+    logger.debug("edit-tag: no recognised tag operation", {
+      addTag,
+      removeTag,
+    });
     return c.text("OK");
   }
 
@@ -89,7 +94,6 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
     path: "/reader/api/0/mark-all-as-read",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.READER_METRICS);
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
@@ -102,61 +106,72 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
 
   // ts is in microseconds; convert to ms for comparison against publishedAt
   const cutoffMs = ts ? Math.floor(ts / 1000) : null;
+  const cutoffClause = cutoffMs !== null ? "AND i.published_at < ?" : "";
 
-  const itemConditions = [];
-  if (cutoffMs !== null) itemConditions.push(lt(items.publishedAt, cutoffMs));
+  // For "feed" type, resolve the canonical feed ID first (value may be URL or ID)
+  let feedId: string | null = null;
+  if (streamId.type === "feed") {
+    const feed = await db
+      .select({ id: feeds.id })
+      .from(feeds)
+      .where(or(eq(feeds.id, streamId.value!), eq(feeds.feedUrl, streamId.value!)))
+      .get();
+    if (!feed) return c.text("OK");
+    feedId = feed.id;
+  }
+
+  // Single INSERT...SELECT — no IDs loaded into memory regardless of item count.
+  // Drizzle doesn't support INSERT...SELECT natively, so we use the raw D1 API.
+  // Only inserts rows for items that are currently unread (LEFT JOIN filter).
+  let insertSql: string;
+  const params: (string | number)[] = [];
 
   if (streamId.type === "feed") {
-    const feed =
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.id, streamId.value!)).get()) ??
-      (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.feedUrl, streamId.value!)).get());
-
-    if (!feed) return c.text("OK");
-    itemConditions.push(eq(items.feedId, feed.id));
+    insertSql = `
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
+      SELECT i.id, ?, 1, 0
+      FROM items i
+      LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
+      WHERE i.feed_id = ?
+        AND (s.is_read IS NULL OR s.is_read = 0)
+        ${cutoffClause}
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+    `;
+    params.push(userId, userId, feedId!);
   } else if (streamId.type === "folder") {
-    const subFeeds = await db
-      .select({ feedId: subscriptions.feedId })
-      .from(subscriptions)
-      .where(and(eq(subscriptions.userId, userId), eq(subscriptions.folder, streamId.value!)));
-    const feedIds = subFeeds.map((sf) => sf.feedId);
-    if (feedIds.length === 0) return c.text("OK");
-    itemConditions.push(inArray(items.feedId, feedIds));
+    insertSql = `
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
+      SELECT i.id, ?, 1, 0
+      FROM items i
+      LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
+      WHERE i.feed_id IN (SELECT feed_id FROM subscriptions WHERE user_id = ? AND folder = ?)
+        AND (s.is_read IS NULL OR s.is_read = 0)
+        ${cutoffClause}
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+    `;
+    params.push(userId, userId, userId, streamId.value!);
   } else if (streamId.type === "all") {
-    const subFeeds = await db
-      .select({ feedId: subscriptions.feedId })
-      .from(subscriptions)
-      .where(eq(subscriptions.userId, userId));
-    const feedIds = subFeeds.map((sf) => sf.feedId);
-    if (feedIds.length === 0) return c.text("OK");
-    itemConditions.push(inArray(items.feedId, feedIds));
+    insertSql = `
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
+      SELECT i.id, ?, 1, 0
+      FROM items i
+      LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
+      WHERE i.feed_id IN (SELECT feed_id FROM subscriptions WHERE user_id = ?)
+        AND (s.is_read IS NULL OR s.is_read = 0)
+        ${cutoffClause}
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+    `;
+    params.push(userId, userId, userId);
+  } else {
+    return c.text("OK");
   }
 
-  const targetItems = await db
-    .select({ id: items.id })
-    .from(items)
-    .where(itemConditions.length > 0 ? and(...itemConditions) : undefined);
+  if (cutoffMs !== null) params.push(cutoffMs);
 
-  const ids = targetItems.map((i) => i.id);
-  if (ids.length === 0) return c.text("OK");
+  const result = await c.env.DB.prepare(insertSql).bind(...params).run();
+  const count = result.meta.changes ?? 0;
 
-  // Bulk upsert in chunks to stay within D1 batch limits
-  const CHUNK = 100;
-  for (let i = 0; i < ids.length; i += CHUNK) {
-    const chunk = ids.slice(i, i + CHUNK);
-    for (const itemId of chunk) {
-      await db
-        .insert(itemState)
-        .values({ itemId, userId, isRead: 1, isStarred: 0 })
-        .onConflictDoUpdate({
-          target: [itemState.itemId, itemState.userId],
-          set: { isRead: 1 },
-        });
-
-      metrics.recordRead({ userId, articleId: itemId });
-    }
-  }
-
-  logger.info("mark-all-as-read", { stream: s, count: ids.length });
+  logger.info("mark-all-as-read", { stream: s, count });
   return c.text("OK");
 });
 

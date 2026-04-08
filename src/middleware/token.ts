@@ -1,9 +1,9 @@
-import type { Context, Next } from 'hono'
-import { and, eq, isNull } from 'drizzle-orm'
-import { getDb } from '../lib/db'
-import { sha256 } from '../lib/crypto'
-import { createLogger } from '../lib/logger'
-import { apiTokens, users } from '../db/schema'
+import type { Context, Next } from "hono";
+import { and, eq, isNull } from "drizzle-orm";
+import { getDb } from "../lib/db";
+import { sha256 } from "../lib/crypto";
+import { createLogger } from "../lib/logger";
+import { apiTokens, users } from "../db/schema";
 
 /**
  * GReader API token middleware.
@@ -13,47 +13,41 @@ import { apiTokens, users } from '../db/schema'
  * every authenticated request so the Access tab can show meaningful activity.
  */
 export async function tokenMiddleware(c: Context, next: Next) {
-  const logger = createLogger({ path: c.req.path })
-  const auth   = c.req.header('Authorization') ?? ''
-  const raw    = auth.startsWith('GoogleLogin auth=')
-    ? auth.slice('GoogleLogin auth='.length).trim()
-    : null
+  const logger = createLogger({ path: c.req.path });
+  const auth = c.req.header("Authorization") ?? "";
+  const raw = auth.startsWith("GoogleLogin auth=")
+    ? auth.slice("GoogleLogin auth=".length).trim()
+    : null;
 
-  if (!raw) return c.text('Unauthorized', 401)
+  if (!raw) return c.text("Unauthorized", 401);
 
-  const env  = c.env as Env
-  const db   = getDb(env.DB)
-  const hash = await sha256(raw)
+  const env = c.env as Env;
+  const db = getDb(env.DB);
+  const hash = await sha256(raw);
 
   const tokenRow = await db
-    .select({ id: apiTokens.id, userId: apiTokens.userId })
+    .select({
+      id: apiTokens.id,
+      userId: apiTokens.userId,
+      email: users.email,
+      lastUsedAt: apiTokens.lastUsedAt,
+    })
     .from(apiTokens)
+    .innerJoin(users, eq(users.id, apiTokens.userId))
     .where(and(eq(apiTokens.tokenHash, hash), isNull(apiTokens.revokedAt)))
-    .get()
+    .get();
 
-  if (!tokenRow) {
-    logger.warn('API token not found or revoked')
-    return c.text('Unauthorized', 401)
+  if (
+    tokenRow &&
+    (!tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000)
+  ) {
+    await db
+      .update(apiTokens)
+      .set({ lastUsedAt: Date.now() })
+      .where(eq(apiTokens.id, tokenRow.id));
   }
 
-  const user = await db
-    .select({ email: users.email })
-    .from(users)
-    .where(eq(users.id, tokenRow.userId))
-    .get()
-
-  if (!user) {
-    logger.warn('token owner not found', { userId: tokenRow.userId })
-    return c.text('Unauthorized', 401)
-  }
-
-  // Record the last time this token was used
-  await db
-    .update(apiTokens)
-    .set({ lastUsedAt: Date.now() })
-    .where(eq(apiTokens.id, tokenRow.id))
-
-  c.set('userId', tokenRow.userId)
-  c.set('email',  user.email)
-  await next()
+  c.set("userId", tokenRow?.userId);
+  c.set("email", tokenRow?.email);
+  await next();
 }
