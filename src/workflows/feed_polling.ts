@@ -252,6 +252,12 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     const newArticles = allResults.reduce((sum, r) => sum + (r.status === "ok" ? r.newItems : 0), 0);
     const failedFeeds = allResults.filter((r) => r.status === "error").length;
 
+    const detail = allResults.map((r) => {
+      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
+      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
+      return `${r.feedTitle}: error — ${r.error}`;
+    });
+
     await step.do("record-cycle", async () => {
       try {
         using metricsDataset = asDisposable(this.env.READER_METRICS);
@@ -270,12 +276,16 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         });
         throw err;
       }
-    });
 
-    const detail = allResults.map((r) => {
-      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
-      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
-      return `${r.feedTitle}: error — ${r.error}`;
+      // Return value is displayed as step output in the Workflow console
+      return {
+        totalActiveFeeds,
+        dueFeeds: dueFeeds.length,
+        checkedFeeds: allResults.length,
+        newArticles,
+        failedFeeds,
+        feeds: detail,
+      };
     });
 
     logger.info("feed polling cycle complete", {
