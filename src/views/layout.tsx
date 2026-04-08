@@ -26,19 +26,6 @@ export function Layout({
         <body class="min-h-screen bg-background font-sans antialiased">
           {children}
           <script src="/htmx.min.js" defer></script>
-          {/* Reformat <time datetime="..."> elements using the browser's local timezone
-          <script dangerouslySetInnerHTML={{ __html: `
-            document.addEventListener('DOMContentLoaded', () => {
-              document.querySelectorAll('time[datetime]').forEach(el => {
-                const ts = Number(el.getAttribute('datetime'));
-                if (!ts) return;
-                el.textContent = new Date(ts).toLocaleString('en-US', {
-                  month: 'short', day: 'numeric', year: 'numeric',
-                  hour: '2-digit', minute: '2-digit',
-                });
-              });
-            });
-          ` }} /> */}
         </body>
       </html>
     </>

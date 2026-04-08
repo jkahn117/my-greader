@@ -1,5 +1,6 @@
 import type { InferSelectModel } from 'drizzle-orm'
 import type { apiTokens } from '../db/schema'
+import { relativeTime } from '../lib/dates'
 
 type ApiToken = InferSelectModel<typeof apiTokens>
 
@@ -13,9 +14,7 @@ interface TokenRowProps {
 
 /** Single row — has its own ID so htmx can target it for revoke */
 export function TokenRow({ token }: TokenRowProps) {
-  const lastUsed = token.lastUsedAt
-    ? <time datetime={String(token.lastUsedAt)}>{new Date(token.lastUsedAt).toISOString()}</time>
-    : 'Never'
+  const lastUsed = relativeTime(token.lastUsedAt ?? null)
 
   return (
     <tr id={`token-${token.id}`} class="border-b border-border last:border-0">

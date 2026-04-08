@@ -2,6 +2,8 @@
 // Metrics tab — dashboard backed by Workers Analytics Engine
 // ---------------------------------------------------------------------------
 
+import { shortUtc } from "../lib/dates";
+
 interface ParseStat {
   feedId: string;
   feedName: string;
@@ -246,9 +248,7 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
                   {r.feedName}
                 </td>
                 <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-                  <time datetime={String(r.timestamp)}>
-                    {new Date(r.timestamp).toISOString()}
-                  </time>
+                  {shortUtc(r.timestamp)}
                 </td>
                 <td class="py-3 font-mono text-xs text-destructive break-all">
                   {r.error || (
