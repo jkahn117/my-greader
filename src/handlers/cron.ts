@@ -2,6 +2,7 @@ import Parser from "rss-parser";
 import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
+import { tracer } from "../lib/tracer";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
 import { feeds, items } from "../db/schema";
@@ -65,10 +66,26 @@ export async function fetchAndStoreFeed(
   },
   env: Env,
 ): Promise<FeedResult> {
+  // captureAsync wraps the full operation in a named span with timing and error
+  // capture. The span is emitted as a structured log entry visible in Logpush.
+  return tracer.captureAsync("fetchAndStoreFeed", async (span) => {
+    span.annotations.feedId = feed.id;
+    return fetchAndStoreFeedInner(feed, env, span);
+  });
+}
+
+async function fetchAndStoreFeedInner(
+  feed: Parameters<typeof fetchAndStoreFeed>[0],
+  env: Env,
+  span: import("@workers-powertools/tracer").SpanContext,
+): Promise<FeedResult> {
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
-  const metrics = createMetrics(env.READER_METRICS);
+  const metrics = createMetrics(env.METRICS_PIPELINE);
   const db = getDb(env.DB);
   const feedTitle = feed.title ?? feed.feedUrl;
+
+  // Tag span with feed metadata for filtering in observability tools
+  span.annotations.feedTitle = feedTitle;
 
   const start = performance.now();
 
@@ -134,6 +151,7 @@ export async function fetchAndStoreFeed(
     }
     const errorMessage = "HTTP 429 (rate limited)";
     logger.warn("feed rate limited", { backoffMinutes });
+    metrics.recordFetchError({ feedId: feed.id, httpStatus: 429 });
     await db
       .update(feeds)
       .set({
@@ -149,6 +167,7 @@ export async function fetchAndStoreFeed(
   if (!response.ok) {
     const errorMessage = `HTTP ${response.status}`;
     logger.warn("feed returned non-OK status", { status: response.status });
+    metrics.recordFetchError({ feedId: feed.id, httpStatus: response.status });
     await recordError(errorMessage);
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }

@@ -1,31 +1,36 @@
 import { Hono } from "hono";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, isNotNull, lt, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { queryWae } from "../lib/wae";
-import { feeds, subscriptions } from "../db/schema";
+import { feeds, subscriptions, cycleRuns, items, itemState } from "../db/schema";
 import { App } from "../views/app";
-import { CycleStat, MetricsTab, MetricsUnconfigured } from "../views/metrics";
+import {
+  type CycleRun,
+  type FeedHealthRow,
+  type ReadsByDay,
+  MetricsTab,
+  MetricsUnconfigured,
+} from "../views/metrics";
 
 type Variables = { userId: string; email: string };
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // GET /app/metrics — metrics dashboard
 // ---------------------------------------------------------------------------
 
 handler.get("/app/metrics", async (c) => {
+  const userId = c.get("userId");
   const email = c.get("email");
-  const logger = createLogger({ path: "/app/metrics", userId: c.get("userId") });
-
-  const accountId = (c.env as unknown as Record<string, string>).CF_ACCOUNT_ID;
-  const apiToken = (c.env as unknown as Record<string, string>).CF_API_TOKEN;
+  const logger = createLogger({ path: "/app/metrics", userId });
   const tz = (c.env as unknown as Record<string, string>).DISPLAY_TIMEZONE || "UTC";
+  const db = getDb(c.env.DB);
 
-  // Render a graceful placeholder if credentials aren't set
-  if (!accountId || !apiToken) {
-    logger.warn("WAE credentials not configured");
+  // Require D1 to be available — if not, nothing works
+  if (!c.env.DB) {
     return c.html(
       <App email={email} active="metrics">
         <MetricsUnconfigured />
@@ -34,189 +39,144 @@ handler.get("/app/metrics", async (c) => {
   }
 
   try {
-    const [parseResult, readResult, failureResult, cycleResult, cycleErrorResult] = await Promise.all([
-      // Parse stats per feed: successes, failures, avg duration, total articles
-      queryWae(
-        accountId,
-        apiToken,
-        `
-        SELECT
-          blob1                          AS feedId,
-          countIf(blob2 = 'success')     AS successes,
-          countIf(blob2 = 'failure')     AS failures,
-          avg(double1)                   AS avgDurationMs,
-          sum(double2)                   AS totalArticles
-        FROM "rss-reader-data"
-        WHERE index1 = 'parse'
-          AND timestamp > NOW() - INTERVAL '7' DAY
-        GROUP BY feedId
-        ORDER BY successes DESC
-        LIMIT 100
-        `,
-      ),
-      // Reads grouped by day, in the configured local timezone
-      queryWae(
-        accountId,
-        apiToken,
-        `
-        SELECT
-          toDate(toDateTime(timestamp, '${tz}'))  AS date,
-          count()                     AS reads
-        FROM "rss-reader-data"
-        WHERE index1 = 'read'
-          AND timestamp > NOW() - INTERVAL '7' DAY
-        GROUP BY date
-        ORDER BY date DESC
-        `,
-      ),
-      // Recent parse failures: feed, timestamp, error message
-      queryWae(
-        accountId,
-        apiToken,
-        `
-        SELECT
-          blob1      AS feedId,
-          blob3      AS error,
-          timestamp
-        FROM "rss-reader-data"
-        WHERE index1 = 'parse'
-          AND blob2 = 'failure'
-          AND timestamp > NOW() - INTERVAL '7' DAY
-        ORDER BY timestamp DESC
-        LIMIT 50
-        `,
-      ),
-      // Cycle stats: one row per cron run, last 7 days
-      queryWae(
-        accountId,
-        apiToken,
-        `
-        SELECT
-          avg(double1)  AS avgActiveFeeds,
-          avg(double2)  AS avgDueFeeds,
-          avg(double3)  AS avgCheckedFeeds,
-          avg(double4)  AS avgNewArticles,
-          avg(double5)  AS avgFailedFeeds,
-          count()       AS cycleCount
-        FROM "rss-reader-data"
-        WHERE index1 = 'cycle'
-          AND timestamp > NOW() - INTERVAL '7' DAY
-        `,
-      ),
-      // Cycle errors: count + most recent error message, last 7 days
-      queryWae(
-        accountId,
-        apiToken,
-        `
-        SELECT
-          count()  AS errorCount,
-          anyLast(blob1) AS lastError
-        FROM "rss-reader-data"
-        WHERE index1 = 'cycle_error'
-          AND timestamp > NOW() - INTERVAL '7' DAY
-        `,
-      ),
+    const cutoffMs = Date.now() - SEVEN_DAYS_MS;
+
+    const [
+      recentCycles,
+      intervalDistRows,
+      totalItemsRow,
+      newItemsRow,
+      feedHealthRows,
+      readsByDayRows,
+    ] = await db.batch([
+      // Last 20 polling cycles for the timeline (most recent first)
+      db
+        .select()
+        .from(cycleRuns)
+        .orderBy(desc(cycleRuns.ranAt))
+        .limit(20),
+
+      // Poll interval distribution across active subscribed feeds
+      db
+        .select({
+          checkIntervalMinutes: feeds.checkIntervalMinutes,
+          count: sql<number>`count(*)`,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(and(eq(subscriptions.userId, userId), isNull(feeds.deactivatedAt)))
+        .groupBy(feeds.checkIntervalMinutes)
+        .orderBy(asc(feeds.checkIntervalMinutes)),
+
+      // Total articles in the system
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(items),
+
+      // Articles fetched in the last 7 days
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(gt(items.fetchedAt, cutoffMs)),
+
+      // Feed health: all subscribed feeds with their error state
+      db
+        .select({
+          feedId: feeds.id,
+          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
+          consecutiveErrors: feeds.consecutiveErrors,
+          lastError: feeds.lastError,
+          lastFetchedAt: feeds.lastFetchedAt,
+          deactivatedAt: feeds.deactivatedAt,
+          checkIntervalMinutes: feeds.checkIntervalMinutes,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(eq(subscriptions.userId, userId))
+        .orderBy(desc(feeds.consecutiveErrors), asc(sql`coalesce(${subscriptions.title}, ${feeds.title})`)),
+
+      // Reads per day (last 7 days) from item_state.read_at
+      db
+        .select({
+          date: sql<string>`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`,
+          reads: sql<number>`count(*)`,
+        })
+        .from(itemState)
+        .where(
+          and(
+            eq(itemState.userId, userId),
+            eq(itemState.isRead, 1),
+            isNotNull(itemState.readAt),
+            gt(itemState.readAt, cutoffMs),
+          ),
+        )
+        .groupBy(sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`)
+        .orderBy(desc(sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`))
+        .limit(7),
     ]);
 
-    // D1 query — poll interval distribution across active subscribed feeds
-    const userId = c.get("userId");
-    const db = getDb(c.env.DB);
-
-    const intervalDistRows = await db
-      .select({
-        checkIntervalMinutes: feeds.checkIntervalMinutes,
-        count: sql<number>`count(*)`,
-      })
-      .from(subscriptions)
-      .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-      .where(and(eq(subscriptions.userId, userId), isNull(feeds.deactivatedAt)))
-      .groupBy(feeds.checkIntervalMinutes)
-      .orderBy(asc(feeds.checkIntervalMinutes));
+    const cycles: CycleRun[] = recentCycles.map((r) => ({
+      id: r.id,
+      ranAt: r.ranAt,
+      activeFeeds: r.activeFeeds,
+      dueFeeds: r.dueFeeds,
+      checkedFeeds: r.checkedFeeds,
+      newItems: r.newItems,
+      failedFeeds: r.failedFeeds,
+    }));
 
     const intervalDist = intervalDistRows.map((r) => ({
       minutes: r.checkIntervalMinutes,
-      count:   Number(r.count),
+      count: Number(r.count),
     }));
 
-    const rawParseStats = parseResult.data.map((r) => ({
-      feedId: String(r.feedId ?? ""),
-      successes: Number(r.successes ?? 0),
-      failures: Number(r.failures ?? 0),
-      avgDurationMs: Number(r.avgDurationMs ?? 0),
-      totalArticles: Number(r.totalArticles ?? 0),
+    const totalArticles = Number(totalItemsRow[0]?.count ?? 0);
+    const newArticles7d = Number(newItemsRow[0]?.count ?? 0);
+
+    const feedHealth: FeedHealthRow[] = feedHealthRows.map((r) => ({
+      feedId: r.feedId,
+      title: r.title,
+      consecutiveErrors: r.consecutiveErrors,
+      lastError: r.lastError ?? null,
+      lastFetchedAt: r.lastFetchedAt,
+      deactivatedAt: r.deactivatedAt ?? null,
+      checkIntervalMinutes: r.checkIntervalMinutes,
+      rateLimited: (r.lastError ?? "").includes("rate limited"),
     }));
 
-    // Look up feed titles from D1 for the feeds in the parse results
-    const feedIds = rawParseStats.map((r) => r.feedId).filter(Boolean);
-    const feedRows = feedIds.length
-      ? await db
-          .select({ id: feeds.id, title: feeds.title, feedUrl: feeds.feedUrl })
-          .from(feeds)
-          .where(inArray(feeds.id, feedIds))
-      : [];
-    const feedNameMap = new Map(
-      feedRows.map((f) => [f.id, f.title ?? f.feedUrl]),
-    );
-
-    const parseStats = rawParseStats.map((r) => ({
-      ...r,
-      feedName: feedNameMap.get(r.feedId) ?? r.feedId,
-    }));
-
-    const parseFailures = failureResult.data.map((r) => ({
-      feedId: String(r.feedId ?? ""),
-      feedName: feedNameMap.get(String(r.feedId ?? "")) ?? String(r.feedId ?? ""),
-      error: String(r.error ?? ""),
-      timestamp: new Date(String(r.timestamp ?? "")).getTime() || 0,
-    }));
-
-    const readsByDay = readResult.data.map((r) => ({
+    const readsByDay: ReadsByDay[] = readsByDayRows.map((r) => ({
       date: String(r.date ?? ""),
       reads: Number(r.reads ?? 0),
     }));
 
-    const totalReads7d = readsByDay.reduce((sum, r) => sum + r.reads, 0);
-    const totalParses7d = parseStats.reduce(
-      (sum, r) => sum + r.successes + r.failures,
-      0,
-    );
-    const totalFailures7d = parseStats.reduce((sum, r) => sum + r.failures, 0);
-
-    const cycleRow = cycleResult.data[0];
-    const cycleStat: CycleStat | null = cycleRow
-      ? {
-          cycleCount: Number(cycleRow.cycleCount ?? 0),
-          avgActiveFeeds: Number(cycleRow.avgActiveFeeds ?? 0),
-          avgDueFeeds: Number(cycleRow.avgDueFeeds ?? 0),
-          avgCheckedFeeds: Number(cycleRow.avgCheckedFeeds ?? 0),
-          avgNewArticles: Number(cycleRow.avgNewArticles ?? 0),
-          avgFailedFeeds: Number(cycleRow.avgFailedFeeds ?? 0),
-        }
-      : null;
-
-    const cycleErrorRow = cycleErrorResult.data[0];
-    const cycleErrors = {
-      count: Number(cycleErrorRow?.errorCount ?? 0),
-      lastError: String(cycleErrorRow?.lastError ?? ""),
-    };
-
-    logger.info("metrics loaded", { totalReads7d, totalParses7d, cycleStat, cycleErrors });
+    logger.info("metrics loaded", {
+      cycleCount: cycles.length,
+      totalArticles,
+      newArticles7d,
+      erroringFeeds: feedHealth.filter((f) => f.consecutiveErrors > 0).length,
+    });
 
     return c.html(
       <App email={email} active="metrics">
         <MetricsTab
-          data={{ parseStats, parseFailures, readsByDay, totalReads7d, totalParses7d, totalFailures7d, cycleStat, intervalDist, cycleErrors }}
+          data={{
+            cycles,
+            intervalDist,
+            totalArticles,
+            newArticles7d,
+            feedHealth,
+            readsByDay,
+            tz,
+          }}
         />
       </App>,
     );
   } catch (err) {
-    logger.error("WAE query failed", { err: String(err) });
+    logger.error("metrics query failed", err instanceof Error ? err : { err: String(err) });
     return c.html(
       <App email={email} active="metrics">
         <div class="rounded-lg border border-destructive bg-card px-6 py-10 text-center shadow-sm">
-          <p class="text-sm font-medium text-destructive">
-            Failed to load analytics data
-          </p>
+          <p class="text-sm font-medium text-destructive">Failed to load metrics</p>
           <p class="mt-1 text-sm text-muted-foreground">{String(err)}</p>
         </div>
       </App>,

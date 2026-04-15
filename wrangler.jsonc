@@ -3,17 +3,13 @@
   "name": "my-greader",
   "compatibility_date": "2025-08-03",
   "main": "./src/index.tsx",
-
   "compatibility_flags": ["nodejs_compat"],
-
   "observability": {
     "enabled": true
   },
-
   "assets": {
     "directory": "./public"
   },
-
   "d1_databases": [
     {
       "binding": "DB",
@@ -22,34 +18,31 @@
       "migrations_dir": "./drizzle"
     }
   ],
-
   "triggers": {
     "crons": [
       "*/30 * * * *", // feed fetcher
       "0 3 * * 1" // weekly article cleanup (Mondays 03:00 UTC)
     ]
   },
-
   "vars": {
     // Days to retain articles before the cleanup cron removes them
     "ITEM_RETENTION_DAYS": "30",
-    // Cloudflare account ID — used to query the Analytics Engine SQL API for the status dashboard
+    // Cloudflare account ID
     "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694",
     // IANA timezone for the metrics dashboard (e.g. "America/New_York"). Defaults to UTC if unset.
     "DISPLAY_TIMEZONE": "America/Chicago"
   },
-
   // Secrets — set via: wrangler secret put <NAME>
   // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
-  // CF_API_TOKEN   — Cloudflare API token with Analytics Engine Read permission (status dashboard)
-
-  "analytics_engine_datasets": [
+  // Metrics are written to a Cloudflare Pipeline → R2/Iceberg for long-term analytics.
+  // Create with: wrangler pipelines create rss_reader_metrics (see README step 4c)
+  // The dashboard queries D1 directly; Pipeline data is for external analytics tools.
+  "pipelines": [
     {
-      "binding": "READER_METRICS",
-      "dataset": "rss-reader-data"
+      "pipeline": "728cc513e9634a768660cbed8da112d1",
+      "binding": "METRICS_PIPELINE"
     }
   ],
-
   "workflows": [
     {
       "name": "feed-polling",
@@ -57,7 +50,6 @@
       "class_name": "FeedPollingWorkflow"
     }
   ],
-
   "routes": [
     {
       "custom_domain": true,
@@ -65,6 +57,11 @@
       "pattern": "reader.iamjkahn.com"
     }
   ],
-
-  "workers_dev": false
+  "workers_dev": false,
+  "r2_buckets": [
+    {
+      "bucket_name": "rss-reader-metrics-store",
+      "binding": "rss_reader_metrics_store"
+    }
+  ]
 }

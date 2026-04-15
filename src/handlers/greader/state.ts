@@ -3,7 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
-import { createMetrics } from "../../lib/metrics";
+import { createMetrics, type ReadEvent } from "../../lib/metrics";
 import { normalizeItemId } from "../../lib/crypto";
 import { feeds, itemState } from "../../db/schema";
 import { parseStreamId } from "./helpers";
@@ -27,7 +27,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     path: "/reader/api/0/edit-tag",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.READER_METRICS);
+  const metrics = createMetrics(c.env.METRICS_PIPELINE);
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
@@ -62,13 +62,17 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     return c.text("OK");
   }
 
+  // Stamp readAt when marking as read so the dashboard can show reads per day
+  const readAt = updates.isRead === 1 ? Date.now() : undefined;
+  const fullUpdates = { ...updates, ...(readAt !== undefined ? { readAt } : {}) };
+
   for (const itemId of itemIds) {
     await db
       .insert(itemState)
-      .values({ itemId, userId, isRead: 0, isStarred: 0, ...updates })
+      .values({ itemId, userId, isRead: 0, isStarred: 0, ...fullUpdates })
       .onConflictDoUpdate({
         target: [itemState.itemId, itemState.userId],
-        set: updates,
+        set: fullUpdates,
       });
 
     if (updates.isRead === 1) {

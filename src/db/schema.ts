@@ -51,7 +51,20 @@ export const itemState = sqliteTable('item_state', {
   userId:    text('user_id').notNull().references(() => users.id),
   isRead:    integer('is_read').default(0),
   isStarred: integer('is_starred').default(0),
+  readAt:    integer('read_at'), // epoch ms when last marked read; used for reads-per-day dashboard
 }, (t) => [primaryKey({ columns: [t.itemId, t.userId] })])
+
+// Per-cycle polling run summary — written by FeedPollingWorkflow for the dashboard.
+// Replaces the Analytics Engine cycle event for in-app querying.
+export const cycleRuns = sqliteTable('cycle_runs', {
+  id:           text('id').primaryKey(),         // epoch ms as string, unique per run
+  ranAt:        integer('ran_at').notNull(),      // epoch ms
+  activeFeeds:  integer('active_feeds').notNull().default(0),
+  dueFeeds:     integer('due_feeds').notNull().default(0),
+  checkedFeeds: integer('checked_feeds').notNull().default(0),
+  newItems:     integer('new_items').notNull().default(0),
+  failedFeeds:  integer('failed_feeds').notNull().default(0),
+})
 
 // API tokens used by GReader clients (e.g. Current).
 // Raw token is shown once at generation — only the SHA-256 hash is stored.

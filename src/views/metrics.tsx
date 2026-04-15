@@ -1,37 +1,37 @@
 // ---------------------------------------------------------------------------
-// Metrics tab — dashboard backed by Workers Analytics Engine
+// Metrics tab — dashboard backed by D1 (cycle_runs, feeds, item_state)
 // ---------------------------------------------------------------------------
 
-import { shortUtc } from "../lib/dates";
+import { relativeTime, shortUtc } from "../lib/dates";
 
-interface ParseStat {
-  feedId: string;
-  feedName: string;
-  successes: number;
-  failures: number;
-  avgDurationMs: number;
-  totalArticles: number;
+// ---------------------------------------------------------------------------
+// Shared types (exported so the handler can construct typed data objects)
+// ---------------------------------------------------------------------------
+
+export interface CycleRun {
+  id: string;
+  ranAt: number;
+  activeFeeds: number;
+  dueFeeds: number;
+  checkedFeeds: number;
+  newItems: number;
+  failedFeeds: number;
 }
 
-interface ReadStat {
+export interface FeedHealthRow {
+  feedId: string;
+  title: string;
+  consecutiveErrors: number;
+  lastError: string | null;
+  lastFetchedAt: number | null;
+  deactivatedAt: number | null;
+  checkIntervalMinutes: number;
+  rateLimited: boolean;
+}
+
+export interface ReadsByDay {
   date: string;
   reads: number;
-}
-
-export interface ParseFailure {
-  feedId: string;
-  feedName: string;
-  error: string;
-  timestamp: number;
-}
-
-export interface CycleStat {
-  cycleCount: number;
-  avgActiveFeeds: number;
-  avgDueFeeds: number;
-  avgCheckedFeeds: number;
-  avgNewArticles: number;
-  avgFailedFeeds: number;
 }
 
 interface IntervalDistRow {
@@ -39,41 +39,24 @@ interface IntervalDistRow {
   count: number;
 }
 
-interface CycleErrors {
-  count: number;
-  lastError: string;
-}
-
 interface StatusData {
-  parseStats: ParseStat[];
-  parseFailures: ParseFailure[];
-  readsByDay: ReadStat[];
-  totalReads7d: number;
-  totalParses7d: number;
-  totalFailures7d: number;
-  cycleStat: CycleStat | null;
+  cycles: CycleRun[];
   intervalDist: IntervalDistRow[];
-  cycleErrors: CycleErrors;
+  totalArticles: number;
+  newArticles7d: number;
+  feedHealth: FeedHealthRow[];
+  readsByDay: ReadsByDay[];
+  tz: string;
 }
 
 // ---------------------------------------------------------------------------
 // Stat card — single KPI tile
 // ---------------------------------------------------------------------------
 
-function StatCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-}) {
+function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div class="rounded-lg border border-border bg-card px-6 py-5 shadow-sm">
-      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
+      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
       <p class="mt-1 text-3xl font-semibold text-foreground">{value}</p>
       {sub && <p class="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
     </div>
@@ -81,178 +64,120 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Parse stats table
+// Cycle timeline — per-run bar chart of new articles
 // ---------------------------------------------------------------------------
 
-function ParseStatsCard({ rows }: { rows: ParseStat[] }) {
+function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
+  if (cycles.length === 0) {
+    return (
+      <div class="rounded-lg border border-border bg-card shadow-sm">
+        <div class="border-b border-border px-6 py-4">
+          <h2 class="text-base font-semibold text-foreground">Polling cycles</h2>
+        </div>
+        <p class="px-6 py-6 text-center text-sm text-muted-foreground">
+          No cycle data yet — appears after the first Workflow run.
+        </p>
+      </div>
+    );
+  }
+
+  // Show most-recent-first; compute aggregate stats over visible window
+  const recent = cycles.slice(0, 20);
+  const maxNew = Math.max(...recent.map((c) => c.newItems), 1);
+  const totalNew7d = recent.reduce((s, c) => s + c.newItems, 0);
+  const avgNew = (totalNew7d / recent.length).toFixed(1);
+  const anyFailed = recent.some((c) => c.failedFeeds > 0);
+
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
-      <div class="border-b border-border px-6 py-4">
-        <h2 class="text-base font-semibold text-foreground">
-          Feed parse activity{" "}
-          <span class="text-muted-foreground font-normal text-sm">
-            (last 7 days)
-          </span>
-        </h2>
-      </div>
-      <div class="px-6 py-2">
-        {rows.length === 0 ? (
-          <p class="py-6 text-center text-sm text-muted-foreground">
-            No parse data yet.
+      <div class="border-b border-border px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 class="text-base font-semibold text-foreground">
+            Polling cycles{" "}
+            <span class="text-muted-foreground font-normal text-sm">
+              (last {recent.length})
+            </span>
+          </h2>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            {totalNew7d} new articles · avg {avgNew}/cycle
+            {anyFailed && (
+              <span class="ml-2 text-destructive font-medium">
+                · some cycles had feed errors
+              </span>
+            )}
           </p>
-        ) : (
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border">
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                  Feed
-                </th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Successes
-                </th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Failures
-                </th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Avg parse duration
-                </th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Articles
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr class="border-b border-border last:border-0">
-                  <td
-                    class="py-3 pr-4 text-sm text-foreground truncate max-w-50"
-                    title={r.feedId}
-                  >
-                    {r.feedName}
-                  </td>
-                  <td class="py-3 pr-4 text-right text-foreground">
-                    {r.successes}
-                  </td>
-                  <td class="py-3 pr-4 text-right">
-                    <span
-                      class={
-                        r.failures > 0
-                          ? "text-destructive font-medium"
-                          : "text-muted-foreground"
-                      }
-                    >
-                      {r.failures}
-                    </span>
-                  </td>
-                  <td class="py-3 pr-4 text-right text-muted-foreground">
-                    {Math.round(r.avgDurationMs)}ms
-                  </td>
-                  <td class="py-3 text-right text-muted-foreground">
-                    {r.totalArticles}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        </div>
+        <div class="grid grid-cols-3 gap-4 text-center shrink-0">
+          {[
+            { label: "Active feeds", value: recent[0]?.activeFeeds ?? 0 },
+            { label: "Avg due/cycle", value: (recent.reduce((s, c) => s + c.dueFeeds, 0) / recent.length).toFixed(1) },
+            { label: "Avg failed/cycle", value: (recent.reduce((s, c) => s + c.failedFeeds, 0) / recent.length).toFixed(1) },
+          ].map(({ label, value }) => (
+            <div>
+              <p class="text-xs text-muted-foreground uppercase tracking-wide">{label}</p>
+              <p class="mt-0.5 text-lg font-semibold text-foreground">{value}</p>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Reads by day table
-// ---------------------------------------------------------------------------
-
-function ReadsByDayCard({ rows }: { rows: ReadStat[] }) {
-  return (
-    <div class="rounded-lg border border-border bg-card shadow-sm">
-      <div class="border-b border-border px-6 py-4">
-        <h2 class="text-base font-semibold text-foreground">
-          Reads by day{" "}
-          <span class="text-muted-foreground font-normal text-sm">
-            (last 7 days)
-          </span>
-        </h2>
+      {/* Bar chart — one bar per cycle, newest on the right */}
+      <div class="px-6 py-4">
+        <div class="flex items-end gap-0.5 h-24 w-full">
+          {[...recent].reverse().map((c) => {
+            const pct = maxNew > 0 ? Math.max((c.newItems / maxNew) * 100, 2) : 2;
+            const barColor = c.failedFeeds > 0
+              ? "bg-destructive/60"
+              : c.newItems > 0
+                ? "bg-primary"
+                : "bg-muted-foreground/30";
+            return (
+              <div
+                class="flex-1 min-w-0 rounded-t cursor-default"
+                style={`height:${pct}%`}
+                title={`${shortUtc(c.ranAt)}: ${c.newItems} new, ${c.checkedFeeds} checked${c.failedFeeds > 0 ? `, ${c.failedFeeds} failed` : ""}`}
+              >
+                <div class={`h-full w-full rounded-t ${barColor}`} />
+              </div>
+            );
+          })}
+        </div>
+        <div class="flex justify-between mt-1 text-xs text-muted-foreground">
+          <span>{shortUtc([...recent].reverse()[0]?.ranAt)}</span>
+          <span>newest →</span>
+        </div>
       </div>
-      <div class="px-6 py-2">
-        {rows.length === 0 ? (
-          <p class="py-6 text-center text-sm text-muted-foreground">
-            No read data yet.
-          </p>
-        ) : (
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border">
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                  Date
-                </th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                  Articles read
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr class="border-b border-border last:border-0">
-                  <td class="py-3 pr-4 text-foreground">{r.date}</td>
-                  <td class="py-3 text-right text-foreground">{r.reads}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Parse failures card
-// ---------------------------------------------------------------------------
-
-function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
-  if (rows.length === 0) return null;
-  return (
-    <div class="rounded-lg border border-destructive/40 bg-card shadow-sm">
-      <div class="border-b border-destructive/40 px-6 py-4">
-        <h2 class="text-base font-semibold text-foreground">
-          Parse failures{" "}
-          <span class="text-muted-foreground font-normal text-sm">
-            (last 7 days, most recent first)
-          </span>
-        </h2>
-      </div>
-      <div class="px-6 py-2">
+      {/* Last 5 cycle rows */}
+      <div class="border-t border-border">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Feed
-              </th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                When
-              </th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Error
-              </th>
+              <th class="px-6 pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">When</th>
+              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Checked</th>
+              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">New</th>
+              <th class="px-6 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Failed</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {recent.slice(0, 5).map((c) => (
               <tr class="border-b border-border last:border-0">
-                <td
-                  class="py-3 pr-4 text-foreground truncate max-w-40"
-                  title={r.feedId}
-                >
-                  {r.feedName}
+                <td class="px-6 py-2 text-muted-foreground whitespace-nowrap">
+                  {relativeTime(c.ranAt)}
                 </td>
-                <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-                  {shortUtc(r.timestamp)}
+                <td class="px-4 py-2 text-right text-foreground">{c.checkedFeeds}</td>
+                <td class="px-4 py-2 text-right text-foreground font-medium">
+                  {c.newItems > 0 ? (
+                    <span class="text-primary">+{c.newItems}</span>
+                  ) : (
+                    <span class="text-muted-foreground">0</span>
+                  )}
                 </td>
-                <td class="py-3 font-mono text-xs text-destructive break-all">
-                  {r.error || (
-                    <span class="italic text-muted-foreground">no message</span>
+                <td class="px-6 py-2 text-right">
+                  {c.failedFeeds > 0 ? (
+                    <span class="text-destructive font-medium">{c.failedFeeds}</span>
+                  ) : (
+                    <span class="text-muted-foreground">—</span>
                   )}
                 </td>
               </tr>
@@ -265,85 +190,114 @@ function ParseFailuresCard({ rows }: { rows: ParseFailure[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Cycle health card — adaptive polling summary
+// Feed health — error/rate-limited state from D1
 // ---------------------------------------------------------------------------
 
-function CycleHealthCard({ stat, errors }: { stat: CycleStat | null; errors: CycleErrors }) {
-  if (!stat || stat.cycleCount === 0) {
-    return (
-      <div class={`rounded-lg border bg-card shadow-sm ${errors.count > 0 ? "border-destructive/60" : "border-border"}`}>
-        <div class="border-b border-border px-6 py-4 flex items-center justify-between gap-4">
-          <h2 class="text-base font-semibold text-foreground">
-            Cycle health{" "}
-            <span class="text-muted-foreground font-normal text-sm">
-              (last 7 days)
-            </span>
-          </h2>
-          {errors.count > 0 && (
-            <span class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
-              {errors.count} workflow error{errors.count !== 1 ? "s" : ""}
-            </span>
-          )}
-        </div>
-        <p class="px-6 py-6 text-center text-sm text-muted-foreground">
-          {errors.count > 0
-            ? `Workflow is failing — ${errors.lastError || "check logs for details"}`
-            : "No cycle data yet — runs after the first Workflow execution."}
-        </p>
-        {errors.lastError && (
-          <div class="border-t border-destructive/20 px-6 py-3">
-            <p class="text-xs text-destructive font-mono truncate" title={errors.lastError}>
-              Last error: {errors.lastError}
-            </p>
-          </div>
-        )}
-      </div>
-    );
-  }
+function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
+  const erroring = rows.filter((r) => r.consecutiveErrors > 0 && !r.deactivatedAt);
+  const deactivated = rows.filter((r) => !!r.deactivatedAt);
+  const rateLimited = rows.filter((r) => r.rateLimited && !r.deactivatedAt);
 
-  const fmt = (n: number) => n.toFixed(1);
+  if (erroring.length === 0 && deactivated.length === 0) return null;
 
   return (
-    <div class={`rounded-lg border bg-card shadow-sm ${errors.count > 0 ? "border-destructive/60" : "border-border"}`}>
-      <div class="border-b border-border px-6 py-4 flex items-center justify-between gap-4">
-        <h2 class="text-base font-semibold text-foreground">
-          Cycle health{" "}
-          <span class="text-muted-foreground font-normal text-sm">
-            (last 7 days · {stat.cycleCount} cycles)
+    <div class="rounded-lg border border-destructive/40 bg-card shadow-sm">
+      <div class="border-b border-destructive/40 px-6 py-4 flex items-center gap-3 flex-wrap">
+        <h2 class="text-base font-semibold text-foreground">Feed health</h2>
+        {erroring.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2.5 py-1 text-xs font-medium text-yellow-700">
+            {erroring.length} erroring
           </span>
-        </h2>
-        {errors.count > 0 && (
-          <span
-            class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive"
-            title={errors.lastError || undefined}
-          >
-            {errors.count} workflow error{errors.count !== 1 ? "s" : ""}
+        )}
+        {rateLimited.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2.5 py-1 text-xs font-medium text-orange-700">
+            {rateLimited.length} rate limited
+          </span>
+        )}
+        {deactivated.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+            {deactivated.length} deactivated
           </span>
         )}
       </div>
-      <div class="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
-        {[
-          { label: "Avg active feeds", value: fmt(stat.avgActiveFeeds) },
-          { label: "Avg due/cycle", value: fmt(stat.avgDueFeeds) },
-          { label: "Avg checked/cycle", value: fmt(stat.avgCheckedFeeds) },
-          { label: "Avg new articles/cycle", value: fmt(stat.avgNewArticles) },
-          { label: "Avg failed/cycle", value: fmt(stat.avgFailedFeeds) },
-        ].map(({ label, value }) => (
-          <div class="bg-card px-6 py-4">
-            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {label}
-            </p>
-            <p class="mt-1 text-2xl font-semibold text-foreground">{value}</p>
-          </div>
-        ))}
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Status</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last error</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last fetched</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...erroring, ...deactivated].map((r) => (
+              <tr class="border-b border-border last:border-0">
+                <td class="py-3 pr-4 font-medium text-foreground truncate max-w-48" title={r.feedId}>
+                  {r.title}
+                </td>
+                <td class="py-3 pr-4 whitespace-nowrap">
+                  {r.deactivatedAt ? (
+                    <span class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                      Deactivated
+                    </span>
+                  ) : r.rateLimited ? (
+                    <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700">
+                      Rate limited
+                    </span>
+                  ) : (
+                    <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-700">
+                      {r.consecutiveErrors} error{r.consecutiveErrors !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </td>
+                <td class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64" title={r.lastError ?? undefined}>
+                  {r.lastError ?? "—"}
+                </td>
+                <td class="py-3 text-right text-muted-foreground whitespace-nowrap">
+                  {relativeTime(r.lastFetchedAt)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      {errors.lastError && (
-        <div class="border-t border-destructive/20 px-6 py-3">
-          <p class="text-xs text-destructive font-mono truncate" title={errors.lastError}>
-            Last error: {errors.lastError}
-          </p>
-        </div>
-      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reads by day — from item_state.read_at
+// ---------------------------------------------------------------------------
+
+function ReadsByDayCard({ rows }: { rows: ReadsByDay[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Reads by day{" "}
+          <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+        </h2>
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Date</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Articles read</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr class="border-b border-border last:border-0">
+                <td class="py-3 pr-4 text-foreground">{r.date}</td>
+                <td class="py-3 text-right text-foreground font-medium">{r.reads}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -368,35 +322,27 @@ function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Poll interval distribution{" "}
-          <span class="text-muted-foreground font-normal text-sm">
-            (active feeds)
-          </span>
+          <span class="text-muted-foreground font-normal text-sm">(active feeds)</span>
         </h2>
       </div>
       <div class="px-6 py-4 space-y-3">
         {rows.map((r) => {
           const pct = total > 0 ? Math.round((r.count / total) * 100) : 0;
-          const barClass =
-            r.minutes <= 30
-              ? "bg-green-500"
-              : r.minutes <= 120
-                ? "bg-yellow-400"
-                : "bg-orange-400";
+          const barClass = r.minutes <= 30
+            ? "bg-green-500"
+            : r.minutes <= 120
+              ? "bg-yellow-400"
+              : "bg-orange-400";
           return (
             <div>
               <div class="flex justify-between text-xs mb-1">
-                <span class="text-foreground font-medium">
-                  {intervalLabel(r.minutes)}
-                </span>
+                <span class="text-foreground font-medium">{intervalLabel(r.minutes)}</span>
                 <span class="text-muted-foreground">
                   {r.count} feed{r.count !== 1 ? "s" : ""} · {pct}%
                 </span>
               </div>
               <div class="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div
-                  class={`h-full rounded-full ${barClass}`}
-                  style={`width:${pct}%`}
-                />
+                <div class={`h-full rounded-full ${barClass}`} style={`width:${pct}%`} />
               </div>
             </div>
           );
@@ -407,57 +353,54 @@ function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Unconfigured state — shown when CF_ACCOUNT_ID / CF_API_TOKEN are missing
+// Unconfigured placeholder
 // ---------------------------------------------------------------------------
 
 export function MetricsUnconfigured() {
   return (
     <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
-      <p class="text-sm font-medium text-foreground">
-        Analytics not configured
-      </p>
+      <p class="text-sm font-medium text-foreground">Metrics unavailable</p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Set{" "}
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-          CF_ACCOUNT_ID
-        </code>{" "}
-        and{" "}
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-          CF_API_TOKEN
-        </code>{" "}
-        to enable this dashboard.
+        Could not connect to the database.
       </p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Full Status tab
+// Full Metrics tab
 // ---------------------------------------------------------------------------
 
 export function MetricsTab({ data }: { data: StatusData }) {
+  const totalReads7d = data.readsByDay.reduce((s, r) => s + r.reads, 0);
+  const lastCycle = data.cycles[0];
+
   return (
     <div class="space-y-8">
       {/* KPI row */}
-      <div class="grid grid-cols-3 gap-4">
-        <StatCard label="Reads (7d)" value={data.totalReads7d} />
-        <StatCard label="Parses (7d)" value={data.totalParses7d} />
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <StatCard label="Total articles" value={data.totalArticles.toLocaleString()} />
         <StatCard
-          label="Parse failures (7d)"
-          value={data.totalFailures7d}
-          sub={
-            data.totalParses7d > 0
-              ? `${Math.round((data.totalFailures7d / data.totalParses7d) * 100)}% failure rate`
-              : undefined
-          }
+          label="New this week"
+          value={data.newArticles7d}
+          sub="articles fetched in last 7 days"
+        />
+        <StatCard
+          label="Reads (7d)"
+          value={totalReads7d}
+          sub={totalReads7d === 0 ? "reads tracked after this update" : undefined}
+        />
+        <StatCard
+          label="Last cycle"
+          value={lastCycle ? `+${lastCycle.newItems}` : "—"}
+          sub={lastCycle ? relativeTime(lastCycle.ranAt) ?? undefined : "no cycles yet"}
         />
       </div>
 
-      <CycleHealthCard stat={data.cycleStat} errors={data.cycleErrors} />
+      <CycleTimelineCard cycles={data.cycles} />
+      <FeedHealthCard rows={data.feedHealth} />
       <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
-      <ParseStatsCard rows={data.parseStats} />
-      <ParseFailuresCard rows={data.parseFailures} />
     </div>
   );
 }

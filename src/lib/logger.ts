@@ -1,32 +1,38 @@
-// Structured JSON logger for Cloudflare Workers.
-// Outputs newline-delimited JSON — compatible with Cloudflare Logpush.
-// Always use logger.child() to attach request context before passing to handlers.
+// Structured logger for Cloudflare Workers.
+// Backed by @workers-powertools/logger — adds CF request enrichment, correlation
+// IDs, and log buffering (sub-INFO logs held until an error triggers a flush).
+//
+// Usage:
+//   import { createLogger } from "../lib/logger";
+//   const log = createLogger({ path: "/foo", userId });
+//   log.info("something happened", { extra: "context" });
+//
+// The module-level `logger` instance is enriched per-request by the
+// observability middleware (logger.addContext). All child loggers created
+// via createLogger() snapshot the parent's persistent keys and include the
+// current correlation ID from the tracer automatically.
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error'
-type LogContext = Record<string, unknown>
+import { Logger } from "@workers-powertools/logger";
+import { tracer } from "./tracer";
 
-export interface Logger {
-  debug(msg: string, ctx?: LogContext): void
-  info(msg: string, ctx?: LogContext): void
-  warn(msg: string, ctx?: LogContext): void
-  error(msg: string, ctx?: LogContext): void
-  /** Returns a new logger with additional context fields merged in */
-  child(ctx: LogContext): Logger
+// Module-level singleton — enriched with request context by observability middleware
+export const logger = new Logger({
+  serviceName: "my-greader",
+  // Buffer logs below INFO; flush everything if an error or critical is emitted.
+  // This is especially valuable in Workflow steps where the full log trail up
+  // to a failure is otherwise invisible.
+  logBufferingEnabled: true,
+});
+
+/**
+ * Returns a child logger pre-tagged with the given context fields plus the
+ * current correlation ID from the tracer (if one is active for this request).
+ *
+ * Drop-in replacement for all createLogger(ctx) call sites.
+ */
+export function createLogger(ctx: Record<string, unknown> = {}): Logger {
+  const correlationId = tracer.getCorrelationId();
+  return logger.child(correlationId ? { correlationId, ...ctx } : ctx);
 }
 
-function emit(level: LogLevel, msg: string, context: LogContext): void {
-  const entry = JSON.stringify({ level, msg, t: Date.now(), ...context })
-  if (level === 'error') console.error(entry)
-  else if (level === 'warn') console.warn(entry)
-  else console.log(entry)
-}
-
-export function createLogger(baseCtx: LogContext = {}): Logger {
-  return {
-    debug: (msg, ctx) => emit('debug', msg, { ...baseCtx, ...ctx }),
-    info:  (msg, ctx) => emit('info',  msg, { ...baseCtx, ...ctx }),
-    warn:  (msg, ctx) => emit('warn',  msg, { ...baseCtx, ...ctx }),
-    error: (msg, ctx) => emit('error', msg, { ...baseCtx, ...ctx }),
-    child: (ctx) => createLogger({ ...baseCtx, ...ctx }),
-  }
-}
+export type { Logger };

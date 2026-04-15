@@ -1,9 +1,9 @@
 import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
-import { createLogger } from "../lib/logger";
+import { logger } from "../lib/logger";
 import { createMetrics } from "../lib/metrics";
-import { feeds, subscriptions } from "../db/schema";
+import { feeds, subscriptions, cycleRuns } from "../db/schema";
 import { fetchAndStoreFeed, FeedResult } from "../handlers/cron";
 
 // No per-run parameters needed — the Workflow always fetches all due feeds
@@ -33,32 +33,17 @@ const FEEDS_PER_STEP = 20;
 // it (the stub inherits it from `StubBase`). So TypeScript won't let you write
 // `using d1 = this.env.DB` without an explicit cast.
 //
-// The previous approach was a bare cast: `binding as T & Disposable`. This
-// tells TypeScript "trust me, it's disposable" but adds nothing at runtime. If
-// the Cloudflare runtime ever ships a version where the stub doesn't have
-// `[Symbol.dispose]` — or if it's called in a context where bindings are plain
-// objects — `using` will throw "Object not disposable" at runtime, which is
-// exactly what broke polling today.
-//
 // This safe version:
 //   1. Checks at runtime whether [Symbol.dispose] is already present.
 //   2. If yes — returns the binding as-is. Disposal will work normally.
-//   3. If no  — wraps the binding via Object.create() (prototype chain, not a
-//      copy) so all original methods stay accessible, then adds a no-op
-//      [Symbol.dispose]. The `using` statement will call the no-op on exit,
-//      which is harmless. The binding may not be "properly" disposed, but the
-//      step won't crash.
+//   3. If no  — adds a no-op [Symbol.dispose] directly onto the binding object
+//      so `using` won't crash. The binding may not be "properly" disposed, but
+//      the step won't crash.
 // ---------------------------------------------------------------------------
 function asDisposable<T extends object>(binding: T): T & Disposable {
   if (typeof (binding as unknown as Disposable)[Symbol.dispose] === "function") {
-    // Binding already implements Disposable — safe to use directly
     return binding as T & Disposable;
   }
-  // Runtime doesn't expose [Symbol.dispose] on this binding. Add a no-op
-  // directly onto the binding object (mutation) so that `this` is always the
-  // original binding when any of its methods are called. Using Object.create()
-  // instead would put methods on a prototype-wrapped copy, causing the runtime
-  // to reject calls with "Illegal invocation: incorrect `this` reference".
   (binding as T & Disposable)[Symbol.dispose] = () => {};
   return binding as T & Disposable;
 }
@@ -88,28 +73,30 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 //   - Step-level failures (e.g. D1 outage, binding error) will be retried by
 //     the Workflow runtime before propagating.
 //   - run() wraps everything in a try/catch that logs the full error message
-//     and emits a WAE cycle_error event so failures are visible on the
-//     metrics dashboard without digging through raw logs.
+//     and emits a cycle_error metric so failures are visible in the dashboard.
 // ---------------------------------------------------------------------------
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
-    const logger = createLogger({ workflow: "FeedPollingWorkflow", instanceId: event.instanceId });
+    // withRpcContext enriches all log entries for this Workflow run with the
+    // agent name and instance ID (no Request object is available in Workflows).
+    using _ctx = logger.withRpcContext({
+      agent: "FeedPollingWorkflow",
+      instanceId: event.instanceId,
+    });
 
     try {
-      await this.#poll(step, logger);
+      await this.#poll(step);
     } catch (err) {
-      // Log the full error including stack so it appears in structured logs
-      // (without this, Cloudflare only records "run" as the error message).
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
+      // logger.error flushes the buffer — all buffered DEBUG/INFO logs emitted
+      // before this point are now visible in structured logs alongside the error.
       logger.error("feed polling workflow failed", { error: errorMessage, stack });
 
-      // Best-effort: emit a WAE cycle_error event so the metrics dashboard
-      // shows a failure count and last error message without manual log review.
       try {
-        using metricsDataset = asDisposable(this.env.READER_METRICS);
-        createMetrics(metricsDataset).recordCycleError({ error: errorMessage });
+        using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+        createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]).recordCycleError({ error: errorMessage });
       } catch {
         // Don't mask the original error if metrics emission itself fails
       }
@@ -118,10 +105,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(
-    step: WorkflowStep,
-    logger: ReturnType<typeof createLogger>,
-  ): Promise<void> {
+  async #poll(step: WorkflowStep): Promise<void> {
 
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
@@ -208,11 +192,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
         try {
           using d1 = asDisposable(this.env.DB);
-          using metricsDataset = asDisposable(this.env.READER_METRICS);
-          const stepEnv = { DB: d1, READER_METRICS: metricsDataset } as unknown as Env;
+          using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+          const stepEnv = { DB: d1, METRICS_PIPELINE: metricsPipeline } as unknown as Env;
 
-          // Fetch all feeds in the batch concurrently. allSettled ensures one
-          // feed's network failure doesn't abort the rest of the batch.
           const settled = await Promise.allSettled(
             batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
           );
@@ -246,7 +228,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
 
     // ------------------------------------------------------------------
-    // Final step — emit cycle analytics event
+    // Final step — write cycle summary to D1 + emit Pipeline metrics
     // ------------------------------------------------------------------
 
     const newArticles = allResults.reduce((sum, r) => sum + (r.status === "ok" ? r.newItems : 0), 0);
@@ -260,8 +242,25 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
     await step.do("record-cycle", async () => {
       try {
-        using metricsDataset = asDisposable(this.env.READER_METRICS);
-        const metrics = createMetrics(metricsDataset);
+        using d1 = asDisposable(this.env.DB);
+        using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+        const db = getDb(d1);
+        const metrics = createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]);
+        const now = Date.now();
+
+        // Write per-cycle row to D1 so the metrics dashboard can query it
+        // without depending on Analytics Engine or an external API.
+        await db.insert(cycleRuns).values({
+          id: String(now),
+          ranAt: now,
+          activeFeeds: totalActiveFeeds,
+          dueFeeds: dueFeeds.length,
+          checkedFeeds: allResults.length,
+          newItems: newArticles,
+          failedFeeds,
+        }).onConflictDoNothing(); // guard against duplicate step execution
+
+        // Pipeline write for long-term analytics
         metrics.recordCycle({
           totalActiveFeeds,
           dueFeeds: dueFeeds.length,
@@ -277,7 +276,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         throw err;
       }
 
-      // Return value is displayed as step output in the Workflow console
       return {
         totalActiveFeeds,
         dueFeeds: dueFeeds.length,

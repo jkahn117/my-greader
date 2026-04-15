@@ -1,8 +1,23 @@
-// Metrics for Cloudflare Workers Analytics Engine.
-// Free plan limit: 1 index per data point.
-// Schema: index1 = event type (discriminator); dimensions go in blobs.
+// Business metrics for Cloudflare Workers.
+// Backed by @workers-powertools/metrics + PipelinesBackend — writes named-field
+// JSON records to a Cloudflare Pipeline (→ R2/Iceberg) for long-term analytics.
+//
+// Usage:
+//   const metrics = createMetrics(env.METRICS_PIPELINE);
+//   metrics.recordParse({ feedId, status: ParseStatus.SUCCESS, durationMs });
+//
+// createMetrics() is a per-call factory so concurrent Workflow steps each
+// get their own isolated instance — avoids dimension bleeding between feeds.
+//
+// The dashboard does NOT query Pipeline data (it's in R2/Iceberg). Cycle
+// history and feed health are queried directly from D1 instead.
 
-import { createLogger } from "./logger";
+import { MetricUnit, PipelinesBackend, type MetricContext, type MetricEntry, type PipelineBinding } from "@workers-powertools/metrics";
+
+export enum ParseStatus {
+  SUCCESS = "success",
+  FAILURE = "failure",
+}
 
 export interface ParseEvent {
   feedId: string;
@@ -36,96 +51,111 @@ export interface CycleErrorEvent {
   error: string;
 }
 
-export enum ParseStatus {
-  SUCCESS = "success",
-  FAILURE = "failure",
+export interface FetchErrorEvent {
+  feedId: string;
+  httpStatus: number;
 }
 
-// index1:  "parse"
-// blob1:   feedId
-// blob2:   status ("success" | "failure")
-// blob3:   error message (failure only)
-// double1: durationMs
-// double2: articleCount
-function parseEventToDataPoint(binding: AnalyticsEngineDataset, e: ParseEvent) {
-  binding.writeDataPoint({
-    indexes: ["parse"],
-    blobs: [e.feedId, e.status, e.error ?? ""],
-    doubles: [e.durationMs, e.articleCount ?? 0],
-  });
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+const METRIC_CONTEXT: MetricContext = {
+  namespace: "rss-reader",
+  serviceName: "my-greader",
+};
+
+// Explicit return type avoids the circular inference error
+interface MetricsApi {
+  recordParse(e: ParseEvent): void;
+  recordRead(e: ReadEvent): void;
+  recordSubscription(e: SubscriptionEvent): void;
+  recordCycle(e: CycleEvent): void;
+  recordCycleError(e: CycleErrorEvent): void;
+  recordFetchError(e: FetchErrorEvent): void;
 }
 
-// index1: "read"
-// blob1:  userId
-// blob2:  articleId
-function readEventToDataPoint(binding: AnalyticsEngineDataset, e: ReadEvent) {
-  binding.writeDataPoint({
-    indexes: ["read"],
-    blobs: [e.userId, e.articleId],
-  });
-}
+export function createMetrics(pipelineBinding: PipelineBinding | undefined): MetricsApi {
+  if (!pipelineBinding) {
+    // No Pipeline binding in dev — all methods are no-ops
+    return noopMetrics;
+  }
 
-// index1: "subscription"
-// blob1:  userId
-// blob2:  feedId
-// blob3:  action ("subscribe" | "unsubscribe" | "edit")
-// blob4:  folder (empty string if none)
-function subscriptionEventToDataPoint(
-  binding: AnalyticsEngineDataset,
-  e: SubscriptionEvent,
-) {
-  binding.writeDataPoint({
-    indexes: ["subscription"],
-    blobs: [e.userId, e.feedId, e.action, e.folder ?? ""],
-  });
-}
+  const backend = new PipelinesBackend({ binding: pipelineBinding });
 
-// index1:   "cycle"
-// double1:  totalActiveFeeds
-// double2:  dueFeeds
-// double3:  checkedFeeds
-// double4:  newArticles
-// double5:  failedFeeds
-function cycleEventToDataPoint(binding: AnalyticsEngineDataset, e: CycleEvent) {
-  binding.writeDataPoint({
-    indexes: ["cycle"],
-    doubles: [e.totalActiveFeeds, e.dueFeeds, e.checkedFeeds, e.newArticles, e.failedFeeds],
-  });
-}
-
-// index1: "cycle_error"
-// blob1:  error message (truncated to 256 chars)
-function cycleErrorEventToDataPoint(binding: AnalyticsEngineDataset, e: CycleErrorEvent) {
-  binding.writeDataPoint({
-    indexes: ["cycle_error"],
-    blobs: [e.error.slice(0, 256)],
-  });
-}
-
-export function createMetrics(binding: AnalyticsEngineDataset | undefined) {
-  const logger = createLogger({ lib: "metrics" });
-  if (!binding) logger.debug("No analytics binding, metrics are a no-op");
+  // Emit a single named metric record via the Pipeline (fire-and-forget)
+  function emit(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
+    const entry: MetricEntry = {
+      name,
+      unit,
+      value,
+      dimensions: { service: "my-greader", ...dims },
+      timestamp: Date.now(),
+    };
+    // writeSync is fire-and-forget — no blocking, no await needed
+    backend.writeSync([entry], METRIC_CONTEXT);
+  }
 
   return {
     recordParse(e: ParseEvent) {
-      if (!binding) return;
-      parseEventToDataPoint(binding, e);
+      emit("feed_parse_duration_ms", MetricUnit.Milliseconds, e.durationMs, {
+        feedId: e.feedId,
+        status: e.status,
+      });
+      if (e.articleCount) {
+        emit("feed_new_articles", MetricUnit.Count, e.articleCount, {
+          feedId: e.feedId,
+        });
+      }
+      if (e.error) {
+        // Truncate error message to keep Pipeline record size bounded
+        emit("feed_parse_failure", MetricUnit.Count, 1, {
+          feedId: e.feedId,
+          error: e.error.slice(0, 128),
+        });
+      }
     },
+
     recordRead(e: ReadEvent) {
-      if (!binding) return;
-      readEventToDataPoint(binding, e);
+      emit("article_read", MetricUnit.Count, 1, { userId: e.userId });
     },
+
     recordSubscription(e: SubscriptionEvent) {
-      if (!binding) return;
-      subscriptionEventToDataPoint(binding, e);
+      emit("subscription_change", MetricUnit.Count, 1, {
+        userId: e.userId,
+        action: e.action,
+      });
     },
+
     recordCycle(e: CycleEvent) {
-      if (!binding) return;
-      cycleEventToDataPoint(binding, e);
+      emit("cycle_new_articles", MetricUnit.Count, e.newArticles);
+      emit("cycle_failed_feeds", MetricUnit.Count, e.failedFeeds);
+      emit("cycle_checked_feeds", MetricUnit.Count, e.checkedFeeds);
     },
+
     recordCycleError(e: CycleErrorEvent) {
-      if (!binding) return;
-      cycleErrorEventToDataPoint(binding, e);
+      emit("cycle_error", MetricUnit.Count, 1, {
+        error: e.error.slice(0, 128),
+      });
+    },
+
+    recordFetchError(e: FetchErrorEvent) {
+      emit("feed_fetch_error", MetricUnit.Count, 1, {
+        feedId: e.feedId,
+        httpStatus: String(e.httpStatus),
+      });
     },
   };
 }
+
+export type Metrics = MetricsApi;
+
+// No-op instance for dev / missing binding
+const noopMetrics: MetricsApi = {
+  recordParse: () => {},
+  recordRead: () => {},
+  recordSubscription: () => {},
+  recordCycle: () => {},
+  recordCycleError: () => {},
+  recordFetchError: () => {},
+};

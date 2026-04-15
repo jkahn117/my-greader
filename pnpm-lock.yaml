@@ -8,6 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@workers-powertools/logger':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@workers-powertools/metrics':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@workers-powertools/tracer':
+        specifier: ^0.1.0
+        version: 0.1.0
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
@@ -1330,6 +1339,18 @@ packages:
 
   '@vitest/utils@4.1.3':
     resolution: {integrity: sha512-Pc/Oexse/khOWsGB+w3q4yzA4te7W4gpZZAvk+fr8qXfTURZUMj5i7kuxsNK5mP/dEB6ao3jfr0rs17fHhbHdw==}
+
+  '@workers-powertools/commons@0.1.0':
+    resolution: {integrity: sha512-s8weRxqelaFLWGPjVZ4IMLP98zO7G6ZJHSeVxrFJp+dqkpgYR02igcMHpiuzJVe0EkBsxxflsGXaJZBNthK7IQ==}
+
+  '@workers-powertools/logger@0.1.0':
+    resolution: {integrity: sha512-11dbecs/8d84E/wLYa/+PGKTTFMI9cDjtz/3RDvCTRGEwuR9cYPGM0P07NuL57r58WPhwV/8v3lWwZEXpjNGYA==}
+
+  '@workers-powertools/metrics@0.1.0':
+    resolution: {integrity: sha512-FfkRZxd0bDIjlkXfYnnB3iIoYDHGv45ef9j/FL0k9Y5aI4IIuIyPmRG08KpxZoVlo30suBC+YsNLcvcjZf/CUw==}
+
+  '@workers-powertools/tracer@0.1.0':
+    resolution: {integrity: sha512-Z798uuLYjG2VE7oh6VVqoYr75h6KEdVyMT6cBqD2y6vGsYcIb9wWIw7CsWphTe6o+0UBEYaKcK9zDL8mA3J9dw==}
 
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
@@ -2856,6 +2877,20 @@ snapshots:
       '@vitest/pretty-format': 4.1.3
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@workers-powertools/commons@0.1.0': {}
+
+  '@workers-powertools/logger@0.1.0':
+    dependencies:
+      '@workers-powertools/commons': 0.1.0
+
+  '@workers-powertools/metrics@0.1.0':
+    dependencies:
+      '@workers-powertools/commons': 0.1.0
+
+  '@workers-powertools/tracer@0.1.0':
+    dependencies:
+      '@workers-powertools/commons': 0.1.0
 
   assertion-error@2.0.1: {}
 

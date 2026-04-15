@@ -1,209 +1,90 @@
 # Enhanced Analytics
 
-## What's already implemented
+## What's implemented
 
-**D1-backed (no Pipeline needed):**
-- `last_new_item_at` on the feeds table — updated whenever new articles are stored. Surfaces in the Feeds tab as a "Last new item" relative-time column. Immediately answers "is this feed genuinely quiet, or just broken?"
-- Poll interval distribution card on the metrics dashboard — shows how backed-off the fleet is across tiers (30m / 1h / 2h / 4h)
+**D1-backed dashboard (no Pipeline needed):**
+- `last_new_item_at` on the feeds table — updated whenever new articles are stored. Surfaces in the Feeds tab as "Last new item" relative-time. Answers "is this feed quiet or broken?" at a glance.
+- `cycle_runs` table — one row per Workflow execution. Written in the `record-cycle` step. Backs the polling cycles timeline (last 20 runs, bar chart + table), aggregate KPIs (avg due/cycle, avg failed/cycle), and the "Last cycle" stat card.
+- `item_state.read_at` — stamped when `isRead = 1` is set via the GReader state endpoint. Backs the reads-by-day card (7-day window, grouped by `DISPLAY_TIMEZONE`).
+- Poll interval distribution card — shows how backed-off the fleet is across tiers (30m / 1h / 2h / 4h).
+- Feed health card — erroring / rate-limited / deactivated feeds surfaced from D1.
 
-**WAE (cycle aggregates):**
-- Cycle health card: avg active feeds, due/cycle, checked/cycle, new articles/cycle, failed/cycle
-- Per-feed parse success/failure rates and avg duration (7-day window)
-- Reads by day
+**Pipeline (`rss_reader_metrics`) — aggregate metric events via `@workers-powertools/metrics`:**
 
-These cover the "is everything running?" question. The remaining gap is **trends over time** — WAE aggregates smooth over individual runs and can't answer per-feed time-series questions.
+Named-field Parquet records written to R2 via PipelinesBackend. One record per event, not per feed per cycle. Schema defined in `pipeline-schema.json`.
 
----
+| Metric name              | When emitted                        | Key dimensions            |
+| ------------------------ | ----------------------------------- | ------------------------- |
+| `feed_parse_duration_ms` | After each feed fetch               | `feedId`, `status`        |
+| `feed_new_articles`      | When new articles are stored        | `feedId`                  |
+| `feed_parse_failure`     | On parse error                      | `feedId`, `error`         |
+| `feed_fetch_error`       | On 429 / non-OK HTTP response       | `feedId`, `httpStatus`    |
+| `cycle_new_articles`     | End of each Workflow run            | —                         |
+| `cycle_failed_feeds`     | End of each Workflow run            | —                         |
+| `cycle_checked_feeds`    | End of each Workflow run            | —                         |
+| `cycle_error`            | Workflow-level failure              | `error`                   |
+| `article_read`           | GReader `edit-tag` marks read       | `userId`                  |
+| `subscription_change`    | Subscribe / unsubscribe / edit      | `userId`, `action`        |
 
-## Motivation for Pipeline
-
-- Fixed schema: limited blobs and doubles per WAE data point
-- Free plan: 1 index per data point (can't store both event type and a secondary dimension)
-- No per-feed time series: can't ask "which feeds have been silent for 2 weeks?" or "is The Verge publishing less than it used to?"
-- No cross-run queries: each cycle's result array is logged but not queryable
-
-Two options for richer analytics: LogPush → Pipeline (automatic log capture) and a direct Pipeline binding (explicit structured writes). They are not mutually exclusive.
-
----
-
-## Option 1 — LogPush → Cloudflare Pipeline
-
-### How it works
-
-LogPush watches Workers Trace Events (structured logs from `console.log`) and pushes them to a configured destination. With Cloudflare Pipelines now supported as a LogPush destination, the pipeline batches log payloads and writes to R2 as newline-delimited JSON.
-
-No code changes required — every structured log already emitted by the Workflow is captured automatically, including the `feeds: detail` array in the `feed polling cycle complete` event.
-
-### Architecture
-
-```
-FeedPollingWorkflow
-  └─ logger.info("feed polling cycle complete", { feeds: [...], ... })
-        ↓ Workers Trace Events
-        ↓ LogPush job → Cloudflare Pipeline
-        ↓ R2 bucket (NDJSON, partitioned by date)
-        ↓ query via Workers + R2 Select, or external tool
-```
-
-### Implementation steps
-
-1. **Create a Pipeline** in the Cloudflare dashboard (or via Wrangler):
-
-   ```bash
-   wrangler pipelines create feed-logs --r2-bucket feed-analytics-logs
-   ```
-
-   Note the pipeline endpoint URL.
-
-2. **Create a LogPush job** targeting the pipeline:
-   - Cloudflare dashboard → Analytics → Logs → LogPush → Add LogPush job
-   - Dataset: **Workers Trace Events**
-   - Destination: **Cloudflare Pipeline** → select `feed-logs`
-   - Filter (optional): `Outcome = ok` to reduce noise from health-check requests
-
-3. **Query** — Workers can read R2 objects directly, or use R2's SQL Select feature:
-   ```sql
-   SELECT json_extract(payload, '$.message') AS msg,
-          json_extract(payload, '$.fields.newArticles') AS newArticles
-   FROM r2_object
-   WHERE json_extract(payload, '$.fields.workflow') = 'FeedPollingWorkflow'
-   ```
-
-### Tradeoffs
-
-|          |                                                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Pros** | Zero code change; captures all logs automatically                                                                  |
-| **Cons** | Schema is raw log shape — filtering/parsing required at query time; all Worker logs captured, not just feed events |
+These records land in R2 as Parquet. Not queryable from the Worker dashboard — intended for external analytics (DuckDB, Spark, R2 SQL federation when available).
 
 ---
 
-## Option 2 — Direct Pipeline Binding (recommended for visualisation)
+## Remaining gap — per-feed time series
 
-### How it works
+The current Pipeline writes _aggregate_ metric events. The original Option 2 proposed writing _one structured row per feed per cycle_ — enabling:
 
-Add a `FEED_PIPELINE` binding to the Worker. In the Workflow's `record-cycle` step, write
-one structured row per feed result. Pipeline batches these and writes to R2 as Parquet or
-JSON. The clean schema makes downstream querying and visualisation straightforward.
+- **Article velocity trend per feed**: new items per cycle over 30/90 days
+- **Silent feed detection over time**: feeds with `newItems = 0` for N consecutive days (cross-reference against `last_new_item_at` for short-term; Pipeline history for long-term)
+- **Backoff trend**: was a feed's `checkIntervalMinutes` stuck at 240 for weeks?
+- **ETag/304 hit rate**: fraction of fetches returning 304 — measures conditional-request efficiency
+- **Published vs read gap**: complement reads-by-day with per-feed publish rate
 
-### Architecture
+### What it would take
 
-```
-FeedPollingWorkflow
-  └─ record-cycle step
-       └─ FEED_PIPELINE.send([{ feedId, status, newItems, cycleId, ... }])
-             ↓ Cloudflare Pipeline (batching + buffering)
-             ↓ R2 bucket (Parquet or NDJSON, partitioned by date)
-             ↓ dashboard queries via Workers + R2 Select
+Add a second pipeline binding (or reuse `METRICS_PIPELINE.send()` directly with a custom payload), and in the `record-cycle` step emit one row per feed result:
+
+```typescript
+// One row per feed result per cycle
+await this.env.METRICS_PIPELINE.send(
+  allResults.map((r) => ({
+    event:                "feed_cycle_result",
+    cycleId:              event.instanceId,
+    timestamp:            new Date().toISOString(),
+    feedId:               r.feedId,
+    feedTitle:            r.feedTitle,
+    status:               r.status,           // "ok" | "not_modified" | "error"
+    newItems:             r.status === "ok" ? r.newItems : 0,
+    wasNotModified:       r.status === "not_modified",
+    checkIntervalMinutes: r.checkIntervalMinutes,
+    error:                r.status === "error" ? r.error : "",
+  }))
+);
 ```
 
-### Proposed event schema
+Schema additions to `pipeline-schema.json`:
+- `event`: string
+- `cycleId`: string
+- `feedTitle`: string
+- `newItems`: int64 (or float64)
+- `wasNotModified`: bool
+- `checkIntervalMinutes`: int64 (or float64)
 
-One row per feed per cycle:
+This can share the same `rss_reader_metrics` pipeline — the `event` field distinguishes per-feed rows from named metric records. Downstream queries filter on `event = 'feed_cycle_result'`.
 
-| Field                  | Type                                    | Description                                         |
-| ---------------------- | --------------------------------------- | --------------------------------------------------- |
-| `cycleId`              | string                                  | Workflow instance ID — groups all rows from one run |
-| `timestamp`            | number                                  | Unix ms — when the cycle completed                  |
-| `feedId`               | string                                  | Feed ID                                             |
-| `feedTitle`            | string                                  | Feed title or URL                                   |
-| `status`               | `"ok"` \| `"not_modified"` \| `"error"` | Fetch outcome                                       |
-| `newItems`             | number                                  | New articles stored (0 for non-ok)                  |
-| `error`                | string                                  | Error message (empty if not error)                  |
-| `checkIntervalMinutes` | number                                  | Interval set after this fetch                       |
+### Dashboard surface area
 
-### Implementation steps
+A new `/app/analytics` tab (or extension of the metrics tab) could surface:
+- Article velocity table: feeds sorted by avg new items/cycle over last 30 days
+- Silent feed list: `newItems = 0` for every cycle in the last 14 days (linked to deactivation review)
+- Backoff heatmap: which feeds are backed off to 4h and how long have they been there
 
-1. **Create a Pipeline** (same as Option 1 step 1):
-
-   ```bash
-   wrangler pipelines create feed-events --r2-bucket feed-analytics-events
-   ```
-
-2. **Add binding to `wrangler.jsonc`**:
-
-   ```jsonc
-   "pipelines": [
-     {
-       "pipeline": "feed-events",
-       "binding": "FEED_PIPELINE"
-     }
-   ]
-   ```
-
-3. **Run `wrangler types`** to regenerate `worker-configuration.d.ts`.
-
-4. **Write events in `src/workflows/feed_polling.ts`** — in the `record-cycle` step:
-
-   ```typescript
-   await step.do("record-cycle", async () => {
-     const metrics = createMetrics(this.env.READER_METRICS);
-     metrics.recordCycle({ ... }); // WAE aggregate — keep this
-
-     // Per-feed rows to Pipeline
-     await this.env.FEED_PIPELINE.send(
-       allResults.map((r) => ({
-         cycleId: event.instanceId,
-         timestamp: Date.now(),
-         feedId: r.feedId,
-         feedTitle: r.feedTitle,
-         status: r.status,
-         newItems: r.status === "ok" ? r.newItems : 0,
-         error: r.status === "error" ? r.error : "",
-       })),
-     );
-   });
-   ```
-
-5. **Query from a Worker** (e.g. a new `/app/analytics` page):
-   - List R2 objects for the date range
-   - Use R2 Select or read NDJSON, aggregate in-memory
-   - Example queries enabled by this schema:
-     - **Article velocity trend per feed**: new items per cycle over 30/90 days — is a feed accelerating, slowing, or dead?
-     - **Silent feed detection**: feeds with `newItems = 0` for every cycle in the last N days, cross-referenced against `last_new_item_at` — candidates for deactivation review
-     - **Backoff trend**: has a feed's `checkIntervalMinutes` been stuck at 240 for weeks? Was it ever chatty?
-     - **ETag/304 hit rate**: what fraction of fetches return 304? Low rate = server doesn't support conditional requests; high rate = efficient. Useful if investigating why certain feeds use disproportionate subrequest budget.
-     - **Error frequency per feed**: how often does a feed fail, and is it getting worse over time?
-     - **New articles per day (personal reading pace)**: complement the WAE reads-by-day card with a "published vs read" gap chart
-
-### Tradeoffs
-
-|          |                                                                                                                                |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **Pros** | Clean schema; per-feed granularity; queryable across runs; works alongside WAE                                                 |
-| **Cons** | Small code addition; R2 storage cost (negligible at this scale); Pipeline is a relatively new product — check free plan limits |
+Priority: low — `last_new_item_at` and the feed health card already catch the actionable cases. The Pipeline data is useful when you want historical trends, not just current state.
 
 ---
 
-## Relationship to existing WAE metrics
+## Open questions
 
-WAE and a Pipeline are complementary:
-
-|                 | WAE `cycle` event                              | Pipeline feed rows                   |
-| --------------- | ---------------------------------------------- | ------------------------------------ |
-| **Granularity** | One row per cycle                              | One row per feed per cycle           |
-| **Use case**    | Dashboard KPIs (avg checked, avg new articles) | Trend analysis, per-feed debugging   |
-| **Retention**   | ~90 days (WAE default)                         | Configurable (R2 object lifecycle)   |
-| **Query**       | SQL via CF Analytics Engine API                | R2 Select or Worker-side aggregation |
-
-Keep WAE for the cycle health card. Add the Pipeline when per-feed time series become useful.
-
----
-
-## Open Questions
-
-- **Free plan Pipeline limits**: verify batch size and R2 write frequency limits before
-  committing. As of early 2026, Pipelines are in open beta.
-- **R2 Select vs in-Worker aggregation**: R2 Select (SQL over Parquet/JSON in R2) simplifies
-  queries but has its own cost model. At low feed counts, reading NDJSON in a Worker and
-  aggregating in-memory is probably simpler. At 200 feeds × 48 cycles/day = ~9,600 rows/day
-  (~3.5M rows/year) — still tractable for in-memory aggregation over 30-day windows.
-- **Dashboard UI**: a new `/app/analytics` tab would surface trends. Could reuse the existing
-  table/card components from `src/views/metrics.tsx`. Priority queries to surface first:
-  article velocity per feed (sparkline or table), silent feed detection, ETag hit rate.
-- **ETag logging**: `fetchAndStoreFeed` already reads the ETag/304 response but doesn't record
-  whether a 304 was returned to Pipeline. To get hit rate, add a `wasNotModified: boolean`
-  field to the per-feed Pipeline row.
-- **`last_new_item_at` sufficiency**: for silence detection the D1 column is enough (already
-  implemented). Pipeline only adds value when you want the *history* — e.g. "was this feed
-  active 6 months ago and when did it go quiet?"
+- **R2 query surface**: R2 SQL Select (if/when available for standard R2 buckets) vs reading Parquet in a Worker vs an external tool. At ~200 feeds × 48 cycles/day the volume is tractable for in-Worker aggregation over 30-day windows.
+- **Schema versioning**: if fields are added to `pipeline-schema.json`, existing Parquet files in R2 won't have those columns. Either make all fields optional or version the schema (e.g. prefix path with `v1/`).
+- **`last_new_item_at` sufficiency**: for silence detection the D1 column is sufficient for current-state queries. Pipeline history only adds value when you want "when did this feed go quiet?" retrospectively.

@@ -1,0 +1,17 @@
+{
+  "fields": [
+    { "name": "namespace",       "type": "string",  "required": true  },
+    { "name": "service",         "type": "string",  "required": true  },
+    { "name": "metric_name",     "type": "string",  "required": true  },
+    { "name": "metric_unit",     "type": "string",  "required": true  },
+    { "name": "metric_value",    "type": "float64", "required": true  },
+    { "name": "timestamp",       "type": "string",  "required": true  },
+    { "name": "correlation_id",  "type": "string",  "required": false },
+    { "name": "feedId",          "type": "string",  "required": false },
+    { "name": "status",          "type": "string",  "required": false },
+    { "name": "error",           "type": "string",  "required": false },
+    { "name": "userId",          "type": "string",  "required": false },
+    { "name": "action",          "type": "string",  "required": false },
+    { "name": "httpStatus",      "type": "string",  "required": false }
+  ]
+}

@@ -10,6 +10,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 - **Feed parsing**: rss-parser
 - **Auth**: Cloudflare Access (management UI) + SHA-256 API tokens (GReader clients)
 - **Schema/migrations**: Drizzle ORM
+- **Observability**: `@workers-powertools/logger` (structured logs + correlation IDs), `@workers-powertools/tracer` (per-feed spans), `@workers-powertools/metrics` → Cloudflare Pipelines → R2/Iceberg (long-term analytics)
 
 ## Connecting Current and other RSS readers
 
@@ -29,7 +30,8 @@ Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each
 
 1. Queries feeds whose poll interval has elapsed (stale-first ordering)
 2. Processes them in sequential batches of 20, fetching each batch concurrently
-3. Emits a `cycle` event to Analytics Engine for the Metrics dashboard
+3. Writes a `cycle_runs` row to D1 for the Metrics dashboard
+4. Emits named metric events to a Cloudflare Pipeline for long-term analytics
 
 **Adaptive backoff** — `check_interval_minutes` per feed, default 30 min:
 
@@ -48,29 +50,47 @@ These steps must be run manually before deploying.
 
 ```bash
 # 1. Create the D1 database and copy the returned database_id into wrangler.jsonc
-wrangler d1 create rss-reader
+pnpm wrangler d1 create rss-reader
 
 # 2. Apply schema migrations
-wrangler d1 migrations apply rss-reader --local   # local dev
-wrangler d1 migrations apply rss-reader --remote  # production
+pnpm wrangler d1 migrations apply rss-reader --local   # local dev
+pnpm wrangler d1 migrations apply rss-reader --remote  # production
 
-# 3. Set the Cloudflare Access audience tag as a secret
+# 3. Create an R2 bucket for pipeline output storage
+pnpm wrangler r2 bucket create rss-reader-metrics-store
+
+# 4a. Create the stream (the Worker binding writes to this)
+#     The stream name must match the binding name in wrangler.jsonc (underscores, not hyphens)
+#     pipeline-schema.json defines the Parquet column types for each metric field
+pnpm wrangler pipelines streams create rss_reader_metrics_stream \
+  --schema-file pipeline-schema.json
+
+# 4b. Create the R2 sink (destination for pipeline data)
+#     Omit --access-key-id / --secret-access-key to let wrangler auto-create R2 credentials
+pnpm wrangler pipelines sinks create rss_reader_metrics_sink \
+  --type r2 \
+  --bucket rss-reader-metrics-store \
+  --format parquet \
+  --path metrics \
+  --roll-interval 300
+
+# 4c. Create the pipeline connecting the stream to the sink
+#     The pipeline name MUST match the "pipeline" value in wrangler.jsonc
+#     Note: sink names with hyphens must be double-quoted in SQL
+pnpm wrangler pipelines create rss_reader_metrics \
+  --sql 'INSERT INTO rss_reader_metrics_sink SELECT * FROM rss_reader_metrics_stream'
+
+# Alternatively, use the interactive setup wizard which handles steps 3–4 for you:
+#   pnpm wrangler pipelines setup
+# When prompted for the pipeline name, enter: rss_reader_metrics
+
+# 5. Set the Cloudflare Access audience tag as a secret
 wrangler secret put CF_ACCESS_AUD
-
-# 4. Set the Cloudflare API token for the status dashboard (Analytics Engine Read)
-wrangler secret put CF_API_TOKEN
 ```
 
-**Creating the `CF_API_TOKEN`:**
+Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the reads-per-day chart groups by the correct local day.
 
-1. Go to [Cloudflare dashboard](https://dash.cloudflare.com/profile/api-tokens) → **My Profile → API Tokens → Create Token**
-2. Use **Create Custom Token**
-3. Set permissions:
-   - `Account` → `Account Analytics` → **Read**
-4. Set **Account Resources** → Include → your account
-5. Copy the generated token and run `wrangler secret put CF_API_TOKEN`
-
-Also set your account ID as a var in `wrangler.jsonc` under `CF_ACCOUNT_ID` (found in the Cloudflare dashboard sidebar), and set `DISPLAY_TIMEZONE` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the metrics dashboard groups reads by the correct local day.
+> **Note:** The metrics dashboard reads entirely from D1 — no Analytics Engine or `CF_API_TOKEN` required. The Pipeline is write-only from the Worker's perspective; metric data lands in R2 as Parquet/Iceberg for external analytics tools (e.g. DuckDB, Spark, Cloudflare D1 federation when available).
 
 **Cloudflare Access setup:**
 
