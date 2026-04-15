@@ -42,7 +42,7 @@
   // The dashboard queries D1 directly; Pipeline data is for external analytics tools.
   "pipelines": [
     {
-      "pipeline": "728cc513e9634a768660cbed8da112d1",
+      "pipeline": "b84ed2b108414467aeea99376759a572",
       "binding": "METRICS_PIPELINE"
     }
   ],

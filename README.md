@@ -56,41 +56,46 @@ pnpm wrangler d1 create rss-reader
 pnpm wrangler d1 migrations apply rss-reader --local   # local dev
 pnpm wrangler d1 migrations apply rss-reader --remote  # production
 
-# 3. Create an R2 bucket for pipeline output storage
-pnpm wrangler r2 bucket create rss-reader-metrics-store
+# 3. Set secrets
+#    CF_ACCESS_AUD      — Cloudflare Access audience tag (JWT verification)
+#    R2_SQL_AUTH_TOKEN  — R2 API token used to query pipeline data via R2 SQL
+#
+#    To create R2_SQL_AUTH_TOKEN:
+#      1. Cloudflare dashboard → R2 Object Storage → Manage R2 API Tokens → Create API token
+#      2. Under Permissions, select "Admin Read & Write"
+#         (Admin Read only is insufficient — R2 SQL requires write-level access to Data Catalog)
+#      3. Optionally scope to the rss-reader-metrics-store bucket
+#      4. Copy the token value — it is only shown once
+wrangler secret put CF_ACCESS_AUD
+wrangler secret put R2_SQL_AUTH_TOKEN
 
-# 4a. Create the stream (the Worker binding writes to this)
+# 4. Create an R2 bucket and enable the Data Catalog (required for R2 SQL queries)
+pnpm wrangler r2 bucket create rss-reader-metrics-store
+pnpm wrangler r2 bucket catalog enable rss-reader-metrics-store
+
+# 5a. Create the stream (the Worker binding writes to this)
 #     The stream name must match the binding name in wrangler.jsonc (underscores, not hyphens)
-#     pipeline-schema.json defines the Parquet column types for each metric field
+#     pipeline-schema.json defines the column types for each metric field
 pnpm wrangler pipelines streams create rss_reader_metrics_stream \
   --schema-file pipeline-schema.json
 
-# 4b. Create the R2 sink (destination for pipeline data)
-#     Omit --access-key-id / --secret-access-key to let wrangler auto-create R2 credentials
+# 5b. Create the R2 Data Catalog sink (writes Iceberg tables, queryable via R2 SQL)
+#     Retrieve your catalog token: wrangler r2 bucket catalog get rss-reader-metrics-store
 pnpm wrangler pipelines sinks create rss_reader_metrics_sink \
-  --type r2 \
+  --type r2-data-catalog \
   --bucket rss-reader-metrics-store \
-  --format parquet \
-  --path metrics \
+  --namespace rss_reader \
+  --table metrics \
+  --catalog-token <your-r2-sql-auth-token> \
   --roll-interval 300
 
-# 4c. Create the pipeline connecting the stream to the sink
+# 5c. Create the pipeline connecting the stream to the sink
 #     The pipeline name MUST match the "pipeline" value in wrangler.jsonc
-#     Note: sink names with hyphens must be double-quoted in SQL
 pnpm wrangler pipelines create rss_reader_metrics \
   --sql 'INSERT INTO rss_reader_metrics_sink SELECT * FROM rss_reader_metrics_stream'
-
-# Alternatively, use the interactive setup wizard which handles steps 3–4 for you:
-#   pnpm wrangler pipelines setup
-# When prompted for the pipeline name, enter: rss_reader_metrics
-
-# 5. Set the Cloudflare Access audience tag as a secret
-wrangler secret put CF_ACCESS_AUD
 ```
 
 Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the reads-per-day chart groups by the correct local day.
-
-> **Note:** The metrics dashboard reads entirely from D1 — no Analytics Engine or `CF_API_TOKEN` required. The Pipeline is write-only from the Worker's perspective; metric data lands in R2 as Parquet/Iceberg for external analytics tools (e.g. DuckDB, Spark, Cloudflare D1 federation when available).
 
 **Cloudflare Access setup:**
 

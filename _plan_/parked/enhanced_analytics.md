@@ -9,9 +9,9 @@
 - Poll interval distribution card — shows how backed-off the fleet is across tiers (30m / 1h / 2h / 4h).
 - Feed health card — erroring / rate-limited / deactivated feeds surfaced from D1.
 
-**Pipeline (`rss_reader_metrics`) — aggregate metric events via `@workers-powertools/metrics`:**
+**Pipeline (`rss_reader_metrics`) → R2 Data Catalog (Iceberg) — queryable via R2 SQL:**
 
-Named-field Parquet records written to R2 via PipelinesBackend. One record per event, not per feed per cycle. Schema defined in `pipeline-schema.json`.
+The sink is `--type r2-data-catalog`, writing to `rss_reader.metrics` in the `rss-reader-metrics-store` bucket. Named-field records are written via `@workers-powertools/metrics` PipelinesBackend. Schema defined in `pipeline-schema.json`.
 
 | Metric name              | When emitted                        | Key dimensions            |
 | ------------------------ | ----------------------------------- | ------------------------- |
@@ -26,65 +26,148 @@ Named-field Parquet records written to R2 via PipelinesBackend. One record per e
 | `article_read`           | GReader `edit-tag` marks read       | `userId`                  |
 | `subscription_change`    | Subscribe / unsubscribe / edit      | `userId`, `action`        |
 
-These records land in R2 as Parquet. Not queryable from the Worker dashboard — intended for external analytics (DuckDB, Spark, R2 SQL federation when available).
-
 ---
 
-## Remaining gap — per-feed time series
+## R2 SQL query client
 
-The current Pipeline writes _aggregate_ metric events. The original Option 2 proposed writing _one structured row per feed per cycle_ — enabling:
-
-- **Article velocity trend per feed**: new items per cycle over 30/90 days
-- **Silent feed detection over time**: feeds with `newItems = 0` for N consecutive days (cross-reference against `last_new_item_at` for short-term; Pipeline history for long-term)
-- **Backoff trend**: was a feed's `checkIntervalMinutes` stuck at 240 for weeks?
-- **ETag/304 hit rate**: fraction of fetches returning 304 — measures conditional-request efficiency
-- **Published vs read gap**: complement reads-by-day with per-feed publish rate
-
-### What it would take
-
-Add a second pipeline binding (or reuse `METRICS_PIPELINE.send()` directly with a custom payload), and in the `record-cycle` step emit one row per feed result:
+Queries are HTTP POSTs to the R2 SQL REST API — same pattern as the old `wae.ts` WAE client.
 
 ```typescript
-// One row per feed result per cycle
-await this.env.METRICS_PIPELINE.send(
-  allResults.map((r) => ({
-    event:                "feed_cycle_result",
-    cycleId:              event.instanceId,
-    timestamp:            new Date().toISOString(),
-    feedId:               r.feedId,
-    feedTitle:            r.feedTitle,
-    status:               r.status,           // "ok" | "not_modified" | "error"
-    newItems:             r.status === "ok" ? r.newItems : 0,
-    wasNotModified:       r.status === "not_modified",
-    checkIntervalMinutes: r.checkIntervalMinutes,
-    error:                r.status === "error" ? r.error : "",
-  }))
-);
+// src/lib/r2sql.ts
+export interface R2SqlResult {
+  data: Record<string, string | number | null>[];
+  meta: { name: string; type: string }[];
+}
+
+export async function queryR2Sql(
+  accountId: string,
+  bucketName: string,
+  authToken: string,
+  sql: string,
+): Promise<R2SqlResult> {
+  const url = `https://api.sql.cloudflarestorage.com/api/v1/accounts/${accountId}/r2-sql/query/${bucketName}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query: sql }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    // No data yet (table doesn't exist) — treat as empty
+    if (res.status === 404) return { data: [], meta: [] };
+    throw new Error(`R2 SQL query failed (${res.status}): ${text}`);
+  }
+  return res.json<R2SqlResult>();
+}
 ```
 
-Schema additions to `pipeline-schema.json`:
-- `event`: string
-- `cycleId`: string
-- `feedTitle`: string
-- `newItems`: int64 (or float64)
-- `wasNotModified`: bool
-- `checkIntervalMinutes`: int64 (or float64)
-
-This can share the same `rss_reader_metrics` pipeline — the `event` field distinguishes per-feed rows from named metric records. Downstream queries filter on `event = 'feed_cycle_result'`.
-
-### Dashboard surface area
-
-A new `/app/analytics` tab (or extension of the metrics tab) could surface:
-- Article velocity table: feeds sorted by avg new items/cycle over last 30 days
-- Silent feed list: `newItems = 0` for every cycle in the last 14 days (linked to deactivation review)
-- Backoff heatmap: which feeds are backed off to 4h and how long have they been there
-
-Priority: low — `last_new_item_at` and the feed health card already catch the actionable cases. The Pipeline data is useful when you want historical trends, not just current state.
+Required env additions:
+- `R2_SQL_AUTH_TOKEN` secret — R2 SQL Read + Data Catalog + R2 Storage permissions
+- `CF_ACCOUNT_ID` var — already present in `wrangler.jsonc`
+- R2 bucket name can be hardcoded or added as a var (`rss-reader-metrics-store`)
 
 ---
 
-## Open questions
+## Proposed dashboard views
 
-- **R2 query surface**: R2 SQL Select (if/when available for standard R2 buckets) vs reading Parquet in a Worker vs an external tool. At ~200 feeds × 48 cycles/day the volume is tractable for in-Worker aggregation over 30-day windows.
-- **Schema versioning**: if fields are added to `pipeline-schema.json`, existing Parquet files in R2 won't have those columns. Either make all fields optional or version the schema (e.g. prefix path with `v1/`).
-- **`last_new_item_at` sufficiency**: for silence detection the D1 column is sufficient for current-state queries. Pipeline history only adds value when you want "when did this feed go quiet?" retrospectively.
+These can be added as a new section on the existing metrics tab (or a separate `/app/analytics` tab). All queries reference `rss_reader.metrics`.
+
+### 1 — Feed velocity (top publishers)
+
+**Question**: which feeds are publishing most actively, and which have gone quiet?
+
+```sql
+SELECT
+  feedId,
+  COUNT(*)                            AS fetch_count,
+  SUM(metric_value)                   AS total_new_articles,
+  ROUND(AVG(metric_value), 1)         AS avg_per_fetch
+FROM rss_reader.metrics
+WHERE metric_name = 'feed_new_articles'
+  AND timestamp > DATEADD('day', -30, NOW())
+GROUP BY feedId
+ORDER BY total_new_articles DESC
+LIMIT 20
+```
+
+UI: table sorted by `total_new_articles`, cross-referenced with the feed title from D1. Shows feeds by output volume over the last 30 days — useful for spotting silent feeds and high-volume sources.
+
+---
+
+### 2 — Fetch performance (slowest feeds)
+
+**Question**: which feeds are slow to parse, and are any consistently timing out?
+
+```sql
+SELECT
+  feedId,
+  COUNT(*)                            AS samples,
+  ROUND(AVG(metric_value))            AS avg_ms,
+  ROUND(MAX(metric_value))            AS max_ms,
+  ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY metric_value)) AS p95_ms
+FROM rss_reader.metrics
+WHERE metric_name = 'feed_parse_duration_ms'
+  AND timestamp > DATEADD('day', -7, NOW())
+GROUP BY feedId
+ORDER BY avg_ms DESC
+LIMIT 20
+```
+
+UI: table of slowest feeds with avg/p95 duration. Feeds consistently above ~5s are candidates for investigation (slow servers, large payloads, no ETag support).
+
+---
+
+### 3 — Error rates by HTTP status
+
+**Question**: what is the breakdown of fetch errors, and which status codes are most common?
+
+```sql
+SELECT
+  httpStatus,
+  COUNT(*) AS occurrences,
+  COUNT(DISTINCT feedId) AS affected_feeds
+FROM rss_reader.metrics
+WHERE metric_name = 'feed_fetch_error'
+  AND timestamp > DATEADD('day', -7, NOW())
+GROUP BY httpStatus
+ORDER BY occurrences DESC
+```
+
+UI: small table of HTTP status → occurrence count → affected feed count. 429s indicate rate-limited feeds; 403s indicate access-denied sources worth removing; 5xx are transient server issues.
+
+---
+
+### 4 — New articles per day (pipeline vs D1)
+
+**Question**: how has daily article volume trended over the last 30 days?
+
+```sql
+SELECT
+  DATE_TRUNC('day', CAST(timestamp AS TIMESTAMP)) AS day,
+  SUM(metric_value)                               AS new_articles
+FROM rss_reader.metrics
+WHERE metric_name = 'feed_new_articles'
+  AND timestamp > DATEADD('day', -30, NOW())
+GROUP BY day
+ORDER BY day DESC
+```
+
+UI: bar chart or table of daily new article counts. Complements the cycle timeline (which shows per-run counts) with a daily rollup going back further than the 20-run D1 window.
+
+---
+
+## Implementation plan
+
+1. **Recreate sink** as `r2-data-catalog` (see README step 4b) — requires deleting the existing plain-R2 sink first.
+2. **Add `src/lib/r2sql.ts`** — thin query client (above).
+3. **Update `wrangler.jsonc`** — add `R2_SQL_BUCKET_NAME` var or hardcode; ensure `CF_ACCOUNT_ID` is present (already is).
+4. **Update `worker-configuration.d.ts`** — add `R2_SQL_AUTH_TOKEN: string` to secrets (run `pnpm cf-typegen`).
+5. **Extend `src/handlers/metrics.tsx`** — add `queryR2Sql` calls alongside the existing D1 `db.batch()`. These can run concurrently with `Promise.all`. Degrade gracefully (empty arrays) if `R2_SQL_AUTH_TOKEN` is not set.
+6. **Extend `src/views/metrics.tsx`** — add the three new cards (feed velocity, fetch performance, error rates); the daily new-articles chart can replace or augment the existing cycle timeline for longer time horizons.
+
+**Data latency**: Pipeline rolls files every 300 seconds (5 min), so R2 SQL data lags by up to 5 minutes behind real-time. The D1 cards remain the authoritative source for current-state queries.
+
+**Cost**: R2 SQL is currently free in open beta. R2 storage at this scale (~10 metrics records per feed per cycle, 48 cycles/day, ~200 feeds) is ~100k records/day — negligible storage cost.
