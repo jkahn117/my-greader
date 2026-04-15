@@ -75,7 +75,10 @@ interface MetricsApi {
   recordFetchError(e: FetchErrorEvent): void;
 }
 
-export function createMetrics(pipelineBinding: PipelineBinding | undefined): MetricsApi {
+export function createMetrics(
+  pipelineBinding: PipelineBinding | undefined,
+  executionCtx?: ExecutionContext,
+): MetricsApi {
   if (!pipelineBinding) {
     // No Pipeline binding in dev — all methods are no-ops
     return noopMetrics;
@@ -83,7 +86,9 @@ export function createMetrics(pipelineBinding: PipelineBinding | undefined): Met
 
   const backend = new PipelinesBackend({ binding: pipelineBinding });
 
-  // Emit a single named metric record via the Pipeline (fire-and-forget)
+  // Emit a single named metric record via the Pipeline.
+  // Registers with ctx.waitUntil() when available so the send completes
+  // even after the response has been returned.
   function emit(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
     const entry: MetricEntry = {
       name,
@@ -92,8 +97,12 @@ export function createMetrics(pipelineBinding: PipelineBinding | undefined): Met
       dimensions: { service: "my-greader", ...dims },
       timestamp: Date.now(),
     };
-    // writeSync is fire-and-forget — no blocking, no await needed
-    backend.writeSync([entry], METRIC_CONTEXT);
+    const send = backend.write([entry], METRIC_CONTEXT);
+    if (executionCtx) {
+      executionCtx.waitUntil(send);
+    } else {
+      void send;
+    }
   }
 
   return {

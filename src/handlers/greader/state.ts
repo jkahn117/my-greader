@@ -27,7 +27,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     path: "/reader/api/0/edit-tag",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.METRICS_PIPELINE);
+  const metrics = createMetrics(c.env.METRICS_PIPELINE, c.executionCtx);
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
