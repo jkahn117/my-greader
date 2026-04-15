@@ -74,7 +74,8 @@ export async function fetchAndStoreFeed(
 
   // Records a fetch/parse failure, increments consecutive error count,
   // and deactivates the feed once ERROR_THRESHOLD is reached.
-  // Does NOT modify checkIntervalMinutes — error frequency is unchanged.
+  // Sets lastFetchedAt so the feed respects checkIntervalMinutes before retry.
+  // Does NOT modify checkIntervalMinutes — error backoff is unchanged.
   async function recordError(errorMessage: string): Promise<void> {
     const next = feed.consecutiveErrors + 1;
     const deactivate = next >= ERROR_THRESHOLD;
@@ -83,6 +84,7 @@ export async function fetchAndStoreFeed(
       .set({
         consecutiveErrors: next,
         lastError: errorMessage,
+        lastFetchedAt: Date.now(), // prevent immediate re-poll on next cycle
         ...(deactivate ? { deactivatedAt: Date.now() } : {}),
       })
       .where(eq(feeds.id, feed.id));
@@ -112,6 +114,36 @@ export async function fetchAndStoreFeed(
       .set({ lastFetchedAt: Date.now(), checkIntervalMinutes: newInterval })
       .where(eq(feeds.id, feed.id));
     return { feedId: feed.id, feedTitle, status: "not_modified" };
+  }
+
+  if (response.status === 429) {
+    // Rate limited — back off without counting as a consecutive error.
+    // Respects Retry-After header (seconds or HTTP-date) when present.
+    const retryAfter = response.headers.get("Retry-After");
+    let backoffMinutes = Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
+    if (retryAfter) {
+      const seconds = parseInt(retryAfter, 10);
+      if (!isNaN(seconds)) {
+        backoffMinutes = Math.max(Math.ceil(seconds / 60), backoffMinutes);
+      } else {
+        const retryMs = new Date(retryAfter).getTime();
+        if (!isNaN(retryMs)) {
+          backoffMinutes = Math.max(Math.ceil((retryMs - Date.now()) / 60_000), backoffMinutes);
+        }
+      }
+    }
+    const errorMessage = "HTTP 429 (rate limited)";
+    logger.warn("feed rate limited", { backoffMinutes });
+    await db
+      .update(feeds)
+      .set({
+        lastFetchedAt: Date.now(),
+        checkIntervalMinutes: backoffMinutes,
+        lastError: errorMessage,
+        // consecutiveErrors intentionally not incremented — rate limits are transient
+      })
+      .where(eq(feeds.id, feed.id));
+    return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
   if (!response.ok) {
