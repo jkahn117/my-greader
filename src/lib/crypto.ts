@@ -27,18 +27,32 @@ export function toGreaderItemId(hex: string): string {
   return `tag:google.com,2005:reader/item/${hex}`
 }
 
-/** Encodes a published_at timestamp (ms) as a base64url continuation token */
-export function encodeContinuation(publishedAt: number): string {
-  return btoa(String(publishedAt)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+/**
+ * Encodes a (publishedAt ms, itemId hex) pair as a base64url continuation token.
+ * The compound cursor prevents skipping items that share the same publishedAt.
+ */
+export function encodeContinuation(publishedAt: number, itemId: string): string {
+  const raw = `${publishedAt}:${itemId}`;
+  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Decodes a continuation token back to a published_at timestamp (ms) */
-export function decodeContinuation(token: string): number | null {
+export type ContinuationCursor = { publishedAt: number; itemId: string };
+
+/** Decodes a continuation token back to a (publishedAt ms, itemId) cursor */
+export function decodeContinuation(token: string): ContinuationCursor | null {
   try {
-    const padded = token.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice((token.length + 3) % 4 === 0 ? 4 : (token.length + 3) % 4)
-    const value = Number(atob(padded))
-    return isNaN(value) ? null : value
+    const padded = token.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice((token.length + 3) % 4 === 0 ? 4 : (token.length + 3) % 4);
+    const raw = atob(padded);
+    const colon = raw.indexOf(':');
+    if (colon === -1) {
+      // Legacy token: plain timestamp only (no itemId component)
+      const value = Number(raw);
+      return isNaN(value) ? null : { publishedAt: value, itemId: '' };
+    }
+    const publishedAt = Number(raw.slice(0, colon));
+    const itemId = raw.slice(colon + 1);
+    return isNaN(publishedAt) ? null : { publishedAt, itemId };
   } catch {
-    return null
+    return null;
   }
 }

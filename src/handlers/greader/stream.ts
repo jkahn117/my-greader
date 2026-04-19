@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
@@ -8,6 +8,7 @@ import {
   encodeContinuation,
   normalizeItemId,
   toGreaderItemId,
+  type ContinuationCursor,
 } from "../../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../../db/schema";
 import {
@@ -27,7 +28,9 @@ type BuildStreamConditionsArgs = {
   streamId: ReturnType<typeof parseStreamId>;
   userId: string;
   excludeRead: boolean;
-  cursor: number | null;
+  cursor: ContinuationCursor | null;
+  // ot: unix seconds lower-bound — only items at or newer than this timestamp
+  newerThan: number | null;
   db: ReturnType<typeof getDb>;
 };
 
@@ -36,6 +39,7 @@ async function buildStreamConditions({
   userId,
   excludeRead,
   cursor,
+  newerThan,
   db,
 }: BuildStreamConditionsArgs): Promise<SQL<unknown>[]> {
   const conditions: SQL<unknown>[] = [eq(subscriptions.userId, userId)];
@@ -56,7 +60,32 @@ async function buildStreamConditions({
   }
 
   if (excludeRead) conditions.push(sql`COALESCE(${itemState.isRead}, 0) = 0`);
-  if (cursor !== null) conditions.push(lt(items.publishedAt, cursor));
+
+  // ot (older-than in GReader naming, but means "newer than this epoch seconds"):
+  // limits to items published at or after this timestamp — clients use this to
+  // only fetch the delta since their last sync rather than re-walking all pages.
+  if (newerThan !== null) {
+    conditions.push(gte(items.publishedAt, newerThan * 1000));
+  }
+
+  // Compound cursor: (publishedAt < cursor.ts) OR (publishedAt = cursor.ts AND id < cursor.id)
+  // This correctly pages through items even when multiple items share the same publishedAt.
+  if (cursor !== null) {
+    if (cursor.itemId) {
+      conditions.push(
+        or(
+          lt(items.publishedAt, cursor.publishedAt),
+          and(
+            sql`${items.publishedAt} = ${cursor.publishedAt}`,
+            lt(items.id, cursor.itemId),
+          ),
+        ) as SQL<unknown>,
+      );
+    } else {
+      // Legacy token with no itemId — fall back to timestamp-only
+      conditions.push(lt(items.publishedAt, cursor.publishedAt));
+    }
+  }
 
   return conditions;
 }
@@ -76,7 +105,7 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
   const parsed = streamContentsSchema.safeParse(c.req.query());
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
-  const { s, n, xt, c: contToken } = parsed.data;
+  const { s, n, xt, c: contToken, ot } = parsed.data;
   const streamId = parseStreamId(s);
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
@@ -86,6 +115,7 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
     userId,
     excludeRead,
     cursor,
+    newerThan: ot ?? null,
     db,
   });
 
@@ -114,8 +144,8 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
   const page = rows.slice(0, n);
   const lastItem = page.at(-1);
   const continuation =
-    hasMore && lastItem?.item.publishedAt
-      ? encodeContinuation(lastItem.item.publishedAt)
+    hasMore && lastItem?.item.publishedAt && lastItem.item.id
+      ? encodeContinuation(lastItem.item.publishedAt, lastItem.item.id)
       : undefined;
 
   logger.info("stream/contents", { stream: s, count: page.length, hasMore });
@@ -164,7 +194,7 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
   const parsed = streamIdsSchema.safeParse(c.req.query());
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
-  const { s, n, xt, c: contToken } = parsed.data;
+  const { s, n, xt, c: contToken, ot } = parsed.data;
   const streamId = parseStreamId(s);
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
@@ -174,6 +204,7 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
     userId,
     excludeRead,
     cursor,
+    newerThan: ot ?? null,
     db,
   });
 
@@ -194,8 +225,8 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
   const page = rows.slice(0, n);
   const lastItem = page.at(-1);
   const continuation =
-    hasMore && lastItem?.publishedAt
-      ? encodeContinuation(lastItem.publishedAt)
+    hasMore && lastItem?.publishedAt && lastItem.id
+      ? encodeContinuation(lastItem.publishedAt, lastItem.id)
       : undefined;
 
   logger.info("stream/items/ids", { stream: s, count: page.length });
