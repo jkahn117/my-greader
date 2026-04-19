@@ -161,6 +161,7 @@ async function fetchAndStoreFeedInner(
         // consecutiveErrors intentionally not incremented — rate limits are transient
       })
       .where(eq(feeds.id, feed.id));
+    await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
@@ -169,6 +170,7 @@ async function fetchAndStoreFeedInner(
     logger.warn("feed returned non-OK status", { status: response.status });
     metrics.recordFetchError({ feedId: feed.id, httpStatus: response.status });
     await recordError(errorMessage);
+    await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
@@ -187,6 +189,7 @@ async function fetchAndStoreFeedInner(
       error: errorMessage,
     });
     await recordError(errorMessage);
+    await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
 
@@ -259,6 +262,7 @@ async function fetchAndStoreFeedInner(
     durationMs: performance.now() - start,
     articleCount: newItems,
   });
+  await metrics.flush();
 
   return { feedId: feed.id, feedTitle, status: "ok", newItems };
 }

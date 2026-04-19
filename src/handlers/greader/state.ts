@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { eq, or } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
-import { createMetrics, type ReadEvent } from "../../lib/metrics";
+import { createMetrics } from "../../lib/metrics";
 import { normalizeItemId } from "../../lib/crypto";
-import { feeds, itemState } from "../../db/schema";
+import { feeds, items, itemState } from "../../db/schema";
 import { parseStreamId } from "./helpers";
 import type { Variables } from "./helpers";
 
@@ -27,7 +27,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     path: "/reader/api/0/edit-tag",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.METRICS_PIPELINE, c.executionCtx);
+  const metrics = createMetrics(c.env.METRICS_PIPELINE);
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
@@ -55,16 +55,23 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   if (removeTag === "user/-/state/com.google/starred") updates.isStarred = 0;
 
   if (Object.keys(updates).length === 0) {
-    logger.debug("edit-tag: no recognised tag operation", {
-      addTag,
-      removeTag,
-    });
+    logger.debug("edit-tag: no recognised tag operation", { addTag, removeTag });
     return c.text("OK");
   }
 
   // Stamp readAt when marking as read so the dashboard can show reads per day
   const readAt = updates.isRead === 1 ? Date.now() : undefined;
   const fullUpdates = { ...updates, ...(readAt !== undefined ? { readAt } : {}) };
+
+  // Prefetch feedId for all items in one query — needed for the article_read metric
+  const feedIdByItemId = new Map<string, string>();
+  if (updates.isRead === 1) {
+    const rows = await db
+      .select({ id: items.id, feedId: items.feedId })
+      .from(items)
+      .where(inArray(items.id, itemIds));
+    for (const row of rows) feedIdByItemId.set(row.id, row.feedId);
+  }
 
   for (const itemId of itemIds) {
     await db
@@ -76,11 +83,13 @@ state.post("/reader/api/0/edit-tag", async (c) => {
       });
 
     if (updates.isRead === 1) {
-      metrics.recordRead({ userId, articleId: itemId });
+      const feedId = feedIdByItemId.get(itemId) ?? "";
+      metrics.recordRead({ userId, articleId: itemId, feedId });
     }
   }
 
   logger.info("edit-tag", { count: itemIds.length, addTag, removeTag });
+  c.executionCtx.waitUntil(metrics.flush());
   return c.text("OK");
 });
 

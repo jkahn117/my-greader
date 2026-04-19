@@ -100,7 +100,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
       try {
         using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
-        createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]).recordCycleError({ error: errorMessage });
+        const metrics = createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]);
+        metrics.recordCycleError({ error: errorMessage });
+        await metrics.flush();
       } catch {
         // Don't mask the original error if metrics emission itself fails
       }
@@ -271,7 +273,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           failedFeeds,
         }).onConflictDoNothing(); // guard against duplicate step execution
 
-        // Pipeline write for long-term analytics
+        // Pipeline write for long-term analytics — batched with flush
         metrics.recordCycle({
           totalActiveFeeds,
           dueFeeds: dueFeeds.length,
@@ -279,6 +281,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           newArticles,
           failedFeeds,
         });
+        await metrics.flush();
       } catch (err) {
         logger.error("record-cycle step failed", {
           error: err instanceof Error ? err.message : String(err),

@@ -147,7 +147,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     path: "/reader/api/0/subscription/edit",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.METRICS_PIPELINE, c.executionCtx);
+  const metrics = createMetrics(c.env.METRICS_PIPELINE);
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
@@ -285,6 +285,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     });
   }
 
+  c.executionCtx.waitUntil(metrics.flush());
   return c.text("OK");
 });
 

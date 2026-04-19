@@ -30,6 +30,7 @@ export interface ParseEvent {
 export interface ReadEvent {
   userId: string;
   articleId: string;
+  feedId: string;
 }
 
 export interface SubscriptionEvent {
@@ -73,11 +74,14 @@ interface MetricsApi {
   recordCycle(e: CycleEvent): void;
   recordCycleError(e: CycleErrorEvent): void;
   recordFetchError(e: FetchErrorEvent): void;
+  // Flush all buffered entries to the Pipeline in a single write.
+  // Call at the end of each logical unit of work and register the returned
+  // promise with waitUntil() when an ExecutionContext is available.
+  flush(): Promise<void>;
 }
 
 export function createMetrics(
   pipelineBinding: PipelineBinding | undefined,
-  executionCtx?: ExecutionContext,
 ): MetricsApi {
   if (!pipelineBinding) {
     // No Pipeline binding in dev — all methods are no-ops
@@ -85,40 +89,34 @@ export function createMetrics(
   }
 
   const backend = new PipelinesBackend({ binding: pipelineBinding });
+  const pending: MetricEntry[] = [];
 
-  // Emit a single named metric record via the Pipeline.
-  // Registers with ctx.waitUntil() when available so the send completes
-  // even after the response has been returned.
-  function emit(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
-    const entry: MetricEntry = {
+  // Enqueues a metric entry — does NOT write immediately.
+  // Call flush() to send all pending entries in one backend.write().
+  function enqueue(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
+    pending.push({
       name,
       unit,
       value,
       dimensions: { service: "my-greader", ...dims },
       timestamp: Date.now(),
-    };
-    const send = backend.write([entry], METRIC_CONTEXT);
-    if (executionCtx) {
-      executionCtx.waitUntil(send);
-    } else {
-      void send;
-    }
+    });
   }
 
   return {
     recordParse(e: ParseEvent) {
-      emit("feed_parse_duration_ms", MetricUnit.Milliseconds, e.durationMs, {
+      enqueue("feed_parse_duration_ms", MetricUnit.Milliseconds, e.durationMs, {
         feedId: e.feedId,
         status: e.status,
       });
       if (e.articleCount) {
-        emit("feed_new_articles", MetricUnit.Count, e.articleCount, {
+        enqueue("feed_new_articles", MetricUnit.Count, e.articleCount, {
           feedId: e.feedId,
         });
       }
       if (e.error) {
         // Truncate error message to keep Pipeline record size bounded
-        emit("feed_parse_failure", MetricUnit.Count, 1, {
+        enqueue("feed_parse_failure", MetricUnit.Count, 1, {
           feedId: e.feedId,
           error: e.error.slice(0, 128),
         });
@@ -126,33 +124,42 @@ export function createMetrics(
     },
 
     recordRead(e: ReadEvent) {
-      emit("article_read", MetricUnit.Count, 1, { userId: e.userId });
+      enqueue("article_read", MetricUnit.Count, 1, {
+        userId: e.userId,
+        feedId: e.feedId,
+      });
     },
 
     recordSubscription(e: SubscriptionEvent) {
-      emit("subscription_change", MetricUnit.Count, 1, {
+      enqueue("subscription_change", MetricUnit.Count, 1, {
         userId: e.userId,
         action: e.action,
       });
     },
 
     recordCycle(e: CycleEvent) {
-      emit("cycle_new_articles", MetricUnit.Count, e.newArticles);
-      emit("cycle_failed_feeds", MetricUnit.Count, e.failedFeeds);
-      emit("cycle_checked_feeds", MetricUnit.Count, e.checkedFeeds);
+      enqueue("cycle_new_articles", MetricUnit.Count, e.newArticles);
+      enqueue("cycle_failed_feeds", MetricUnit.Count, e.failedFeeds);
+      enqueue("cycle_checked_feeds", MetricUnit.Count, e.checkedFeeds);
     },
 
     recordCycleError(e: CycleErrorEvent) {
-      emit("cycle_error", MetricUnit.Count, 1, {
+      enqueue("cycle_error", MetricUnit.Count, 1, {
         error: e.error.slice(0, 128),
       });
     },
 
     recordFetchError(e: FetchErrorEvent) {
-      emit("feed_fetch_error", MetricUnit.Count, 1, {
+      enqueue("feed_fetch_error", MetricUnit.Count, 1, {
         feedId: e.feedId,
         httpStatus: String(e.httpStatus),
       });
+    },
+
+    async flush(): Promise<void> {
+      if (pending.length === 0) return;
+      const entries = pending.splice(0);
+      await backend.write(entries, METRIC_CONTEXT);
     },
   };
 }
@@ -167,4 +174,5 @@ const noopMetrics: MetricsApi = {
   recordCycle: () => {},
   recordCycleError: () => {},
   recordFetchError: () => {},
+  flush: () => Promise.resolve(),
 };
