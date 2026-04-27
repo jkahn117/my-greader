@@ -5,13 +5,14 @@ import { createLogger } from "../lib/logger";
 import { tracer } from "../lib/tracer";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
+import { extractReadableContent } from "../lib/readability";
 import { feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
-const ERROR_THRESHOLD = 5;           // consecutive failures before a feed is deactivated
+const ERROR_THRESHOLD = 5; // consecutive failures before a feed is deactivated
 const MIN_INTERVAL_MINUTES = 30;
-const MAX_INTERVAL_MINUTES = 240;    // 4 hours — cap on our own backoff
-const MAX_TTL_MINUTES = 1440;        // 24 hours — sanity cap on feed-supplied TTL hints
+const MAX_INTERVAL_MINUTES = 240; // 4 hours — cap on our own backoff
+const MAX_TTL_MINUTES = 1440; // 24 hours — sanity cap on feed-supplied TTL hints
 const BACKOFF_MULTIPLIER = 2;
 
 export type FeedResult =
@@ -80,7 +81,10 @@ async function fetchAndStoreFeedInner(
   span: import("@workers-powertools/tracer").SpanContext,
 ): Promise<FeedResult> {
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
-  const metrics = createMetrics(env.METRICS_PIPELINE, env.ANALYTICS_ENABLED !== "false");
+  const metrics = createMetrics(
+    env.METRICS_PIPELINE,
+    env.ANALYTICS_ENABLED !== "false",
+  );
   const db = getDb(env.DB);
   const feedTitle = feed.title ?? feed.feedUrl;
 
@@ -125,7 +129,10 @@ async function fetchAndStoreFeedInner(
 
   if (response.status === 304) {
     // Feed unchanged — back off
-    const newInterval = Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
+    const newInterval = Math.min(
+      feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
+      MAX_INTERVAL_MINUTES,
+    );
     await db
       .update(feeds)
       .set({ lastFetchedAt: Date.now(), checkIntervalMinutes: newInterval })
@@ -137,7 +144,10 @@ async function fetchAndStoreFeedInner(
     // Rate limited — back off without counting as a consecutive error.
     // Respects Retry-After header (seconds or HTTP-date) when present.
     const retryAfter = response.headers.get("Retry-After");
-    let backoffMinutes = Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
+    let backoffMinutes = Math.min(
+      feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
+      MAX_INTERVAL_MINUTES,
+    );
     if (retryAfter) {
       const seconds = parseInt(retryAfter, 10);
       if (!isNaN(seconds)) {
@@ -145,7 +155,10 @@ async function fetchAndStoreFeedInner(
       } else {
         const retryMs = new Date(retryAfter).getTime();
         if (!isNaN(retryMs)) {
-          backoffMinutes = Math.max(Math.ceil((retryMs - Date.now()) / 60_000), backoffMinutes);
+          backoffMinutes = Math.max(
+            Math.ceil((retryMs - Date.now()) / 60_000),
+            backoffMinutes,
+          );
         }
       }
     }
@@ -175,7 +188,9 @@ async function fetchAndStoreFeedInner(
   }
 
   const xml = await response.text();
-  const parser = new Parser();
+  const parser = new Parser({
+    customFields: { item: [["content:encoded", "contentEncoded"]] },
+  });
   let parsed;
 
   try {
@@ -201,7 +216,8 @@ async function fetchAndStoreFeedInner(
   const now = Date.now();
   const itemRows = (
     await Promise.all(
-      (parsed.items ?? []).map(async (item) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (parsed.items ?? []).map(async (item: any) => {
         const guid = item.guid ?? item.link;
         if (!guid) return null;
         return {
@@ -209,10 +225,22 @@ async function fetchAndStoreFeedInner(
           feedId: feed.id,
           title: item.title ?? null,
           url: item.link ?? null,
-          content: trimContent(
-            item.content ?? item["content:encoded"] ?? item.summary ?? item.contentSnippet ?? "",
-            MAX_CONTENT_BYTES,
-          ),
+          content: (() => {
+            const raw = [
+              item.content,
+              item.contentEncoded,
+              item.summary,
+              item.contentSnippet,
+            ]
+              .filter(Boolean)
+              .reduce<string>(
+                (best, c) => (c.length > best.length ? c : best),
+                "",
+              );
+            const cleaned =
+              raw.length > 500 ? (extractReadableContent(raw) ?? raw) : raw;
+            return trimContent(cleaned, MAX_CONTENT_BYTES);
+          })(),
           author: item.creator ?? item.author ?? null,
           publishedAt: item.isoDate ? new Date(item.isoDate).getTime() : now,
           fetchedAt: now,
@@ -224,7 +252,9 @@ async function fetchAndStoreFeedInner(
   // Insert all items in a single D1 batch — one subrequest regardless of count
   let newItems = 0;
   if (itemRows.length > 0) {
-    const stmts = itemRows.map((row) => db.insert(items).values(row).onConflictDoNothing());
+    const stmts = itemRows.map((row) =>
+      db.insert(items).values(row).onConflictDoNothing(),
+    );
     // db.batch requires a non-empty tuple — cast needed due to Drizzle's strict overload
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const batchResults = await db.batch(stmts as unknown as [any, ...any[]]);
@@ -236,9 +266,13 @@ async function fetchAndStoreFeedInner(
   const feedTtlMinutes = parsed.ttl
     ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
     : 0;
-  const backoffInterval = newItems > 0
-    ? MIN_INTERVAL_MINUTES
-    : Math.min(feed.checkIntervalMinutes * BACKOFF_MULTIPLIER, MAX_INTERVAL_MINUTES);
+  const backoffInterval =
+    newItems > 0
+      ? MIN_INTERVAL_MINUTES
+      : Math.min(
+          feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
+          MAX_INTERVAL_MINUTES,
+        );
   const newInterval = Math.max(backoffInterval, feedTtlMinutes);
 
   await db

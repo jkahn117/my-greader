@@ -14,6 +14,7 @@
     "studio": "drizzle-kit studio --config drizzle.local.config.ts"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@workers-powertools/logger": "^0.1.1",
     "@workers-powertools/metrics": "^0.1.0",
     "@workers-powertools/tracer": "^0.1.1",
@@ -21,6 +22,7 @@
     "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.7.2",
     "hono": "^4.12.15",
+    "linkedom": "^0.18.12",
     "rss-parser": "^3.13.0",
     "vitest": "^4.1.5",
     "zod": "^4.3.6"
