@@ -147,7 +147,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     path: "/reader/api/0/subscription/edit",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.METRICS_PIPELINE);
+  const metrics = createMetrics(c.env.METRICS_PIPELINE, c.env.ANALYTICS_ENABLED !== "false");
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 

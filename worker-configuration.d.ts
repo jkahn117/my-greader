@@ -13,9 +13,11 @@ declare namespace Cloudflare {
 		ITEM_RETENTION_DAYS: "30";
 		CF_ACCOUNT_ID: "0fd0283d83ecc1b5c563c57c91893694";
 		DISPLAY_TIMEZONE: "America/Chicago";
+		ANALYTICS_ENABLED: "true" | "false";
 		CF_ACCESS_AUD: string;
 		DEV_MODE: string;
 		CF_API_TOKEN: string;
+		R2_SQL_AUTH_TOKEN?: string;
 		FEED_POLLING_WORKFLOW: Workflow<Parameters<import("./src/index").FeedPollingWorkflow['run']>[0]['payload']>;
 	}
 }
@@ -24,7 +26,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ITEM_RETENTION_DAYS" | "CF_ACCOUNT_ID" | "DISPLAY_TIMEZONE" | "CF_ACCESS_AUD" | "DEV_MODE" | "CF_API_TOKEN">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "ITEM_RETENTION_DAYS" | "CF_ACCOUNT_ID" | "DISPLAY_TIMEZONE" | "ANALYTICS_ENABLED" | "CF_ACCESS_AUD" | "DEV_MODE" | "CF_API_TOKEN">> {}
 }
 
 // Begin runtime types

@@ -24,14 +24,49 @@ export interface FeedHealthRow {
   consecutiveErrors: number;
   lastError: string | null;
   lastFetchedAt: number | null;
+  lastNewItemAt: number | null;
   deactivatedAt: number | null;
   checkIntervalMinutes: number;
   rateLimited: boolean;
 }
 
+export interface FeedActivityRow {
+  feedId: string;
+  title: string;
+  count7d: number;
+  lastNewItemAt: number | null;
+}
+
 export interface ReadsByDay {
   date: string;
   reads: number;
+}
+
+// R2 SQL analytics types — populated when ANALYTICS_ENABLED and R2_SQL_AUTH_TOKEN are set
+export interface R2FeedVelocityRow {
+  feedId: string;
+  title: string;
+  total30d: number;
+  avgPerFetch: number;
+}
+
+export interface R2FetchPerfRow {
+  feedId: string;
+  title: string;
+  samples: number;
+  avgMs: number;
+  maxMs: number;
+}
+
+export interface R2ErrorRateRow {
+  httpStatus: string;
+  occurrences: number;
+  affectedFeeds: number;
+}
+
+export interface R2ArticleTrendRow {
+  day: string;
+  newArticles: number;
 }
 
 interface IntervalDistRow {
@@ -45,8 +80,15 @@ interface StatusData {
   totalArticles: number;
   newArticles7d: number;
   feedHealth: FeedHealthRow[];
+  feedActivity: FeedActivityRow[];
   readsByDay: ReadsByDay[];
   tz: string;
+  // R2 SQL analytics — empty arrays when analytics disabled
+  analyticsEnabled: boolean;
+  r2Velocity: R2FeedVelocityRow[];
+  r2FetchPerf: R2FetchPerfRow[];
+  r2ErrorRates: R2ErrorRateRow[];
+  r2Trend30d: R2ArticleTrendRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -81,8 +123,8 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
     );
   }
 
-  // Show most-recent-first; compute aggregate stats over visible window
-  const recent = cycles.slice(0, 20);
+  // Show most-recent-first; compute aggregate stats over visible window (~24h)
+  const recent = cycles.slice(0, 48);
   const maxNew = Math.max(...recent.map((c) => c.newItems), 1);
   const totalNew7d = recent.reduce((s, c) => s + c.newItems, 0);
   const avgNew = (totalNew7d / recent.length).toFixed(1);
@@ -227,6 +269,7 @@ function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Status</th>
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last error</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last new item</th>
               <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last fetched</th>
             </tr>
           </thead>
@@ -254,6 +297,9 @@ function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
                 <td class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64" title={r.lastError ?? undefined}>
                   {r.lastError ?? "—"}
                 </td>
+                <td class="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
+                  {r.lastNewItemAt ? relativeTime(r.lastNewItemAt) : "—"}
+                </td>
                 <td class="py-3 text-right text-muted-foreground whitespace-nowrap">
                   {relativeTime(r.lastFetchedAt)}
                 </td>
@@ -267,34 +313,101 @@ function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Reads by day — from item_state.read_at
+// Reads by day — bar chart from item_state.read_at
 // ---------------------------------------------------------------------------
 
 function ReadsByDayCard({ rows }: { rows: ReadsByDay[] }) {
   if (rows.length === 0) return null;
+  // rows arrive newest-first; reverse for left-to-right chronological display
+  const ordered = [...rows].reverse();
+  const maxReads = Math.max(...ordered.map((r) => r.reads), 1);
+  const total = ordered.reduce((s, r) => s + r.reads, 0);
+
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-semibold text-foreground">
+            Reads by day{" "}
+            <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          </h2>
+          <p class="mt-0.5 text-xs text-muted-foreground">{total} articles read</p>
+        </div>
+      </div>
+      <div class="px-6 py-4">
+        <div class="flex items-end gap-1 h-24 w-full">
+          {ordered.map((r) => {
+            const pct = Math.max((r.reads / maxReads) * 100, r.reads > 0 ? 4 : 0);
+            return (
+              <div
+                class="flex-1 min-w-0 flex flex-col items-center gap-1"
+                title={`${r.date}: ${r.reads} read`}
+              >
+                <div class="w-full rounded-t bg-primary" style={`height:${pct * 0.96}px; min-height:${r.reads > 0 ? "3px" : "0"}`} />
+              </div>
+            );
+          })}
+        </div>
+        <div class="flex justify-between mt-2 text-xs text-muted-foreground">
+          {ordered.map((r) => (
+            <span class="flex-1 text-center">{r.date.slice(5)}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Feed activity — top publishers in the last 7 days (D1)
+// ---------------------------------------------------------------------------
+
+function FeedActivityCard({ rows }: { rows: FeedActivityRow[] }) {
+  if (rows.length === 0) return null;
+  const maxCount = Math.max(...rows.map((r) => r.count7d), 1);
+
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
-          Reads by day{" "}
-          <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          Feed activity{" "}
+          <span class="text-muted-foreground font-normal text-sm">(new articles, last 7 days)</span>
         </h2>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Date</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Articles read</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">New (7d)</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last item</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr class="border-b border-border last:border-0">
-                <td class="py-3 pr-4 text-foreground">{r.date}</td>
-                <td class="py-3 text-right text-foreground font-medium">{r.reads}</td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const pct = maxCount > 0 ? Math.round((r.count7d / maxCount) * 100) : 0;
+              return (
+                <tr class="border-b border-border last:border-0">
+                  <td class="py-2.5 pr-4 text-foreground max-w-0 w-full">
+                    <div class="truncate font-medium" title={r.feedId}>{r.title}</div>
+                    {/* inline sparkbar showing relative volume */}
+                    <div class="mt-1 h-1 w-full rounded-full bg-muted overflow-hidden">
+                      <div class="h-full rounded-full bg-primary/50" style={`width:${pct}%`} />
+                    </div>
+                  </td>
+                  <td class="py-2.5 pr-4 text-right font-medium text-foreground whitespace-nowrap">
+                    {r.count7d > 0 ? (
+                      <span class="text-primary">+{r.count7d}</span>
+                    ) : (
+                      <span class="text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td class="py-2.5 text-right text-muted-foreground whitespace-nowrap">
+                    {r.lastNewItemAt ? relativeTime(r.lastNewItemAt) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -353,6 +466,192 @@ function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// R2 SQL analytics cards
+// ---------------------------------------------------------------------------
+
+function R2SectionHeader({ children }: { children: string }) {
+  return (
+    <div class="flex items-center gap-3">
+      <div class="h-px flex-1 bg-border" />
+      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+        {children}
+      </p>
+      <div class="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function R2VelocityCard({ rows }: { rows: R2FeedVelocityRow[] }) {
+  if (rows.length === 0) return null;
+  const max = Math.max(...rows.map((r) => r.total30d), 1);
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Feed velocity{" "}
+          <span class="text-muted-foreground font-normal text-sm">(new articles, last 30 days)</span>
+        </h2>
+        <p class="mt-0.5 text-xs text-muted-foreground">From pipeline analytics — top publishers by volume</p>
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Total (30d)</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Avg / fetch</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const pct = Math.round((r.total30d / max) * 100);
+              return (
+                <tr class="border-b border-border last:border-0">
+                  <td class="py-2.5 pr-4 text-foreground max-w-0 w-full">
+                    <div class="truncate font-medium" title={r.feedId}>{r.title}</div>
+                    <div class="mt-1 h-1 w-full rounded-full bg-muted overflow-hidden">
+                      <div class="h-full rounded-full bg-primary/50" style={`width:${pct}%`} />
+                    </div>
+                  </td>
+                  <td class="py-2.5 pr-4 text-right font-medium text-primary whitespace-nowrap">+{r.total30d}</td>
+                  <td class="py-2.5 text-right text-muted-foreground whitespace-nowrap">{r.avgPerFetch}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function R2FetchPerfCard({ rows }: { rows: R2FetchPerfRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Fetch performance{" "}
+          <span class="text-muted-foreground font-normal text-sm">(slowest feeds, last 7 days)</span>
+        </h2>
+        <p class="mt-0.5 text-xs text-muted-foreground">Feeds consistently above ~5 s may have slow servers or large payloads</p>
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Samples</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Avg</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const avgClass = r.avgMs > 5000
+                ? "text-destructive font-medium"
+                : r.avgMs > 2000
+                  ? "text-yellow-700 font-medium"
+                  : "text-muted-foreground";
+              return (
+                <tr class="border-b border-border last:border-0">
+                  <td class="py-2.5 pr-4 font-medium text-foreground truncate max-w-64" title={r.feedId}>
+                    {r.title}
+                  </td>
+                  <td class="py-2.5 pr-4 text-right text-muted-foreground">{r.samples}</td>
+                  <td class={`py-2.5 pr-4 text-right ${avgClass}`}>{(r.avgMs / 1000).toFixed(1)} s</td>
+                  <td class="py-2.5 text-right text-muted-foreground">{(r.maxMs / 1000).toFixed(1)} s</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function R2ErrorRatesCard({ rows }: { rows: R2ErrorRateRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4">
+        <h2 class="text-base font-semibold text-foreground">
+          Fetch errors by status{" "}
+          <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+        </h2>
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Status</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Occurrences</th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Feeds affected</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const statusClass = r.httpStatus === "429"
+                ? "text-orange-700 font-semibold"
+                : r.httpStatus.startsWith("4")
+                  ? "text-destructive font-semibold"
+                  : "text-yellow-700 font-semibold";
+              return (
+                <tr class="border-b border-border last:border-0">
+                  <td class={`py-2.5 pr-4 font-mono ${statusClass}`}>HTTP {r.httpStatus}</td>
+                  <td class="py-2.5 pr-4 text-right text-foreground font-medium">{r.occurrences}</td>
+                  <td class="py-2.5 text-right text-muted-foreground">{r.affectedFeeds}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function R2ArticleTrendCard({ rows }: { rows: R2ArticleTrendRow[] }) {
+  if (rows.length === 0) return null;
+  // rows arrive newest-first; reverse for left-to-right display
+  const ordered = [...rows].reverse();
+  const maxArticles = Math.max(...ordered.map((r) => r.newArticles), 1);
+  const total = ordered.reduce((s, r) => s + r.newArticles, 0);
+  return (
+    <div class="rounded-lg border border-border bg-card shadow-sm">
+      <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-semibold text-foreground">
+            New articles per day{" "}
+            <span class="text-muted-foreground font-normal text-sm">(last 30 days)</span>
+          </h2>
+          <p class="mt-0.5 text-xs text-muted-foreground">{total.toLocaleString()} articles total</p>
+        </div>
+      </div>
+      <div class="px-6 py-4">
+        <div class="flex items-end gap-px h-24 w-full">
+          {ordered.map((r) => {
+            const pct = Math.max((r.newArticles / maxArticles) * 100, r.newArticles > 0 ? 2 : 0);
+            return (
+              <div
+                class="flex-1 min-w-0 rounded-t bg-primary/70"
+                style={`height:${pct}%`}
+                title={`${r.day}: ${r.newArticles} articles`}
+              />
+            );
+          })}
+        </div>
+        <div class="flex justify-between mt-1 text-xs text-muted-foreground">
+          <span>{ordered[0]?.day.slice(5) ?? ""}</span>
+          <span>→ {ordered[ordered.length - 1]?.day.slice(5) ?? ""}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Unconfigured placeholder
 // ---------------------------------------------------------------------------
 
@@ -398,9 +697,23 @@ export function MetricsTab({ data }: { data: StatusData }) {
       </div>
 
       <CycleTimelineCard cycles={data.cycles} />
+      <FeedActivityCard rows={data.feedActivity} />
       <FeedHealthCard rows={data.feedHealth} />
       <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
+
+      {/* R2 SQL analytics section — only rendered when ANALYTICS_ENABLED + token set */}
+      {data.analyticsEnabled && (
+        data.r2Trend30d.length > 0 || data.r2Velocity.length > 0 || data.r2FetchPerf.length > 0 || data.r2ErrorRates.length > 0
+      ) && (
+        <>
+          <R2SectionHeader>Pipeline analytics (30-day)</R2SectionHeader>
+          <R2ArticleTrendCard rows={data.r2Trend30d} />
+          <R2VelocityCard rows={data.r2Velocity} />
+          <R2FetchPerfCard rows={data.r2FetchPerf} />
+          <R2ErrorRatesCard rows={data.r2ErrorRates} />
+        </>
+      )}
     </div>
   );
 }

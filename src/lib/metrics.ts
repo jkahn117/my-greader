@@ -80,11 +80,13 @@ interface MetricsApi {
   flush(): Promise<void>;
 }
 
+// enabled defaults to true; pass false when ANALYTICS_ENABLED === "false"
 export function createMetrics(
   pipelineBinding: PipelineBinding | undefined,
+  enabled = true,
 ): MetricsApi {
-  if (!pipelineBinding) {
-    // No Pipeline binding in dev — all methods are no-ops
+  if (!pipelineBinding || !enabled) {
+    // No Pipeline binding in dev, or analytics explicitly disabled — all no-ops
     return noopMetrics;
   }
 

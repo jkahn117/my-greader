@@ -80,7 +80,7 @@ async function fetchAndStoreFeedInner(
   span: import("@workers-powertools/tracer").SpanContext,
 ): Promise<FeedResult> {
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
-  const metrics = createMetrics(env.METRICS_PIPELINE);
+  const metrics = createMetrics(env.METRICS_PIPELINE, env.ANALYTICS_ENABLED !== "false");
   const db = getDb(env.DB);
   const feedTitle = feed.title ?? feed.feedUrl;
 

@@ -100,7 +100,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
       try {
         using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
-        const metrics = createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]);
+        const metrics = createMetrics(
+          metricsPipeline as unknown as Env["METRICS_PIPELINE"],
+          this.env.ANALYTICS_ENABLED !== "false",
+        );
         metrics.recordCycleError({ error: errorMessage });
         await metrics.flush();
       } catch {
@@ -204,7 +207,11 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           try {
             using d1 = asDisposable(this.env.DB);
             using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
-            const stepEnv = { DB: d1, METRICS_PIPELINE: metricsPipeline } as unknown as Env;
+            const stepEnv = {
+              DB: d1,
+              METRICS_PIPELINE: metricsPipeline,
+              ANALYTICS_ENABLED: this.env.ANALYTICS_ENABLED,
+            } as unknown as Env;
 
             const settled = await Promise.allSettled(
               batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
@@ -258,7 +265,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         using d1 = asDisposable(this.env.DB);
         using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
         const db = getDb(d1);
-        const metrics = createMetrics(metricsPipeline as unknown as Env["METRICS_PIPELINE"]);
+        const metrics = createMetrics(
+          metricsPipeline as unknown as Env["METRICS_PIPELINE"],
+          this.env.ANALYTICS_ENABLED !== "false",
+        );
         const now = Date.now();
 
         // Write per-cycle row to D1 so the metrics dashboard can query it

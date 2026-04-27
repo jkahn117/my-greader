@@ -33,10 +33,13 @@
     // Cloudflare account ID
     "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694",
     // IANA timezone for the metrics dashboard (e.g. "America/New_York"). Defaults to UTC if unset.
-    "DISPLAY_TIMEZONE": "America/Chicago"
+    "DISPLAY_TIMEZONE": "America/Chicago",
+    // Set to "false" to disable all Pipeline metric writes and R2 SQL analytics queries.
+    "ANALYTICS_ENABLED": "true"
   },
   // Secrets — set via: wrangler secret put <NAME>
-  // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
+  // CF_ACCESS_AUD      — Cloudflare Access audience tag (JWT verification)
+  // R2_SQL_AUTH_TOKEN  — R2 SQL API token (R2 Storage + Data Catalog + R2 SQL Read permissions)
   // Metrics are written to a Cloudflare Pipeline → R2/Iceberg for long-term analytics.
   // Create with: wrangler pipelines create rss_reader_metrics (see README step 4c)
   // The dashboard queries D1 directly; Pipeline data is for external analytics tools.
