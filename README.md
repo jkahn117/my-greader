@@ -140,6 +140,8 @@ pnpm wrangler d1 migrations apply rss-reader --local   # local dev
 pnpm wrangler d1 migrations apply rss-reader --remote  # production
 
 # 3. Set required secrets
+#    To find CF_ACCESS_AUD: Zero Trust → Access → Applications → your management UI app
+#    → Settings → scroll to "Application Audience (AUD) Tag" — a 64-char hex string
 wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verification)
 
 # 4. Create an R2 bucket and enable the Data Catalog (required for R2 SQL)
@@ -181,14 +183,14 @@ Access must protect the management UI while allowing GReader clients to reach th
 **App 1 — GReader API bypass** (create this first)
 
 1. Zero Trust → Access → Applications → Add → **Self-hosted**
-2. Domain: `reader.iamjkahn.com`, path: `/api/greader.php/*`
+2. Domain: `myreader.example.com`, path: `/api/greader.php/*`
 3. Policy: **Action = Bypass**, Include = **Everyone**
    > Action must be Bypass — Allow still redirects API calls to the login page
 
 **App 2 — Management UI** (catch-all)
 
 1. Add another Self-hosted application
-2. Domain: `reader.iamjkahn.com` (no path — catches everything else)
+2. Domain: `myreader.example.com` (no path — catches everything else)
 3. Policy: **Action = Allow**, Include = **Emails** → your email address
 4. Copy the **Audience Tag** → `wrangler secret put CF_ACCESS_AUD`
 

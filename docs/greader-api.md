@@ -129,6 +129,7 @@ s=feed/<feed-id>          — specific feed
 s=user/-/state/com.google/reading-list  — all items
 n=20                      — number of items (default 20)
 xt=user/-/state/com.google/read  — exclude read items
+ot=<unix-timestamp>       — only return items newer than this (seconds)
 c=<continuation-token>    — pagination
 ```
 
@@ -229,7 +230,17 @@ const itemId = await hashId(item.guid ?? item.url);
 
 ### Continuation tokens
 
-For pagination, use a base64-encoded timestamp or offset. Keep it simple — a base64 of the oldest item's `published_at` in the current page is sufficient.
+Tokens are a URL-safe base64 encoding of a compound cursor `"<publishedAt>:<itemId>"`.
+The compound key prevents items from being skipped or duplicated when multiple articles share
+the same `published_at` timestamp (a common occurrence for bulk imports). The WHERE clause
+for the next page is:
+
+```sql
+WHERE (published_at < cursor.publishedAt)
+   OR (published_at = cursor.publishedAt AND id < cursor.itemId)
+```
+
+Legacy single-timestamp tokens (from older deployments) are decoded as a fallback.
 
 ### Token validation middleware
 
