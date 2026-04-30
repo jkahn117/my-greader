@@ -37,9 +37,10 @@ export async function tokenMiddleware(c: Context, next: Next) {
     .where(and(eq(apiTokens.tokenHash, hash), isNull(apiTokens.revokedAt)))
     .get();
 
+  if (!tokenRow) return c.text("Unauthorized", 401);
+
   if (
-    tokenRow &&
-    (!tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000)
+    !tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000
   ) {
     await db
       .update(apiTokens)
@@ -47,7 +48,7 @@ export async function tokenMiddleware(c: Context, next: Next) {
       .where(eq(apiTokens.id, tokenRow.id));
   }
 
-  c.set("userId", tokenRow?.userId);
-  c.set("email", tokenRow?.email);
+  c.set("userId", tokenRow.userId);
+  c.set("email", tokenRow.email);
   await next();
 }
