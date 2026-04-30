@@ -92,9 +92,6 @@ handler.post("/import", async (c) => {
         imported++;
         newFeedRows.push(feed);
       }
-
-      imported++;
-      newFeedRows.push(feed);
     } catch (err) {
       logger.error("error importing feed", {
         feedUrl: parsed.feedUrl,
