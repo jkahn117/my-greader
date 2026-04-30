@@ -14,6 +14,7 @@ const MIN_INTERVAL_MINUTES = 30;
 const MAX_INTERVAL_MINUTES = 240; // 4 hours — cap on our own backoff
 const MAX_TTL_MINUTES = 1440; // 24 hours — sanity cap on feed-supplied TTL hints
 const BACKOFF_MULTIPLIER = 2;
+const FETCH_TIMEOUT_MS = 15_000; // 15s — prevents a hanging feed from blocking the workflow step
 
 export type FeedResult =
   | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
@@ -125,7 +126,21 @@ async function fetchAndStoreFeedInner(
   if (feed.etag) headers["If-None-Match"] = feed.etag;
   if (feed.lastModified) headers["If-Modified-Since"] = feed.lastModified;
 
-  const response = await fetch(feed.feedUrl, { headers });
+  let response: Response;
+  try {
+    response = await fetch(feed.feedUrl, {
+      headers,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+    const errorMessage = isTimeout
+      ? `fetch timed out after ${FETCH_TIMEOUT_MS}ms`
+      : `fetch failed: ${err instanceof Error ? err.message : String(err)}`;
+    logger.warn("feed fetch failed", { error: errorMessage });
+    await recordError(errorMessage);
+    return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
+  }
 
   if (response.status === 304) {
     // Feed unchanged — back off
