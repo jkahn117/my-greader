@@ -2,11 +2,7 @@ import { z } from "zod";
 import { toGreaderItemId } from "../../lib/crypto";
 import type { items, feeds } from "../../db/schema";
 
-// ---------------------------------------------------------------------------
-// Shared context variable type (set by middleware)
-// ---------------------------------------------------------------------------
-
-export type Variables = { userId: string; email: string };
+export type { Variables } from "../../types/context";
 
 // ---------------------------------------------------------------------------
 // Shared item → GReader response mapper

@@ -9,7 +9,7 @@ import { selectUserSubscriptions } from "../db/queries";
 import { ImportResult } from "../views/import";
 import { SubscriptionListContent } from "../views/feeds";
 
-type Variables = { userId: string; email: string };
+import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
