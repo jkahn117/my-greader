@@ -11,7 +11,10 @@ export default defineConfig(async () => {
         wrangler: { configPath: './wrangler.jsonc' },
         miniflare: {
           // Pass migrations to the Workers runtime so setup.ts can apply them
-          bindings: { TEST_MIGRATIONS: JSON.stringify(migrations) },
+          bindings: {
+            TEST_MIGRATIONS: JSON.stringify(migrations),
+            DEV_MODE: "true",
+          },
         },
       }),
     ],
