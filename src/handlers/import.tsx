@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { parseOpml } from "../lib/opml";
 import { fetchAndStoreFeed, triggerFeedPollingWorkflow } from "./cron";
 import { feeds, subscriptions } from "../db/schema";
+import { selectUserSubscriptions } from "../db/queries";
 import { ImportResult } from "../views/import";
 import { SubscriptionListContent } from "../views/feeds";
 
@@ -113,25 +114,7 @@ handler.post("/import", async (c) => {
   }
 
   // Re-query the updated subscription list for OOB swap
-  const updatedSubs = await db
-    .select({
-      id: subscriptions.id,
-      feedId: feeds.id,
-      title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-      feedUrl: feeds.feedUrl,
-      htmlUrl: feeds.htmlUrl,
-      folder: subscriptions.folder,
-      lastFetchedAt: feeds.lastFetchedAt,
-      consecutiveErrors: feeds.consecutiveErrors,
-      lastError: feeds.lastError,
-      deactivatedAt: feeds.deactivatedAt,
-      checkIntervalMinutes: feeds.checkIntervalMinutes,
-      lastNewItemAt: feeds.lastNewItemAt,
-    })
-    .from(subscriptions)
-    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-    .where(eq(subscriptions.userId, userId))
-    .orderBy(asc(sql`coalesce(${subscriptions.title}, ${feeds.title})`));
+  const updatedSubs = await selectUserSubscriptions(db, userId);
 
   // Return the import summary + OOB update that refreshes the subscription table
   return c.html(
