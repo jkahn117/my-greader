@@ -262,17 +262,18 @@ describe('fetchAndStoreFeed', () => {
 // ---------------------------------------------------------------------------
 
 describe('fetchAndStoreFeed error handling', () => {
-  it('throws on network error (Workflow step retries)', async () => {
-    // Network errors propagate out — the Workflow step retry mechanism handles them.
-    // Only HTTP-level errors (non-OK responses) are caught and returned as FeedResult.
+  it('returns error result on network error', async () => {
+    // Network errors (including timeouts) are caught and returned as a
+    // FeedResult with status "error" so the Workflow can continue.
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('Network error')))
     const feedId = await seedFeed('https://bad.example.com/feed.xml', 'Bad Feed')
 
-    await expect(fetchAndStoreFeed(
+    const result = await fetchAndStoreFeed(
       { id: feedId, feedUrl: 'https://bad.example.com/feed.xml', title: null,
         htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30, lastNewItemAt: null },
       env,
-    )).rejects.toThrow('Network error')
+    )
+    expect(result.status).toBe('error')
   })
 })
 
