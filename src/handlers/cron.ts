@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import { eq, isNotNull, lte } from "drizzle-orm";
+import { eq, lte } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { tracer } from "../lib/tracer";
