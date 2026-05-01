@@ -21,7 +21,7 @@ interface AccessJwtPayload {
   exp: number;
 }
 
-// Hardcoded dev identity — matches the token middleware Phase 2 constants
+// Hardcoded dev identity — used when Cloudflare Access is not configured
 export const DEV_USER_ID = "dev-user-id";
 export const DEV_USER_EMAIL = "dev@localhost";
 

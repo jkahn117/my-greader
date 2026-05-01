@@ -24,7 +24,7 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 app.use('*', observabilityMiddleware)
 
 // ---------------------------------------------------------------------------
-// GReader API (hardcoded token auth — replaced with D1 lookup in Phase 8)
+// GReader API — token auth via D1 lookup (see middleware/token.ts)
 // ---------------------------------------------------------------------------
 
 // /reader/* requires token auth; /accounts/ClientLogin does not (it IS the auth entry point)
