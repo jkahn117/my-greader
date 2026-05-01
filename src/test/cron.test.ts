@@ -262,7 +262,7 @@ describe('fetchAndStoreFeed', () => {
 // ---------------------------------------------------------------------------
 
 describe('fetchAndStoreFeed error handling', () => {
-  it('returns error result on network error', async () => {
+  it("returns error result on network error", async () => {
     // Network errors (including timeouts) are caught and returned as a
     // FeedResult with status "error" so the Workflow can continue.
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('Network error')))
@@ -272,8 +272,8 @@ describe('fetchAndStoreFeed error handling', () => {
       { id: feedId, feedUrl: 'https://bad.example.com/feed.xml', title: null,
         htmlUrl: null, etag: null, lastModified: null, lastFetchedAt: null, consecutiveErrors: 0, checkIntervalMinutes: 30, lastNewItemAt: null },
       env,
-    )
-    expect(result.status).toBe('error')
+    );
+    expect(result.status).toBe("error");
   })
 })
 
