@@ -138,9 +138,11 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
     feedId = feed.id;
   }
 
-  // Single INSERT...SELECT — no IDs loaded into memory regardless of item count.
-  // Drizzle doesn't support INSERT...SELECT natively, so we use the raw D1 API.
-  // Only inserts rows for items that are currently unread (LEFT JOIN filter).
+  // Raw SQL rationale: mark-all-as-read must update an unbounded number of
+  // rows in a single D1 round-trip. A server-side INSERT...SELECT avoids
+  // loading item IDs into Worker memory. Drizzle ORM doesn't support
+  // INSERT...SELECT, so we drop to the raw D1 prepared-statement API here.
+  // The LEFT JOIN filter ensures only unread items are touched.
   let insertSql: string;
   const params: (string | number)[] = [];
 
