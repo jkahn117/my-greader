@@ -63,6 +63,18 @@
       "pattern": "reader.iamjkahn.com"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      // Unique namespace within the Cloudflare account
+      "namespace_id": "1001",
+      // 5 login attempts per 60 seconds per IP
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ],
   "workers_dev": false,
   "r2_buckets": [
     {
