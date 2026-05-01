@@ -8,7 +8,7 @@ import { apiTokens } from '../db/schema'
 import { App } from '../views/app'
 import { AccessTab, TokenList, TokenReveal } from '../views/access'
 
-type Variables = { userId: string; email: string }
+import type { Variables } from '../types/context'
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>()
 

@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-// ---------------------------------------------------------------------------
-// Shared context variable type (set by middleware)
-// ---------------------------------------------------------------------------
-
-export type Variables = { userId: string; email: string };
+export type { Variables } from "../../types/context";
 
 // ---------------------------------------------------------------------------
 // Stream ID parsing

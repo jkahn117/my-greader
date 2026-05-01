@@ -7,7 +7,7 @@ import { triggerFeedPollingWorkflow } from "./cron";
 import { App } from "../views/app";
 import { FeedRow, FeedTab } from "../views/feeds";
 
-type Variables = { userId: string; email: string };
+import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 

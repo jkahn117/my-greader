@@ -18,7 +18,7 @@ import {
   MetricsUnconfigured,
 } from "../views/metrics";
 
-type Variables = { userId: string; email: string };
+import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
