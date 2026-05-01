@@ -1,10 +1,54 @@
 import { z } from "zod";
+import { toGreaderItemId } from "../../lib/crypto";
+import type { items, feeds } from "../../db/schema";
 
 // ---------------------------------------------------------------------------
 // Shared context variable type (set by middleware)
 // ---------------------------------------------------------------------------
 
 export type Variables = { userId: string; email: string };
+
+// ---------------------------------------------------------------------------
+// Shared item → GReader response mapper
+// ---------------------------------------------------------------------------
+
+// Row shape returned by the stream queries (items + feeds + item_state join)
+export type ItemRow = {
+  item: typeof items.$inferSelect;
+  feedId: string;
+  feedTitle: string | null;
+  htmlUrl: string | null;
+  isRead: number | null;
+  isStarred: number | null;
+};
+
+/** Maps a joined item row to the GReader JSON item format */
+export function toGReaderItem(r: ItemRow) {
+  const categories = ["user/-/state/com.google/reading-list"];
+  if (r.isRead) categories.push("user/-/state/com.google/read");
+  if (r.isStarred) categories.push("user/-/state/com.google/starred");
+
+  const publishedSec = r.item.publishedAt
+    ? Math.floor(r.item.publishedAt / 1000)
+    : 0;
+
+  return {
+    id: toGreaderItemId(r.item.id),
+    title: r.item.title ?? "",
+    canonical: [{ href: r.item.url ?? "" }],
+    alternate: [{ href: r.item.url ?? "", type: "text/html" }],
+    summary: { content: r.item.content ?? "" },
+    author: r.item.author ?? "",
+    published: publishedSec,
+    updated: publishedSec,
+    origin: {
+      streamId: `feed/${r.feedId}`,
+      title: r.feedTitle ?? "",
+      htmlUrl: r.htmlUrl ?? "",
+    },
+    categories,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Stream ID parsing
