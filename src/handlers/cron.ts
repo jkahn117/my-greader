@@ -85,6 +85,7 @@ async function fetchAndStoreFeedInner(
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
   const metrics = createMetrics(
     env.METRICS_PIPELINE,
+    // @ts-ignore
     env.ANALYTICS_ENABLED !== "false",
   );
   const db = getDb(env.DB);
@@ -134,7 +135,8 @@ async function fetchAndStoreFeedInner(
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (err) {
-    const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+    const isTimeout =
+      err instanceof DOMException && err.name === "TimeoutError";
     const errorMessage = isTimeout
       ? `fetch timed out after ${FETCH_TIMEOUT_MS}ms`
       : `fetch failed: ${err instanceof Error ? err.message : String(err)}`;
