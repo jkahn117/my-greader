@@ -15,6 +15,7 @@ import {
   parseStreamId,
   streamContentsSchema,
   streamIdsSchema,
+  toGReaderItem,
 } from "./helpers";
 import type { Variables } from "./helpers";
 
@@ -152,29 +153,7 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
 
   return c.json({
     id: s,
-    items: page.map((r) => {
-      const categories = ["user/-/state/com.google/reading-list"];
-      if (r.isRead) categories.push("user/-/state/com.google/read");
-      if (r.isStarred) categories.push("user/-/state/com.google/starred");
-
-      return {
-        id: toGreaderItemId(r.item.id),
-        title: r.item.title ?? "",
-        canonical: [{ href: r.item.url ?? "" }],
-        summary: { content: r.item.content ?? "" },
-        author: r.item.author ?? "",
-        published: r.item.publishedAt
-          ? Math.floor(r.item.publishedAt / 1000)
-          : 0,
-        updated: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
-        origin: {
-          streamId: `feed/${r.feedId}`,
-          title: r.feedTitle ?? "",
-          htmlUrl: r.htmlUrl ?? "",
-        },
-        categories,
-      };
-    }),
+    items: page.map(toGReaderItem),
     ...(continuation ? { continuation } : {}),
   });
 });
@@ -296,30 +275,7 @@ async function handleStreamItemsContents(c: HonoCtx) {
 
   return c.json({
     id: "user/-/state/com.google/reading-list",
-    items: rows.map((r) => {
-      const categories = ["user/-/state/com.google/reading-list"];
-      if (r.isRead) categories.push("user/-/state/com.google/read");
-      if (r.isStarred) categories.push("user/-/state/com.google/starred");
-
-      return {
-        id: toGreaderItemId(r.item.id),
-        title: r.item.title ?? "",
-        canonical: [{ href: r.item.url ?? "" }],
-        alternate: [{ href: r.item.url ?? "", type: "text/html" }],
-        summary: { content: r.item.content ?? "" },
-        author: r.item.author ?? "",
-        published: r.item.publishedAt
-          ? Math.floor(r.item.publishedAt / 1000)
-          : 0,
-        updated: r.item.publishedAt ? Math.floor(r.item.publishedAt / 1000) : 0,
-        origin: {
-          streamId: `feed/${r.feedId}`,
-          title: r.feedTitle ?? "",
-          htmlUrl: r.htmlUrl ?? "",
-        },
-        categories,
-      };
-    }),
+    items: rows.map(toGReaderItem),
   });
 }
 
