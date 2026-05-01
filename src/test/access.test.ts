@@ -32,7 +32,7 @@ beforeEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Dev mode bypass (DEV_MODE=true in .dev.vars)
+// Dev mode bypass (DEV_MODE=true in vitest.config.ts)
 // ---------------------------------------------------------------------------
 
 describe("Access middleware (dev mode)", () => {

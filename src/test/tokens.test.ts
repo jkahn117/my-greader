@@ -1,6 +1,6 @@
 // Token management UI handler tests.
 // Tests run against the real Worker + in-memory D1 via @cloudflare/vitest-pool-workers.
-// Access middleware is bypassed via DEV_MODE=true (set in .dev.vars).
+// Access middleware is bypassed via DEV_MODE=true (set in vitest.config.ts).
 
 import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
