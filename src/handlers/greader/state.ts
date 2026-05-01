@@ -73,16 +73,21 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     for (const row of rows) feedIdByItemId.set(row.id, row.feedId);
   }
 
-  for (const itemId of itemIds) {
-    await db
+  // Batch all upserts into a single D1 round-trip instead of N individual calls
+  const stmts = itemIds.map((itemId) =>
+    db
       .insert(itemState)
       .values({ itemId, userId, isRead: 0, isStarred: 0, ...fullUpdates })
       .onConflictDoUpdate({
         target: [itemState.itemId, itemState.userId],
         set: fullUpdates,
-      });
+      })
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await db.batch(stmts as unknown as [any, ...any[]]);
 
-    if (updates.isRead === 1) {
+  if (updates.isRead === 1) {
+    for (const itemId of itemIds) {
       const feedId = feedIdByItemId.get(itemId) ?? "";
       metrics.recordRead({ userId, articleId: itemId, feedId });
     }
