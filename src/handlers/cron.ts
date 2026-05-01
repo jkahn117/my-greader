@@ -1,12 +1,12 @@
 import Parser from "rss-parser";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull, lte } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { tracer } from "../lib/tracer";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
-import { feeds, items } from "../db/schema";
+import { apiTokens, feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
 const ERROR_THRESHOLD = 5; // consecutive failures before a feed is deactivated
@@ -33,6 +33,7 @@ export async function scheduled(
     case "*/30 * * * *":
       return triggerFeedPollingWorkflow(env);
     case "0 3 * * 1":
+      await purgeRevokedTokens(env);
       return purgeOldItems(env);
     default:
       createLogger().warn("unknown cron schedule", { cron: event.cron });
@@ -343,6 +344,27 @@ export async function purgeOldItems(env: Env): Promise<void> {
     cutoff: new Date(cutoffMs).toISOString(),
     statesDeleted: stateResult.meta.changes,
     itemsDeleted: itemResult.meta.changes,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Revoked token cleanup — runs as part of the weekly cron
+// ---------------------------------------------------------------------------
+
+const TOKEN_RETENTION_DAYS = 7; // keep revoked tokens for 7 days before deleting
+
+async function purgeRevokedTokens(env: Env): Promise<void> {
+  const logger = createLogger({ cron: "purgeRevokedTokens" });
+  const db = getDb(env.DB);
+  const cutoffMs = Date.now() - TOKEN_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+  const result = await db
+    .delete(apiTokens)
+    .where(lte(apiTokens.revokedAt, cutoffMs));
+
+  logger.info("purged revoked tokens", {
+    cutoff: new Date(cutoffMs).toISOString(),
+    deleted: result.meta.changes,
   });
 }
 
