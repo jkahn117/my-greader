@@ -25,6 +25,16 @@ export const clientLoginSchema = z.object({
 auth.post("/accounts/ClientLogin", async (c) => {
   const logger = createLogger({ path: "/accounts/ClientLogin" });
 
+  // Rate limit by client IP — 5 attempts per 60s (see wrangler.jsonc)
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (c.env.LOGIN_RATE_LIMITER) {
+    const { success } = await c.env.LOGIN_RATE_LIMITER.limit({ key: ip });
+    if (!success) {
+      logger.warn("ClientLogin rate limited", { ip });
+      return c.text("Rate limited", 429);
+    }
+  }
+
   const body = await c.req.parseBody();
   const parsed = clientLoginSchema.safeParse(body);
 
