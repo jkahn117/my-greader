@@ -15,9 +15,9 @@
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
-    "@workers-powertools/logger": "^0.1.1",
-    "@workers-powertools/metrics": "^0.1.0",
-    "@workers-powertools/tracer": "^0.1.1",
+    "@workers-powertools/hono": "^0.4.0",
+    "@workers-powertools/logger": "^0.2.0",
+    "@workers-powertools/metrics": "^0.4.0",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.7.2",

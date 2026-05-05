@@ -11,15 +11,15 @@ importers:
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
+      '@workers-powertools/hono':
+        specifier: ^0.4.0
+        version: 0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.1.1)(hono@4.12.16)
       '@workers-powertools/logger':
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: ^0.2.0
+        version: 0.2.0
       '@workers-powertools/metrics':
-        specifier: ^0.1.0
-        version: 0.1.0
-      '@workers-powertools/tracer':
-        specifier: ^0.1.1
-        version: 0.1.1
+        specifier: ^0.4.0
+        version: 0.4.0
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
@@ -1396,17 +1396,30 @@ packages:
   '@vitest/utils@4.1.5':
     resolution: {integrity: sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug==}
 
-  '@workers-powertools/commons@0.1.0':
-    resolution: {integrity: sha512-s8weRxqelaFLWGPjVZ4IMLP98zO7G6ZJHSeVxrFJp+dqkpgYR02igcMHpiuzJVe0EkBsxxflsGXaJZBNthK7IQ==}
-
   '@workers-powertools/commons@0.1.1':
     resolution: {integrity: sha512-ek0xqu9yYn5nupCywBSrw0+EDVY+lFzj2SY9PuGGrNjSgj7UUwKg8qCKOqDkJq4gDA5FPzptreA4YXxauvRT+Q==}
 
-  '@workers-powertools/logger@0.1.1':
-    resolution: {integrity: sha512-tpodDQ5rKH6H+mFUzGxH/doyEdNWkLVDS+1V9gZ1neCKlhynZLafYEVK3XdpI2RSDorz+cctd/ZWp5hvCQcvYA==}
+  '@workers-powertools/commons@0.2.0':
+    resolution: {integrity: sha512-iBea7HuhzrQEti6kESHBzVxc0wEu086bBgqfotGskTc04+R5rk5Ou+IjdqXb4etfHQmDJXsInf+oq89Buo+ICA==}
 
-  '@workers-powertools/metrics@0.1.0':
-    resolution: {integrity: sha512-FfkRZxd0bDIjlkXfYnnB3iIoYDHGv45ef9j/FL0k9Y5aI4IIuIyPmRG08KpxZoVlo30suBC+YsNLcvcjZf/CUw==}
+  '@workers-powertools/hono@0.4.0':
+    resolution: {integrity: sha512-36qg1Ft4Rk+07MRs+F4vDzNU4qZxK2AYKjIB2qlChpgx/hOtzr2FJ0AGoxGIoY07BeWSpROzqBdVhOt11emAlA==}
+    peerDependencies:
+      '@workers-powertools/commons': '>=0.2.0'
+      '@workers-powertools/idempotency': '>=0.2.0'
+      '@workers-powertools/logger': '>=0.2.0'
+      '@workers-powertools/metrics': '>=0.4.0'
+      '@workers-powertools/tracer': '>=0.2.0'
+      hono: ^4.12.16
+
+  '@workers-powertools/idempotency@0.2.0':
+    resolution: {integrity: sha512-c5QHhdAc3gw/blG1vcPGfPJukHq+zgcpzoe2N15MvjfW3eWBlrGIZTY5OoTr6lpT3cy2kPDunVsTgDaX+nce3w==}
+
+  '@workers-powertools/logger@0.2.0':
+    resolution: {integrity: sha512-dFzjmpiRbz6B1ya3tOyVqJHJIlK5/YkNBhZwdXVlxHT+p7J1P1394EoRX0s9pfKIyZpzpMUBL3a3mlMe1sN+pw==}
+
+  '@workers-powertools/metrics@0.4.0':
+    resolution: {integrity: sha512-S9DUbbr67VnrxwhloAJ7xVp0WHnvqwXkYRzRmzGsBtHEKWRH3cyNtw40AlnKv/D1H27XlyGPxRmVl9LSPORxaQ==}
 
   '@workers-powertools/tracer@0.1.1':
     resolution: {integrity: sha512-FuyfqBZ5BmqFZsLjqxqDuEZhBRwmOwrvlKujm9xsI7dXlC6BKl8Oa4FMdbW8DPladfUBZ7PfI+JczpMNBvOBxA==}
@@ -3039,17 +3052,30 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@workers-powertools/commons@0.1.0': {}
-
   '@workers-powertools/commons@0.1.1': {}
 
-  '@workers-powertools/logger@0.1.1':
-    dependencies:
-      '@workers-powertools/commons': 0.1.1
+  '@workers-powertools/commons@0.2.0': {}
 
-  '@workers-powertools/metrics@0.1.0':
+  '@workers-powertools/hono@0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.1.1)(hono@4.12.16)':
     dependencies:
-      '@workers-powertools/commons': 0.1.0
+      '@workers-powertools/commons': 0.2.0
+      '@workers-powertools/idempotency': 0.2.0
+      '@workers-powertools/logger': 0.2.0
+      '@workers-powertools/metrics': 0.4.0
+      '@workers-powertools/tracer': 0.1.1
+      hono: 4.12.16
+
+  '@workers-powertools/idempotency@0.2.0':
+    dependencies:
+      '@workers-powertools/commons': 0.2.0
+
+  '@workers-powertools/logger@0.2.0':
+    dependencies:
+      '@workers-powertools/commons': 0.2.0
+
+  '@workers-powertools/metrics@0.4.0':
+    dependencies:
+      '@workers-powertools/commons': 0.2.0
 
   '@workers-powertools/tracer@0.1.1':
     dependencies:
