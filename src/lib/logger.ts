@@ -8,14 +8,14 @@
 //   log.info("something happened", { extra: "context" });
 //
 // The module-level `logger` instance is enriched per-request by the
-// observability middleware (logger.addContext). All child loggers created
+// injectLogger middleware (via observability.ts). Correlation IDs are
+// extracted from request headers automatically. All child loggers created
 // via createLogger() snapshot the parent's persistent keys and include the
-// current correlation ID from the tracer automatically.
+// current correlation ID.
 
 import { Logger } from "@workers-powertools/logger";
-import { tracer } from "./tracer";
 
-// Module-level singleton — enriched with request context by observability middleware
+// Module-level singleton — enriched with request context by injectLogger middleware
 export const logger = new Logger({
   serviceName: "my-greader",
   // Buffer logs below INFO; flush everything if an error or critical is emitted.
@@ -26,12 +26,12 @@ export const logger = new Logger({
 
 /**
  * Returns a child logger pre-tagged with the given context fields plus the
- * current correlation ID from the tracer (if one is active for this request).
+ * current correlation ID (extracted by the injectLogger middleware).
  *
  * Drop-in replacement for all createLogger(ctx) call sites.
  */
 export function createLogger(ctx: Record<string, unknown> = {}): Logger {
-  const correlationId = tracer.getCorrelationId();
+  const correlationId = logger.getCorrelationId();
   return logger.child(correlationId ? { correlationId, ...ctx } : ctx);
 }
 
