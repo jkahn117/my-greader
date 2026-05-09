@@ -96,9 +96,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       logger.error("feed polling workflow failed", { error: errorMessage, stack });
 
       try {
-        using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+        using analytics = asDisposable(this.env.ANALYTICS);
         const metrics = createMetrics(
-          metricsPipeline as unknown as Env["METRICS_PIPELINE"],
+          analytics as unknown as Env["ANALYTICS"],
           this.env.ANALYTICS_ENABLED !== "false",
         );
         metrics.recordCycleError({ error: errorMessage });
@@ -198,10 +198,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
           try {
             using d1 = asDisposable(this.env.DB);
-            using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+            using analytics = asDisposable(this.env.ANALYTICS);
             const stepEnv = {
               DB: d1,
-              METRICS_PIPELINE: metricsPipeline,
+              ANALYTICS: analytics,
               ANALYTICS_ENABLED: this.env.ANALYTICS_ENABLED,
             } as unknown as Env;
 
@@ -253,10 +253,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     await step.do("record-cycle", async () => {
       try {
         using d1 = asDisposable(this.env.DB);
-        using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
+        using analytics = asDisposable(this.env.ANALYTICS);
         const db = getDb(d1);
         const metrics = createMetrics(
-          metricsPipeline as unknown as Env["METRICS_PIPELINE"],
+          analytics as unknown as Env["ANALYTICS"],
           this.env.ANALYTICS_ENABLED !== "false",
         );
         const now = Date.now();
