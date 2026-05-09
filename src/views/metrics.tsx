@@ -42,15 +42,15 @@ export interface ReadsByDay {
   reads: number;
 }
 
-// R2 SQL analytics types — populated when ANALYTICS_ENABLED and R2_SQL_AUTH_TOKEN are set
-export interface R2FeedVelocityRow {
+// Analytics Engine SQL types — populated when ANALYTICS_ENABLED and CF_API_TOKEN are set
+export interface FeedVelocityRow {
   feedId: string;
   title: string;
   total30d: number;
   avgPerFetch: number;
 }
 
-export interface R2FetchPerfRow {
+export interface FetchPerfRow {
   feedId: string;
   title: string;
   samples: number;
@@ -58,13 +58,13 @@ export interface R2FetchPerfRow {
   maxMs: number;
 }
 
-export interface R2ErrorRateRow {
+export interface ErrorRateRow {
   httpStatus: string;
   occurrences: number;
   affectedFeeds: number;
 }
 
-export interface R2ArticleTrendRow {
+export interface ArticleTrendRow {
   day: string;
   newArticles: number;
 }
@@ -83,12 +83,12 @@ interface StatusData {
   feedActivity: FeedActivityRow[];
   readsByDay: ReadsByDay[];
   tz: string;
-  // R2 SQL analytics — empty arrays when analytics disabled
+  // Analytics Engine SQL — empty arrays when analytics disabled
   analyticsEnabled: boolean;
-  r2Velocity: R2FeedVelocityRow[];
-  r2FetchPerf: R2FetchPerfRow[];
-  r2ErrorRates: R2ErrorRateRow[];
-  r2Trend30d: R2ArticleTrendRow[];
+  feedVelocity: FeedVelocityRow[];
+  fetchPerf: FetchPerfRow[];
+  errorRates: ErrorRateRow[];
+  trend30d: ArticleTrendRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -466,10 +466,10 @@ function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// R2 SQL analytics cards
+// Analytics Engine cards
 // ---------------------------------------------------------------------------
 
-function R2SectionHeader({ children }: { children: string }) {
+function AnalyticsSectionHeader({ children }: { children: string }) {
   return (
     <div class="flex items-center gap-3">
       <div class="h-px flex-1 bg-border" />
@@ -481,7 +481,7 @@ function R2SectionHeader({ children }: { children: string }) {
   );
 }
 
-function R2VelocityCard({ rows }: { rows: R2FeedVelocityRow[] }) {
+function FeedVelocityCard({ rows }: { rows: FeedVelocityRow[] }) {
   if (rows.length === 0) return null;
   const max = Math.max(...rows.map((r) => r.total30d), 1);
   return (
@@ -491,7 +491,7 @@ function R2VelocityCard({ rows }: { rows: R2FeedVelocityRow[] }) {
           Feed velocity{" "}
           <span class="text-muted-foreground font-normal text-sm">(new articles, last 30 days)</span>
         </h2>
-        <p class="mt-0.5 text-xs text-muted-foreground">From pipeline analytics — top publishers by volume</p>
+        <p class="mt-0.5 text-xs text-muted-foreground">From Analytics Engine — top publishers by volume</p>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
@@ -525,7 +525,7 @@ function R2VelocityCard({ rows }: { rows: R2FeedVelocityRow[] }) {
   );
 }
 
-function R2FetchPerfCard({ rows }: { rows: R2FetchPerfRow[] }) {
+function FetchPerfCard({ rows }: { rows: FetchPerfRow[] }) {
   if (rows.length === 0) return null;
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
@@ -571,7 +571,7 @@ function R2FetchPerfCard({ rows }: { rows: R2FetchPerfRow[] }) {
   );
 }
 
-function R2ErrorRatesCard({ rows }: { rows: R2ErrorRateRow[] }) {
+function ErrorRatesCard({ rows }: { rows: ErrorRateRow[] }) {
   if (rows.length === 0) return null;
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
@@ -612,7 +612,7 @@ function R2ErrorRatesCard({ rows }: { rows: R2ErrorRateRow[] }) {
   );
 }
 
-function R2ArticleTrendCard({ rows }: { rows: R2ArticleTrendRow[] }) {
+function ArticleTrendCard({ rows }: { rows: ArticleTrendRow[] }) {
   if (rows.length === 0) return null;
   // rows arrive newest-first; reverse for left-to-right display
   const ordered = [...rows].reverse();
@@ -702,16 +702,16 @@ export function MetricsTab({ data }: { data: StatusData }) {
       <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
 
-      {/* R2 SQL analytics section — only rendered when ANALYTICS_ENABLED + token set */}
+      {/* Analytics Engine section — only rendered when ANALYTICS_ENABLED + CF_API_TOKEN set */}
       {data.analyticsEnabled && (
-        data.r2Trend30d.length > 0 || data.r2Velocity.length > 0 || data.r2FetchPerf.length > 0 || data.r2ErrorRates.length > 0
+        data.trend30d.length > 0 || data.feedVelocity.length > 0 || data.fetchPerf.length > 0 || data.errorRates.length > 0
       ) && (
         <>
-          <R2SectionHeader>Pipeline analytics (30-day)</R2SectionHeader>
-          <R2ArticleTrendCard rows={data.r2Trend30d} />
-          <R2VelocityCard rows={data.r2Velocity} />
-          <R2FetchPerfCard rows={data.r2FetchPerf} />
-          <R2ErrorRatesCard rows={data.r2ErrorRates} />
+          <AnalyticsSectionHeader>Analytics Engine (30-day)</AnalyticsSectionHeader>
+          <ArticleTrendCard rows={data.trend30d} />
+          <FeedVelocityCard rows={data.feedVelocity} />
+          <FetchPerfCard rows={data.fetchPerf} />
+          <ErrorRatesCard rows={data.errorRates} />
         </>
       )}
     </div>
