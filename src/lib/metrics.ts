@@ -12,7 +12,8 @@
 // The dashboard does NOT query Pipeline data (it's in R2/Iceberg). Cycle
 // history and feed health are queried directly from D1 instead.
 
-import { MetricUnit, PipelinesBackend, type MetricContext, type MetricEntry, type PipelineBinding } from "@workers-powertools/metrics";
+import { MetricUnit, type MetricContext, type MetricEntry } from "@workers-powertools/metrics";
+import { PipelinesBackend, type PipelineBinding } from "@workers-powertools/metrics/pipelines";
 
 export enum ParseStatus {
   SUCCESS = "success",

@@ -2,7 +2,6 @@ import Parser from "rss-parser";
 import { eq, lte } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { tracer } from "../lib/tracer";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
@@ -69,20 +68,9 @@ export async function fetchAndStoreFeed(
   },
   env: Env,
 ): Promise<FeedResult> {
-  // captureAsync wraps the full operation in a named span with timing and error
-  // capture. The span is emitted as a structured log entry visible in Logpush.
-  return tracer.captureAsync("fetchAndStoreFeed", async (span) => {
-    span.annotations.feedId = feed.id;
-    return fetchAndStoreFeedInner(feed, env, span);
-  });
-}
-
-async function fetchAndStoreFeedInner(
-  feed: Parameters<typeof fetchAndStoreFeed>[0],
-  env: Env,
-  span: import("@workers-powertools/tracer").SpanContext,
-): Promise<FeedResult> {
   const logger = createLogger({ feedId: feed.id, feedUrl: feed.feedUrl });
+  const event = logger.createEvent("fetchAndStoreFeed");
+  event.set({ feedId: feed.id });
   const metrics = createMetrics(
     env.METRICS_PIPELINE,
     // @ts-ignore
@@ -91,8 +79,7 @@ async function fetchAndStoreFeedInner(
   const db = getDb(env.DB);
   const feedTitle = feed.title ?? feed.feedUrl;
 
-  // Tag span with feed metadata for filtering in observability tools
-  span.annotations.feedTitle = feedTitle;
+  event.set({ feedTitle });
 
   const start = performance.now();
 
@@ -141,6 +128,8 @@ async function fetchAndStoreFeedInner(
       ? `fetch timed out after ${FETCH_TIMEOUT_MS}ms`
       : `fetch failed: ${err instanceof Error ? err.message : String(err)}`;
     logger.warn("feed fetch failed", { error: errorMessage });
+    event.set({ status: "error", error: errorMessage });
+    event.emit();
     await recordError(errorMessage);
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
@@ -155,6 +144,8 @@ async function fetchAndStoreFeedInner(
       .update(feeds)
       .set({ lastFetchedAt: Date.now(), checkIntervalMinutes: newInterval })
       .where(eq(feeds.id, feed.id));
+    event.set({ status: "not_modified", newInterval });
+    event.emit();
     return { feedId: feed.id, feedTitle, status: "not_modified" };
   }
 
@@ -192,6 +183,8 @@ async function fetchAndStoreFeedInner(
         // consecutiveErrors intentionally not incremented — rate limits are transient
       })
       .where(eq(feeds.id, feed.id));
+    event.set({ status: "error", httpStatus: 429, backoffMinutes });
+    event.emit();
     await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
   }
@@ -199,6 +192,8 @@ async function fetchAndStoreFeedInner(
   if (!response.ok) {
     const errorMessage = `HTTP ${response.status}`;
     logger.warn("feed returned non-OK status", { status: response.status });
+    event.set({ status: "error", httpStatus: response.status });
+    event.emit();
     metrics.recordFetchError({ feedId: feed.id, httpStatus: response.status });
     await recordError(errorMessage);
     await metrics.flush();
@@ -221,6 +216,8 @@ async function fetchAndStoreFeedInner(
       durationMs: performance.now() - start,
       error: errorMessage,
     });
+    event.set({ status: "error", parseStatus: ParseStatus.FAILURE, error: errorMessage });
+    event.emit();
     await recordError(errorMessage);
     await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
@@ -315,6 +312,9 @@ async function fetchAndStoreFeedInner(
     articleCount: newItems,
   });
   await metrics.flush();
+
+  event.set({ status: "ok", newItems, parseStatus: ParseStatus.SUCCESS });
+  event.emit();
 
   return { feedId: feed.id, feedTitle, status: "ok", newItems };
 }

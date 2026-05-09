@@ -2,7 +2,6 @@ import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from "cloudflare:work
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
-import { tracer } from "../lib/tracer";
 import { createMetrics } from "../lib/metrics";
 import { feeds, subscriptions, cycleRuns } from "../db/schema";
 import { fetchAndStoreFeed, FeedResult } from "../handlers/cron";
@@ -79,12 +78,10 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
-    // Use the Workflow instance ID as the correlation ID so all spans and
-    // metrics emitted during this run are linkable across steps.
-    tracer.setCorrelationId(event.instanceId);
     // withRpcContext enriches all log entries for this Workflow run with the
-    // agent name and instance ID (no Request object is available in Workflows).
+    // correlation ID, agent name, and instance ID (no Request is available).
     using _ctx = logger.withRpcContext({
+      correlationId: event.instanceId,
       agent: "FeedPollingWorkflow",
       instanceId: event.instanceId,
     });
@@ -121,7 +118,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // ------------------------------------------------------------------
 
     const { dueFeeds, totalActiveFeeds } = await step.do("get-due-feeds", async () => {
-      return tracer.captureAsync("get-due-feeds", async () => {
       try {
         using d1 = asDisposable(this.env.DB);
         const db = getDb(d1);
@@ -175,7 +171,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         });
         throw err;
       }
-      }); // captureAsync
     });
 
     logger.info("feed polling cycle starting", {
@@ -201,9 +196,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batchIndex = Math.floor(i / FEEDS_PER_STEP);
 
       const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
-        return tracer.captureAsync("fetch-batch", async (span) => {
-          span.annotations.batchIndex = String(batchIndex);
-          span.annotations.batchSize = String(batch.length);
           try {
             using d1 = asDisposable(this.env.DB);
             using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
@@ -235,7 +227,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             });
             throw err;
           }
-        }); // captureAsync
       });
 
       for (const r of batchResults) {
@@ -260,7 +251,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     await step.do("record-cycle", async () => {
-      return tracer.captureAsync("record-cycle", async () => {
       try {
         using d1 = asDisposable(this.env.DB);
         using metricsPipeline = asDisposable(this.env.METRICS_PIPELINE);
@@ -308,7 +298,6 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         failedFeeds,
         feeds: detail,
       };
-      }); // captureAsync
     });
 
     logger.info("feed polling cycle complete", {
