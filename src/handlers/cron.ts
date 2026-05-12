@@ -72,7 +72,7 @@ export async function fetchAndStoreFeed(
   const event = logger.createEvent("fetchAndStoreFeed");
   event.set({ feedId: feed.id });
   const metrics = createMetrics(
-    env.METRICS_PIPELINE,
+    env.ANALYTICS,
     // @ts-ignore
     env.ANALYTICS_ENABLED !== "false",
   );

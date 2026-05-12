@@ -1,19 +1,22 @@
 // Business metrics for Cloudflare Workers.
-// Backed by @workers-powertools/metrics + PipelinesBackend — writes named-field
-// JSON records to a Cloudflare Pipeline (→ R2/Iceberg) for long-term analytics.
+// Backed by @workers-powertools/metrics + AnalyticsEngineBackend — writes
+// fire-and-forget data points to Workers Analytics Engine.
+//
+// AE is a Cloudflare-managed store (no R2 accumulation). Data points are
+// written synchronously via writeDataPoint() and queryable via the AE SQL API.
 //
 // Usage:
-//   const metrics = createMetrics(env.METRICS_PIPELINE);
+//   const metrics = createMetrics(env.ANALYTICS);
 //   metrics.recordParse({ feedId, status: ParseStatus.SUCCESS, durationMs });
 //
 // createMetrics() is a per-call factory so concurrent Workflow steps each
 // get their own isolated instance — avoids dimension bleeding between feeds.
 //
-// The dashboard does NOT query Pipeline data (it's in R2/Iceberg). Cycle
-// history and feed health are queried directly from D1 instead.
+// The dashboard queries D1 directly for cycle history and feed health.
+// R2 SQL queries for historical Pipeline data are retained but deprecated.
 
 import { MetricUnit, type MetricContext, type MetricEntry } from "@workers-powertools/metrics";
-import { PipelinesBackend, type PipelineBinding } from "@workers-powertools/metrics/pipelines";
+import { AnalyticsEngineBackend } from "@workers-powertools/metrics/analytics-engine";
 
 export enum ParseStatus {
   SUCCESS = "success",
@@ -75,27 +78,28 @@ interface MetricsApi {
   recordCycle(e: CycleEvent): void;
   recordCycleError(e: CycleErrorEvent): void;
   recordFetchError(e: FetchErrorEvent): void;
-  // Flush all buffered entries to the Pipeline in a single write.
-  // Call at the end of each logical unit of work and register the returned
-  // promise with waitUntil() when an ExecutionContext is available.
+  // Flush all buffered entries via the Analytics Engine backend.
+  // AE writes are fire-and-forget (synchronous), so flush() completes
+  // immediately. Still call it to maintain the contract and allow
+  // future backend swaps.
   flush(): Promise<void>;
 }
 
 // enabled defaults to true; pass false when ANALYTICS_ENABLED === "false"
 export function createMetrics(
-  pipelineBinding: PipelineBinding | undefined,
+  analyticsBinding: AnalyticsEngineDataset | undefined,
   enabled = true,
 ): MetricsApi {
-  if (!pipelineBinding || !enabled) {
-    // No Pipeline binding in dev, or analytics explicitly disabled — all no-ops
+  if (!analyticsBinding || !enabled) {
+    // No AE binding in dev, or analytics explicitly disabled — all no-ops
     return noopMetrics;
   }
 
-  const backend = new PipelinesBackend({ binding: pipelineBinding });
+  const backend = new AnalyticsEngineBackend({ binding: analyticsBinding });
   const pending: MetricEntry[] = [];
 
   // Enqueues a metric entry — does NOT write immediately.
-  // Call flush() to send all pending entries in one backend.write().
+  // Call flush() to send all pending entries via the backend.
   function enqueue(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
     pending.push({
       name,
@@ -118,7 +122,6 @@ export function createMetrics(
         });
       }
       if (e.error) {
-        // Truncate error message to keep Pipeline record size bounded
         enqueue("feed_parse_failure", MetricUnit.Count, 1, {
           feedId: e.feedId,
           error: e.error.slice(0, 128),

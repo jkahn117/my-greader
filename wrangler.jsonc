@@ -34,19 +34,18 @@
     "CF_ACCOUNT_ID": "0fd0283d83ecc1b5c563c57c91893694",
     // IANA timezone for the metrics dashboard (e.g. "America/New_York"). Defaults to UTC if unset.
     "DISPLAY_TIMEZONE": "America/Chicago",
-    // Set to "false" to disable all Pipeline metric writes and R2 SQL analytics queries.
+    // Set to "false" to disable all Analytics Engine metric writes and AE SQL dashboard queries.
     "ANALYTICS_ENABLED": "true"
   },
   // Secrets — set via: wrangler secret put <NAME>
-  // CF_ACCESS_AUD      — Cloudflare Access audience tag (JWT verification)
-  // R2_SQL_AUTH_TOKEN  — R2 SQL API token (R2 Storage + Data Catalog + R2 SQL Read permissions)
-  // Metrics are written to a Cloudflare Pipeline → R2/Iceberg for long-term analytics.
-  // Create with: wrangler pipelines create rss_reader_metrics (see README step 4c)
-  // The dashboard queries D1 directly; Pipeline data is for external analytics tools.
-  "pipelines": [
+  // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
+  // CF_API_TOKEN   — Cloudflare API token (Account Analytics:Read) for AE SQL dashboard queries
+  // Metrics are written to Workers Analytics Engine (fire-and-forget, no R2 accumulation).
+  // The dashboard queries D1 directly; AE data supplements with aggregate time-series.
+  "analytics_engine_datasets": [
     {
-      "pipeline": "b84ed2b108414467aeea99376759a572",
-      "binding": "METRICS_PIPELINE"
+      "binding": "ANALYTICS",
+      "dataset": "rss_reader_metrics"
     }
   ],
   "workflows": [
@@ -75,11 +74,5 @@
       }
     }
   ],
-  "workers_dev": false,
-  "r2_buckets": [
-    {
-      "bucket_name": "rss-reader-metrics-store",
-      "binding": "rss_reader_metrics_store"
-    }
-  ]
+  "workers_dev": false
 }
