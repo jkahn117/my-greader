@@ -1,9 +1,12 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { feeds, subscriptions } from "../db/schema";
-import { subsSelection, selectUserSubscriptions } from "../db/queries";
+import { feeds } from "../db/schema";
+import {
+  createSubscriptionLifecycle,
+  type SubObserver,
+} from "../feed/subscriptions";
 import { triggerFeedPollingWorkflow } from "./cron";
 import { App } from "../views/app";
 import { FeedRow, FeedTab } from "../views/feeds";
@@ -19,10 +22,11 @@ const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 handler.get("/app/feeds", async (c) => {
   const userId = c.get("userId");
   const email = c.get("email");
-  const db = getDb(c.env.DB);
   const logger = createLogger({ path: "/app/feeds", userId });
 
-  const subs = await selectUserSubscriptions(db, userId);
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
+  const subs = await lifecycle.list(userId);
 
   logger.info("feed tab loaded", { subCount: subs.length });
 
@@ -38,7 +42,10 @@ handler.get("/app/feeds", async (c) => {
 // ---------------------------------------------------------------------------
 
 handler.post("/feeds/sync", async (c) => {
-  const logger = createLogger({ path: "/feeds/sync", userId: c.get("userId") });
+  const logger = createLogger({
+    path: "/feeds/sync",
+    userId: c.get("userId"),
+  });
   logger.info("manual sync triggered");
   // Trigger the Workflow — returns immediately, fetch runs asynchronously
   c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env));
@@ -60,13 +67,9 @@ handler.post("/feeds/:id/reactivate", async (c) => {
   const db = getDb(c.env.DB);
 
   // Verify the feed belongs to one of this user's subscriptions
-  const sub = await db
-    .select({ feedId: subscriptions.feedId })
-    .from(subscriptions)
-    .innerJoin(feeds, eq(feeds.id, subscriptions.feedId))
-    .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, id)))
-    .get();
-
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
+  const sub = await lifecycle.get(userId, id);
   if (!sub) return c.text("Not found", 404);
 
   await db
@@ -81,14 +84,7 @@ handler.post("/feeds/:id/reactivate", async (c) => {
 
   logger.info("feed reactivated", { feedId: id });
 
-  // Return updated row fragment for htmx swap
-  const updated = await db
-    .select(subsSelection)
-    .from(subscriptions)
-    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-    .where(eq(subscriptions.userId, userId))
-    .get();
-
+  const updated = await lifecycle.get(userId, id);
   if (!updated) return c.text("Not found", 404);
 
   return c.html(<FeedRow sub={updated} />);
@@ -104,13 +100,9 @@ handler.post("/feeds/:id/deactivate", async (c) => {
   const logger = createLogger({ path: `/feeds/${id}/deactivate`, userId });
   const db = getDb(c.env.DB);
 
-  // Verify the feed belongs to one of this user's subscriptions
-  const sub = await db
-    .select({ feedId: subscriptions.feedId })
-    .from(subscriptions)
-    .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, id)))
-    .get();
-
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
+  const sub = await lifecycle.get(userId, id);
   if (!sub) return c.text("Not found", 404);
 
   await db
@@ -120,13 +112,7 @@ handler.post("/feeds/:id/deactivate", async (c) => {
 
   logger.info("feed deactivated", { feedId: id });
 
-  const updated = await db
-    .select(subsSelection)
-    .from(subscriptions)
-    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-    .where(and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, id)))
-    .get();
-
+  const updated = await lifecycle.get(userId, id);
   if (!updated) return c.text("Not found", 404);
 
   return c.html(<FeedRow sub={updated} />);

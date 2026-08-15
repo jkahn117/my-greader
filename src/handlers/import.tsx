@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { parseOpml } from "../lib/opml";
 import { triggerFeedPollingWorkflow } from "./cron";
-import { feeds, subscriptions } from "../db/schema";
-import { selectUserSubscriptions } from "../db/queries";
+import {
+  createSubscriptionLifecycle,
+  type SubObserver,
+} from "../feed/subscriptions";
 import { ImportResult } from "../views/import";
 import { SubscriptionListContent } from "../views/feeds";
 
@@ -42,56 +42,27 @@ handler.post("/import", async (c) => {
     );
   }
 
-  const db = getDb(c.env.DB);
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
 
   let imported = 0;
   let duplicates = 0;
   const errors: string[] = [];
-  const newFeedRows: (typeof feeds.$inferSelect)[] = [];
+  let newFeeds = 0;
 
   for (const parsed of parsedList) {
     try {
-      // Upsert the canonical feed row (shared across all users)
-      await db
-        .insert(feeds)
-        .values({
-          id: crypto.randomUUID(),
-          feedUrl: parsed.feedUrl,
-          title: parsed.title,
-          htmlUrl: parsed.htmlUrl,
-        })
-        .onConflictDoNothing();
-
-      const feed = await db
-        .select()
-        .from(feeds)
-        .where(eq(feeds.feedUrl, parsed.feedUrl))
-        .get();
-
-      if (!feed) {
-        // Should not happen, but guards the type narrowing below
-        errors.push(parsed.feedUrl);
-        continue;
-      }
-
-      // Check for an existing subscription for this user + feed,
-      // create if one does not exist
-      const result = await db
-        .insert(subscriptions)
-        .values({
-          id: crypto.randomUUID(),
-          userId,
-          feedId: feed.id,
-          title: parsed.title,
-          folder: parsed.folder,
-        })
-        .onConflictDoNothing();
-
-      if (result.meta.changes === 0) {
-        duplicates++;
-      } else {
+      const result = await lifecycle.subscribe(userId, parsed.feedUrl, {
+        title: parsed.title ?? undefined,
+        folder: parsed.folder ?? undefined,
+        feedTitle: parsed.title ?? undefined,
+        feedHtmlUrl: parsed.htmlUrl ?? undefined,
+      });
+      if (result.created) {
         imported++;
-        newFeedRows.push(feed);
+        newFeeds++;
+      } else {
+        duplicates++;
       }
     } catch (err) {
       logger.error("error importing feed", {
@@ -109,12 +80,12 @@ handler.post("/import", async (c) => {
   });
 
   // Immediately fetch each newly added feed using workflow
-  if (newFeedRows.length > 0) {
+  if (newFeeds > 0) {
     c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env));
   }
 
   // Re-query the updated subscription list for OOB swap
-  const updatedSubs = await selectUserSubscriptions(db, userId);
+  const updatedSubs = await lifecycle.list(userId);
 
   // Return the import summary + OOB update that refreshes the subscription table
   return c.html(
