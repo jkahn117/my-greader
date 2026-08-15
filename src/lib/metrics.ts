@@ -25,6 +25,7 @@ import { AnalyticsEngineBackend } from "@workers-powertools/metrics/analytics-en
 export enum ParseStatus {
   SUCCESS = "success",
   FAILURE = "failure",
+  FALLBACK = "fallback", // parsed OK via lenient fallback parser
 }
 
 export interface ParseEvent {

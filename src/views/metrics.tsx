@@ -18,18 +18,6 @@ export interface CycleRun {
   failedFeeds: number;
 }
 
-export interface FeedHealthRow {
-  feedId: string;
-  title: string;
-  consecutiveErrors: number;
-  lastError: string | null;
-  lastFetchedAt: number | null;
-  lastNewItemAt: number | null;
-  deactivatedAt: number | null;
-  checkIntervalMinutes: number;
-  rateLimited: boolean;
-}
-
 export interface FeedActivityRow {
   feedId: string;
   title: string;
@@ -79,7 +67,6 @@ interface StatusData {
   intervalDist: IntervalDistRow[];
   totalArticles: number;
   newArticles7d: number;
-  feedHealth: FeedHealthRow[];
   feedActivity: FeedActivityRow[];
   readsByDay: ReadsByDay[];
   tz: string;
@@ -261,106 +248,6 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
                   ) : (
                     <span class="text-muted-foreground">—</span>
                   )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Feed health — error/rate-limited state from D1
-// ---------------------------------------------------------------------------
-
-function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
-  const erroring = rows.filter(
-    (r) => r.consecutiveErrors > 0 && !r.deactivatedAt,
-  );
-  const deactivated = rows.filter((r) => !!r.deactivatedAt);
-  const rateLimited = rows.filter((r) => r.rateLimited && !r.deactivatedAt);
-
-  if (erroring.length === 0 && deactivated.length === 0) return null;
-
-  return (
-    <div class="rounded-lg border border-destructive/40 bg-card shadow-sm">
-      <div class="border-b border-destructive/40 px-6 py-4 flex items-center gap-3 flex-wrap">
-        <h2 class="text-base font-semibold text-foreground">Feed health</h2>
-        {erroring.length > 0 && (
-          <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2.5 py-1 text-xs font-medium text-yellow-700">
-            {erroring.length} erroring
-          </span>
-        )}
-        {rateLimited.length > 0 && (
-          <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2.5 py-1 text-xs font-medium text-orange-700">
-            {rateLimited.length} rate limited
-          </span>
-        )}
-        {deactivated.length > 0 && (
-          <span class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
-            {deactivated.length} deactivated
-          </span>
-        )}
-      </div>
-      <div class="px-6 py-2">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Feed
-              </th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Status
-              </th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Last error
-              </th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                Last new item
-              </th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                Last fetched
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...erroring, ...deactivated].map((r) => (
-              <tr class="border-b border-border last:border-0">
-                <td
-                  class="py-3 pr-4 font-medium text-foreground truncate max-w-48"
-                  title={r.feedId}
-                >
-                  {r.title}
-                </td>
-                <td class="py-3 pr-4 whitespace-nowrap">
-                  {r.deactivatedAt ? (
-                    <span class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-                      Deactivated
-                    </span>
-                  ) : r.rateLimited ? (
-                    <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700">
-                      Rate limited
-                    </span>
-                  ) : (
-                    <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-700">
-                      {r.consecutiveErrors} error
-                      {r.consecutiveErrors !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                </td>
-                <td
-                  class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64"
-                  title={r.lastError ?? undefined}
-                >
-                  {r.lastError ?? "—"}
-                </td>
-                <td class="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
-                  {r.lastNewItemAt ? relativeTime(r.lastNewItemAt) : "—"}
-                </td>
-                <td class="py-3 text-right text-muted-foreground whitespace-nowrap">
-                  {relativeTime(r.lastFetchedAt)}
                 </td>
               </tr>
             ))}
@@ -861,7 +748,6 @@ export function MetricsTab({ data }: { data: StatusData }) {
 
       <CycleTimelineCard cycles={data.cycles} />
       <FeedActivityCard rows={data.feedActivity} />
-      <FeedHealthCard rows={data.feedHealth} />
       <PollIntervalDistCard rows={data.intervalDist} />
       <ReadsByDayCard rows={data.readsByDay} />
 

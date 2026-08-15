@@ -14,7 +14,6 @@ import { App } from "../views/app";
 import {
   type CycleRun,
   type FeedActivityRow,
-  type FeedHealthRow,
   type ReadsByDay,
   type FeedVelocityRow,
   type FetchPerfRow,
@@ -67,7 +66,6 @@ handler.get("/app/metrics", async (c) => {
         intervalDistRows,
         totalItemsRow,
         newItemsRow,
-        feedHealthRows,
         readsByDayRows,
         feedActivityRows,
       ],
@@ -99,26 +97,6 @@ handler.get("/app/metrics", async (c) => {
           .select({ count: sql<number>`count(*)` })
           .from(items)
           .where(gt(items.fetchedAt, cutoffMs)),
-
-        // Feed health: all subscribed feeds with their error state
-        db
-          .select({
-            feedId: feeds.id,
-            title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
-            consecutiveErrors: feeds.consecutiveErrors,
-            lastError: feeds.lastError,
-            lastFetchedAt: feeds.lastFetchedAt,
-            lastNewItemAt: feeds.lastNewItemAt,
-            deactivatedAt: feeds.deactivatedAt,
-            checkIntervalMinutes: feeds.checkIntervalMinutes,
-          })
-          .from(subscriptions)
-          .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-          .where(eq(subscriptions.userId, userId))
-          .orderBy(
-            desc(feeds.consecutiveErrors),
-            asc(sql`coalesce(${subscriptions.title}, ${feeds.title})`),
-          ),
 
         // Reads per day (last 7 days) from item_state.read_at
         db
@@ -257,18 +235,6 @@ handler.get("/app/metrics", async (c) => {
     const totalArticles = Number(totalItemsRow[0]?.count ?? 0);
     const newArticles7d = Number(newItemsRow[0]?.count ?? 0);
 
-    const feedHealth: FeedHealthRow[] = feedHealthRows.map((r) => ({
-      feedId: r.feedId,
-      title: r.title,
-      consecutiveErrors: r.consecutiveErrors,
-      lastError: r.lastError ?? null,
-      lastFetchedAt: r.lastFetchedAt,
-      lastNewItemAt: r.lastNewItemAt ?? null,
-      deactivatedAt: r.deactivatedAt ?? null,
-      checkIntervalMinutes: r.checkIntervalMinutes,
-      rateLimited: (r.lastError ?? "").includes("rate limited"),
-    }));
-
     const readsByDay: ReadsByDay[] = readsByDayRows.map((r) => ({
       date: String(r.date ?? ""),
       reads: Number(r.reads ?? 0),
@@ -281,11 +247,9 @@ handler.get("/app/metrics", async (c) => {
       lastNewItemAt: r.lastNewItemAt ?? null,
     }));
 
-    // Build a feedId → title lookup from D1 data so R2 rows can resolve names
+    // Build a feedId → title lookup from D1 data so AE rows can resolve names
     const feedTitleMap = new Map<string, string>();
-    for (const r of feedHealth) feedTitleMap.set(r.feedId, r.title);
-    for (const r of feedActivity)
-      if (!feedTitleMap.has(r.feedId)) feedTitleMap.set(r.feedId, r.title);
+    for (const r of feedActivity) feedTitleMap.set(r.feedId, r.title);
 
     // Process AE SQL results (null when analytics disabled)
     const [aeVelocityRaw, aePerfRaw, aeErrorRaw, aeTrendRaw] = aeResults ?? [
@@ -331,7 +295,6 @@ handler.get("/app/metrics", async (c) => {
       cycleCount: cycles.length,
       totalArticles,
       newArticles7d,
-      erroringFeeds: feedHealth.filter((f) => f.consecutiveErrors > 0).length,
       aeEnabled,
     });
 
@@ -343,7 +306,6 @@ handler.get("/app/metrics", async (c) => {
             intervalDist,
             totalArticles,
             newArticles7d,
-            feedHealth,
             feedActivity,
             readsByDay,
             tz,

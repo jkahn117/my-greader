@@ -46,6 +46,110 @@ function PollIntervalBadge({ minutes }: { minutes: number }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Feeds with issues — summary card shown when any feed has errors
+// ---------------------------------------------------------------------------
+
+function FeedIssuesCard({ subs }: { subs: SubscriptionRow[] }) {
+  const withIssues = subs.filter(
+    (s) => !s.deactivatedAt && s.consecutiveErrors > 0,
+  );
+  const rateLimited = withIssues.filter((s) =>
+    (s.lastError ?? "").includes("rate limited"),
+  );
+  const deactivated = subs.filter((s) => !!s.deactivatedAt);
+
+  if (withIssues.length === 0 && deactivated.length === 0) return null;
+
+  return (
+    <div class="rounded-lg border border-destructive/40 bg-card shadow-sm">
+      <div class="border-b border-destructive/40 px-6 py-4 flex items-center gap-3 flex-wrap">
+        <h2 class="text-base font-semibold text-foreground">
+          Feeds with issues
+        </h2>
+        {withIssues.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2.5 py-1 text-xs font-medium text-yellow-700">
+            {withIssues.length} error{withIssues.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {rateLimited.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2.5 py-1 text-xs font-medium text-orange-700">
+            {rateLimited.length} rate limited
+          </span>
+        )}
+        {deactivated.length > 0 && (
+          <span class="inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+            {deactivated.length} deactivated
+          </span>
+        )}
+      </div>
+      <div class="px-6 py-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Status
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Last error
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Last fetched
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Last new item
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...withIssues, ...deactivated].map((s) => (
+              <tr class="border-b border-border last:border-0">
+                <td
+                  class="py-3 pr-4 font-medium text-foreground truncate max-w-48"
+                  title={s.feedId}
+                >
+                  {s.title ?? s.feedUrl}
+                </td>
+                <td class="py-3 pr-4 whitespace-nowrap">
+                  {s.deactivatedAt ? (
+                    <span class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                      Deactivated
+                    </span>
+                  ) : (s.lastError ?? "").includes("rate limited") ? (
+                    <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700">
+                      Rate limited
+                    </span>
+                  ) : (
+                    <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-700">
+                      {s.consecutiveErrors} error
+                      {s.consecutiveErrors !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </td>
+                <td
+                  class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64"
+                  title={s.lastError ?? undefined}
+                >
+                  {s.lastError ?? "—"}
+                </td>
+                <td class="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
+                  {relativeTime(s.lastFetchedAt)}
+                </td>
+                <td class="py-3 text-right text-muted-foreground whitespace-nowrap">
+                  {s.lastNewItemAt ? relativeTime(s.lastNewItemAt) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // Status badge — green (active), yellow (errors), red (deactivated)
 function StatusBadge({ sub }: { sub: SubscriptionRow }) {
   if (sub.deactivatedAt) {
@@ -281,6 +385,7 @@ function ImportOpmlCard() {
 export function FeedTab({ subs }: { subs: SubscriptionRow[] }) {
   return (
     <div class="space-y-8">
+      <FeedIssuesCard subs={subs} />
       <ManageFeedsCard subs={subs} />
       <ImportOpmlCard />
     </div>

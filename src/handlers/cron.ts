@@ -5,15 +5,23 @@ import { createLogger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
+import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import { apiTokens, feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024; // 50 KB — keeps D1 row sizes manageable
-const ERROR_THRESHOLD = 5; // consecutive failures before a feed is deactivated
+const ERROR_THRESHOLD = 5; // consecutive transient failures before deactivation
+const PERMANENT_ERROR_THRESHOLD = 2; // deactivate faster for 404/410/401/403
 const MIN_INTERVAL_MINUTES = 30;
 const MAX_INTERVAL_MINUTES = 240; // 4 hours — cap on our own backoff
 const MAX_TTL_MINUTES = 1440; // 24 hours — sanity cap on feed-supplied TTL hints
 const BACKOFF_MULTIPLIER = 2;
 const FETCH_TIMEOUT_MS = 15_000; // 15s — prevents a hanging feed from blocking the workflow step
+
+// HTTP statuses that are unlikely to resolve without user intervention.
+// These trigger faster deactivation (PERMANENT_ERROR_THRESHOLD instead of 5).
+const PERMANENT_ERROR_STATUSES = new Set([401, 403, 404, 410]);
+
+type ErrorType = "transient" | "permanent";
 
 export type FeedResult =
   | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
@@ -84,12 +92,20 @@ export async function fetchAndStoreFeed(
   const start = performance.now();
 
   // Records a fetch/parse failure, increments consecutive error count,
-  // and deactivates the feed once ERROR_THRESHOLD is reached.
+  // and deactivates the feed once the threshold is reached.
   // Sets lastFetchedAt so the feed respects checkIntervalMinutes before retry.
   // Does NOT modify checkIntervalMinutes — error backoff is unchanged.
-  async function recordError(errorMessage: string): Promise<void> {
+  //
+  // errorType "permanent" (404, 410, 401, 403) uses a lower threshold (2 vs 5)
+  // because these are unlikely to self-resolve without user intervention.
+  async function recordError(
+    errorMessage: string,
+    errorType: ErrorType = "transient",
+  ): Promise<void> {
+    const threshold =
+      errorType === "permanent" ? PERMANENT_ERROR_THRESHOLD : ERROR_THRESHOLD;
     const next = feed.consecutiveErrors + 1;
-    const deactivate = next >= ERROR_THRESHOLD;
+    const deactivate = next >= threshold;
     await db
       .update(feeds)
       .set({
@@ -102,6 +118,8 @@ export async function fetchAndStoreFeed(
     if (deactivate) {
       logger.warn("feed deactivated after repeated errors", {
         consecutiveErrors: next,
+        threshold,
+        errorType,
         lastError: errorMessage,
       });
     }
@@ -190,14 +208,29 @@ export async function fetchAndStoreFeed(
   }
 
   if (!response.ok) {
-    const errorMessage = `HTTP ${response.status}`;
-    logger.warn("feed returned non-OK status", { status: response.status });
-    event.set({ status: "error", httpStatus: response.status });
+    const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
+    const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
+    logger.warn("feed returned non-OK status", {
+      status: response.status,
+      permanent: isPermanent,
+    });
+    event.set({
+      status: "error",
+      httpStatus: response.status,
+      errorType: isPermanent ? "permanent" : "transient",
+    });
     event.emit();
     metrics.recordFetchError({ feedId: feed.id, httpStatus: response.status });
-    await recordError(errorMessage);
+    await recordError(errorMessage, isPermanent ? "permanent" : "transient");
     await metrics.flush();
     return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
+  }
+
+  const contentType = response.headers.get("Content-Type") ?? "";
+  if (contentType.includes("text/html") && !contentType.includes("xml")) {
+    logger.warn("feed returned text/html Content-Type — may be malformed", {
+      contentType,
+    });
   }
 
   const xml = await response.text();
@@ -205,26 +238,47 @@ export async function fetchAndStoreFeed(
     customFields: { item: [["content:encoded", "contentEncoded"]] },
   });
   let parsed;
+  let parseStatus = ParseStatus.SUCCESS;
 
   try {
     parsed = await parser.parseString(xml);
   } catch (e) {
-    const errorMessage = (e as Error).message;
-    metrics.recordParse({
-      feedId: feed.id,
-      status: ParseStatus.FAILURE,
-      durationMs: performance.now() - start,
-      error: errorMessage,
-    });
-    event.set({
-      status: "error",
-      parseStatus: ParseStatus.FAILURE,
-      error: errorMessage,
-    });
-    event.emit();
-    await recordError(errorMessage);
-    await metrics.flush();
-    return { feedId: feed.id, feedTitle, status: "error", error: errorMessage };
+    const parserError = (e as Error).message;
+
+    // Try lenient fallback parser before giving up.
+    // linkedom handles broken/HTML-like feeds that xml2js rejects.
+    const fallback = parseFeedLenient(xml);
+    if (fallback && fallback.items.length > 0) {
+      logger.warn("rss-parser failed, parsed via lenient fallback", {
+        parserError,
+        itemCount: fallback.items.length,
+        contentType,
+      });
+      parsed = fallback;
+      parseStatus = ParseStatus.FALLBACK;
+    } else {
+      metrics.recordParse({
+        feedId: feed.id,
+        status: ParseStatus.FAILURE,
+        durationMs: performance.now() - start,
+        error: parserError,
+      });
+      event.set({
+        status: "error",
+        parseStatus: ParseStatus.FAILURE,
+        error: parserError,
+      });
+      event.emit();
+      // Parse errors are transient — the feed may be fixed upstream
+      await recordError(parserError, "transient");
+      await metrics.flush();
+      return {
+        feedId: feed.id,
+        feedTitle,
+        status: "error",
+        error: parserError,
+      };
+    }
   }
 
   // Capture conditional request headers for future fetches
@@ -309,13 +363,13 @@ export async function fetchAndStoreFeed(
 
   metrics.recordParse({
     feedId: feed.id,
-    status: ParseStatus.SUCCESS,
+    status: parseStatus,
     durationMs: performance.now() - start,
     articleCount: newItems,
   });
   await metrics.flush();
 
-  event.set({ status: "ok", newItems, parseStatus: ParseStatus.SUCCESS });
+  event.set({ status: "ok", newItems, parseStatus });
   event.emit();
 
   return { feedId: feed.id, feedTitle, status: "ok", newItems };
