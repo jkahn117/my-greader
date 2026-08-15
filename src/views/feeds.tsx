@@ -385,8 +385,8 @@ function ImportOpmlCard() {
 export function FeedTab({ subs }: { subs: SubscriptionRow[] }) {
   return (
     <div class="space-y-8">
-      <FeedIssuesCard subs={subs} />
       <ManageFeedsCard subs={subs} />
+      <FeedIssuesCard subs={subs} />
       <ImportOpmlCard />
     </div>
   );
