@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { toGreaderItemId } from "../../lib/crypto";
-import type { items, feeds } from "../../db/schema";
+import type { items } from "../../db/schema";
 
 export type { Variables } from "../../types/context";
 
@@ -52,7 +52,10 @@ export function toGReaderItem(r: ItemRow) {
 
 export type StreamType = "feed" | "folder" | "all" | "starred";
 
-export function parseStreamId(s: string): { type: StreamType; value: string | null } {
+export function parseStreamId(s: string): {
+  type: StreamType;
+  value: string | null;
+} {
   if (s.startsWith("feed/")) return { type: "feed", value: s.slice(5) };
   if (s.startsWith("user/-/label/"))
     return { type: "folder", value: s.slice("user/-/label/".length) };

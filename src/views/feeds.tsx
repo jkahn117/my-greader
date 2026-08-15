@@ -1,18 +1,18 @@
 import { relativeTime } from "../lib/dates";
 
 export interface SubscriptionRow {
-  id: string
-  feedId: string
-  title: string | null
-  feedUrl: string
-  htmlUrl: string | null
-  folder: string | null
-  lastFetchedAt: number | null
-  consecutiveErrors: number
-  lastError: string | null
-  deactivatedAt: number | null
-  checkIntervalMinutes: number
-  lastNewItemAt: number | null
+  id: string;
+  feedId: string;
+  title: string | null;
+  feedUrl: string;
+  htmlUrl: string | null;
+  folder: string | null;
+  lastFetchedAt: number | null;
+  consecutiveErrors: number;
+  lastError: string | null;
+  deactivatedAt: number | null;
+  checkIntervalMinutes: number;
+  lastNewItemAt: number | null;
 }
 
 // Poll interval badge — colour reflects how backed-off the feed is
@@ -38,12 +38,13 @@ function PollIntervalBadge({ minutes }: { minutes: number }) {
   }
 
   return (
-    <span class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
+    <span
+      class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}
+    >
       {label}
     </span>
-  )
+  );
 }
-
 
 // Status badge — green (active), yellow (errors), red (deactivated)
 function StatusBadge({ sub }: { sub: SubscriptionRow }) {
@@ -51,11 +52,11 @@ function StatusBadge({ sub }: { sub: SubscriptionRow }) {
     return (
       <span
         class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
-        title={sub.lastError ?? 'Deactivated'}
+        title={sub.lastError ?? "Deactivated"}
       >
         Deactivated
       </span>
-    )
+    );
   }
   if (sub.consecutiveErrors > 0) {
     return (
@@ -63,11 +64,11 @@ function StatusBadge({ sub }: { sub: SubscriptionRow }) {
         class="inline-flex items-center rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600"
         title={sub.lastError ?? `${sub.consecutiveErrors} consecutive error(s)`}
       >
-        {sub.consecutiveErrors} error{sub.consecutiveErrors > 1 ? 's' : ''}
+        {sub.consecutiveErrors} error{sub.consecutiveErrors > 1 ? "s" : ""}
       </span>
-    )
+    );
   }
-  return null
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,36 +80,44 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
     <tr id={`feed-${sub.feedId}`} class="border-b border-border last:border-0">
       <td class="py-3 pr-4 font-medium text-foreground">
         <div class="flex items-center gap-2">
-          {sub.htmlUrl
-            ? <a href={sub.htmlUrl} target="_blank" rel="noopener noreferrer" class="hover:underline">{sub.title ?? '(untitled)'}</a>
-            : sub.title ?? '(untitled)'
-          }
+          {sub.htmlUrl ? (
+            <a
+              href={sub.htmlUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="hover:underline"
+            >
+              {sub.title ?? "(untitled)"}
+            </a>
+          ) : (
+            (sub.title ?? "(untitled)")
+          )}
           <StatusBadge sub={sub} />
-          {sub.deactivatedAt
-            ? (
-              <button
-                hx-post={`/feeds/${sub.feedId}/reactivate`}
-                hx-target={`#feed-${sub.feedId}`}
-                hx-swap="outerHTML"
-                class="text-xs text-muted-foreground underline-offset-2 hover:underline"
-              >
-                Reactivate
-              </button>
-            )
-            : (
-              <button
-                hx-post={`/feeds/${sub.feedId}/deactivate`}
-                hx-target={`#feed-${sub.feedId}`}
-                hx-swap="outerHTML"
-                class="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 underline-offset-2 hover:underline transition-opacity"
-              >
-                Deactivate
-              </button>
-            )
-          }
+          {sub.deactivatedAt ? (
+            <button
+              hx-post={`/feeds/${sub.feedId}/reactivate`}
+              hx-target={`#feed-${sub.feedId}`}
+              hx-swap="outerHTML"
+              class="text-xs text-muted-foreground underline-offset-2 hover:underline"
+            >
+              Reactivate
+            </button>
+          ) : (
+            <button
+              hx-post={`/feeds/${sub.feedId}/deactivate`}
+              hx-target={`#feed-${sub.feedId}`}
+              hx-swap="outerHTML"
+              class="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 underline-offset-2 hover:underline transition-opacity"
+            >
+              Deactivate
+            </button>
+          )}
         </div>
         {sub.lastError && (
-          <p class="mt-0.5 text-xs text-muted-foreground truncate max-w-xs" title={sub.lastError}>
+          <p
+            class="mt-0.5 text-xs text-muted-foreground truncate max-w-xs"
+            title={sub.lastError}
+          >
             {sub.lastError}
           </p>
         )}
@@ -123,10 +132,12 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
         {relativeTime(sub.lastNewItemAt)}
       </td>
       <td class="py-3 text-muted-foreground">
-        {!sub.deactivatedAt && <PollIntervalBadge minutes={sub.checkIntervalMinutes} />}
+        {!sub.deactivatedAt && (
+          <PollIntervalBadge minutes={sub.checkIntervalMinutes} />
+        )}
       </td>
     </tr>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -137,34 +148,53 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
  * Inner content of the subscription card. Exported so the import handler can
  * return it as an htmx OOB swap to refresh the list without a page reload.
  */
-export function SubscriptionListContent({ subs, oob }: { subs: SubscriptionRow[]; oob?: boolean }) {
+export function SubscriptionListContent({
+  subs,
+  oob,
+}: {
+  subs: SubscriptionRow[];
+  oob?: boolean;
+}) {
   return (
-    <div id="subscription-list" class="px-6 py-2" hx-swap-oob={oob ? 'true' : undefined}>
-      {subs.length === 0
-        ? (
-          <p class="py-6 text-center text-sm text-muted-foreground">
-            No subscriptions yet. Import an OPML file below.
-          </p>
-        )
-        : (
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border">
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Title</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Folder</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last fetched</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last new item</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Poll</th>
-              </tr>
-            </thead>
-            <tbody class="group">
-              {subs.map(sub => <FeedRow sub={sub} />)}
-            </tbody>
-          </table>
-        )
-      }
+    <div
+      id="subscription-list"
+      class="px-6 py-2"
+      hx-swap-oob={oob ? "true" : undefined}
+    >
+      {subs.length === 0 ? (
+        <p class="py-6 text-center text-sm text-muted-foreground">
+          No subscriptions yet. Import an OPML file below.
+        </p>
+      ) : (
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Title
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Folder
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Last fetched
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Last new item
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Poll
+              </th>
+            </tr>
+          </thead>
+          <tbody class="group">
+            {subs.map((sub) => (
+              <FeedRow sub={sub} />
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +208,8 @@ function ManageFeedsCard({ subs }: { subs: SubscriptionRow[] }) {
         <div>
           <h2 class="text-base font-semibold text-foreground">Subscriptions</h2>
           <p class="mt-0.5 text-sm text-muted-foreground">
-            Your current feed subscriptions. Deactivated feeds are skipped during fetch cycles.
+            Your current feed subscriptions. Deactivated feeds are skipped
+            during fetch cycles.
           </p>
         </div>
         <div class="shrink-0">
@@ -196,7 +227,7 @@ function ManageFeedsCard({ subs }: { subs: SubscriptionRow[] }) {
       </div>
       <SubscriptionListContent subs={subs} />
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -209,8 +240,8 @@ function ImportOpmlCard() {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">Import OPML</h2>
         <p class="mt-0.5 text-sm text-muted-foreground">
-          Upload an OPML file exported from your previous RSS reader.
-          Folder names are preserved; duplicate feeds are skipped.
+          Upload an OPML file exported from your previous RSS reader. Folder
+          names are preserved; duplicate feeds are skipped.
         </p>
       </div>
       <div class="px-6 py-5 space-y-4">
@@ -240,7 +271,7 @@ function ImportOpmlCard() {
         <div id="import-result" />
       </div>
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -253,5 +284,5 @@ export function FeedTab({ subs }: { subs: SubscriptionRow[] }) {
       <ManageFeedsCard subs={subs} />
       <ImportOpmlCard />
     </div>
-  )
+  );
 }

@@ -1,4 +1,8 @@
-import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+import {
+  WorkflowEntrypoint,
+  WorkflowEvent,
+  WorkflowStep,
+} from "cloudflare:workers";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
@@ -41,7 +45,9 @@ const FEEDS_PER_STEP = 20;
 //      the step won't crash.
 // ---------------------------------------------------------------------------
 function asDisposable<T extends object>(binding: T): T & Disposable {
-  if (typeof (binding as unknown as Disposable)[Symbol.dispose] === "function") {
+  if (
+    typeof (binding as unknown as Disposable)[Symbol.dispose] === "function"
+  ) {
     return binding as T & Disposable;
   }
   (binding as T & Disposable)[Symbol.dispose] = () => {};
@@ -93,7 +99,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const stack = err instanceof Error ? err.stack : undefined;
       // logger.error flushes the buffer — all buffered DEBUG/INFO logs emitted
       // before this point are now visible in structured logs alongside the error.
-      logger.error("feed polling workflow failed", { error: errorMessage, stack });
+      logger.error("feed polling workflow failed", {
+        error: errorMessage,
+        stack,
+      });
 
       try {
         using analytics = asDisposable(this.env.ANALYTICS);
@@ -112,66 +121,68 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   }
 
   async #poll(step: WorkflowStep): Promise<void> {
-
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
     // ------------------------------------------------------------------
 
-    const { dueFeeds, totalActiveFeeds } = await step.do("get-due-feeds", async () => {
-      try {
-        using d1 = asDisposable(this.env.DB);
-        const db = getDb(d1);
-        const now = Date.now();
+    const { dueFeeds, totalActiveFeeds } = await step.do(
+      "get-due-feeds",
+      async () => {
+        try {
+          using d1 = asDisposable(this.env.DB);
+          const db = getDb(d1);
+          const now = Date.now();
 
-        const [due, activeCount] = await db.batch([
-          db
-            .selectDistinct({
-              id: feeds.id,
-              feedUrl: feeds.feedUrl,
-              title: feeds.title,
-              htmlUrl: feeds.htmlUrl,
-              etag: feeds.etag,
-              lastModified: feeds.lastModified,
-              lastFetchedAt: feeds.lastFetchedAt,
-              consecutiveErrors: feeds.consecutiveErrors,
-              checkIntervalMinutes: feeds.checkIntervalMinutes,
-              lastNewItemAt: feeds.lastNewItemAt,
-            })
-            .from(feeds)
-            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-            .where(
-              and(
-                isNull(feeds.deactivatedAt),
-                or(
-                  isNull(feeds.lastFetchedAt),
-                  lte(
-                    sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                    now,
+          const [due, activeCount] = await db.batch([
+            db
+              .selectDistinct({
+                id: feeds.id,
+                feedUrl: feeds.feedUrl,
+                title: feeds.title,
+                htmlUrl: feeds.htmlUrl,
+                etag: feeds.etag,
+                lastModified: feeds.lastModified,
+                lastFetchedAt: feeds.lastFetchedAt,
+                consecutiveErrors: feeds.consecutiveErrors,
+                checkIntervalMinutes: feeds.checkIntervalMinutes,
+                lastNewItemAt: feeds.lastNewItemAt,
+              })
+              .from(feeds)
+              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+              .where(
+                and(
+                  isNull(feeds.deactivatedAt),
+                  or(
+                    isNull(feeds.lastFetchedAt),
+                    lte(
+                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
+                      now,
+                    ),
                   ),
                 ),
-              ),
-            )
-            .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
+              )
+              .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
 
-          db
-            .select({ count: sql<number>`count(*)` })
-            .from(feeds)
-            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-            .where(isNull(feeds.deactivatedAt)),
-        ]);
+            db
+              .select({ count: sql<number>`count(*)` })
+              .from(feeds)
+              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+              .where(isNull(feeds.deactivatedAt)),
+          ]);
 
-        return {
-          dueFeeds: due,
-          totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
-        };
-      } catch (err) {
-        logger.error("get-due-feeds step failed", {
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-        throw err;
-      }
-    });
+          return {
+            dueFeeds: due,
+            totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
+          };
+        } catch (err) {
+          logger.error("get-due-feeds step failed", {
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
+          throw err;
+        }
+      },
+    );
 
     logger.info("feed polling cycle starting", {
       totalActiveFeeds,
@@ -195,7 +206,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
       const batchIndex = Math.floor(i / FEEDS_PER_STEP);
 
-      const batchResults = await step.do(`fetch-batch-${batchIndex}`, async () => {
+      const batchResults = await step.do(
+        `fetch-batch-${batchIndex}`,
+        async () => {
           try {
             using d1 = asDisposable(this.env.DB);
             using analytics = asDisposable(this.env.ANALYTICS);
@@ -227,11 +240,16 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             });
             throw err;
           }
-      });
+        },
+      );
 
       for (const r of batchResults) {
         if (r.status === "error") {
-          logger.error("feed fetch failed", { feedId: r.feedId, feedTitle: r.feedTitle, error: r.error });
+          logger.error("feed fetch failed", {
+            feedId: r.feedId,
+            feedTitle: r.feedTitle,
+            error: r.error,
+          });
         }
         allResults.push(r);
       }
@@ -241,7 +259,10 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // Final step — write cycle summary to D1 + emit Pipeline metrics
     // ------------------------------------------------------------------
 
-    const newArticles = allResults.reduce((sum, r) => sum + (r.status === "ok" ? r.newItems : 0), 0);
+    const newArticles = allResults.reduce(
+      (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
+      0,
+    );
     const failedFeeds = allResults.filter((r) => r.status === "error").length;
 
     const detail = allResults.map((r) => {
@@ -263,15 +284,18 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
         // Write per-cycle row to D1 so the metrics dashboard can query it
         // without depending on Analytics Engine or an external API.
-        await db.insert(cycleRuns).values({
-          id: String(now),
-          ranAt: now,
-          activeFeeds: totalActiveFeeds,
-          dueFeeds: dueFeeds.length,
-          checkedFeeds: allResults.length,
-          newItems: newArticles,
-          failedFeeds,
-        }).onConflictDoNothing(); // guard against duplicate step execution
+        await db
+          .insert(cycleRuns)
+          .values({
+            id: String(now),
+            ranAt: now,
+            activeFeeds: totalActiveFeeds,
+            dueFeeds: dueFeeds.length,
+            checkedFeeds: allResults.length,
+            newItems: newArticles,
+            failedFeeds,
+          })
+          .onConflictDoNothing(); // guard against duplicate step execution
 
         // Pipeline write for long-term analytics — batched with flush
         metrics.recordCycle({

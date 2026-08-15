@@ -15,7 +15,11 @@
 // The dashboard queries D1 directly for cycle history and feed health.
 // R2 SQL queries for historical Pipeline data are retained but deprecated.
 
-import { MetricUnit, type MetricContext, type MetricEntry } from "@workers-powertools/metrics";
+import {
+  MetricUnit,
+  type MetricContext,
+  type MetricEntry,
+} from "@workers-powertools/metrics";
 import { AnalyticsEngineBackend } from "@workers-powertools/metrics/analytics-engine";
 
 export enum ParseStatus {
@@ -100,7 +104,12 @@ export function createMetrics(
 
   // Enqueues a metric entry — does NOT write immediately.
   // Call flush() to send all pending entries via the backend.
-  function enqueue(name: string, unit: MetricUnit, value: number, dims: Record<string, string> = {}) {
+  function enqueue(
+    name: string,
+    unit: MetricUnit,
+    value: number,
+    dims: Record<string, string> = {},
+  ) {
     pending.push({
       name,
       unit,

@@ -1,26 +1,26 @@
-import { XMLParser } from 'fast-xml-parser'
+import { XMLParser } from "fast-xml-parser";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface ParsedFeed {
-  feedUrl: string
-  title:   string | null
-  htmlUrl: string | null
-  folder:  string | null
+  feedUrl: string;
+  title: string | null;
+  htmlUrl: string | null;
+  folder: string | null;
 }
 
 interface OutlineAttrs {
-  '@_xmlUrl'?:  string
-  '@_htmlUrl'?: string
-  '@_text'?:    string
-  '@_title'?:   string
-  '@_type'?:    string
+  "@_xmlUrl"?: string;
+  "@_htmlUrl"?: string;
+  "@_text"?: string;
+  "@_title"?: string;
+  "@_type"?: string;
 }
 
 interface OutlineNode extends OutlineAttrs {
-  outline?: OutlineNode | OutlineNode[]
+  outline?: OutlineNode | OutlineNode[];
 }
 
 // ---------------------------------------------------------------------------
@@ -37,56 +37,60 @@ interface OutlineNode extends OutlineAttrs {
  */
 export function parseOpml(xml: string): ParsedFeed[] {
   const parser = new XMLParser({
-    ignoreAttributes:    false,
-    attributeNamePrefix: '@_',
+    ignoreAttributes: false,
+    attributeNamePrefix: "@_",
     // Always return outline children as an array for consistent access
-    isArray: (name: string) => name === 'outline',
-  })
+    isArray: (name: string) => name === "outline",
+  });
 
-  let doc: { opml?: { body?: { outline?: OutlineNode[] } } }
+  let doc: { opml?: { body?: { outline?: OutlineNode[] } } };
   try {
-    doc = parser.parse(xml) as typeof doc
+    doc = parser.parse(xml) as typeof doc;
   } catch {
-    return []
+    return [];
   }
 
-  const outlines = doc?.opml?.body?.outline
-  if (!outlines || outlines.length === 0) return []
+  const outlines = doc?.opml?.body?.outline;
+  if (!outlines || outlines.length === 0) return [];
 
-  const feeds: ParsedFeed[] = []
+  const feeds: ParsedFeed[] = [];
   for (const node of outlines) {
-    walkOutline(node, null, feeds)
+    walkOutline(node, null, feeds);
   }
-  return feeds
+  return feeds;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function walkOutline(node: OutlineNode, folder: string | null, feeds: ParsedFeed[]) {
-  const xmlUrl = node['@_xmlUrl']?.trim()
+function walkOutline(
+  node: OutlineNode,
+  folder: string | null,
+  feeds: ParsedFeed[],
+) {
+  const xmlUrl = node["@_xmlUrl"]?.trim();
 
   if (xmlUrl) {
     // Feed outline — xmlUrl present means it's a subscribable feed
     feeds.push({
       feedUrl: xmlUrl,
-      title:   node['@_title'] ?? node['@_text'] ?? null,
-      htmlUrl: node['@_htmlUrl']?.trim() ?? null,
+      title: node["@_title"] ?? node["@_text"] ?? null,
+      htmlUrl: node["@_htmlUrl"]?.trim() ?? null,
       folder,
-    })
-    return
+    });
+    return;
   }
 
   // Folder outline — recurse with this node's label as the new folder name
-  const folderName = node['@_title'] ?? node['@_text'] ?? folder
-  const children   = toArray(node.outline)
+  const folderName = node["@_title"] ?? node["@_text"] ?? folder;
+  const children = toArray(node.outline);
   for (const child of children) {
-    walkOutline(child, folderName, feeds)
+    walkOutline(child, folderName, feeds);
   }
 }
 
 function toArray<T>(val: T | T[] | undefined): T[] {
-  if (val === undefined || val === null) return []
-  return Array.isArray(val) ? val : [val]
+  if (val === undefined || val === null) return [];
+  return Array.isArray(val) ? val : [val];
 }

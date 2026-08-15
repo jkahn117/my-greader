@@ -2,7 +2,10 @@
 // Verifies dev-mode bypass and JWT rejection paths.
 
 import { env } from "cloudflare:workers";
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../index";
 import { getDb } from "../lib/db";

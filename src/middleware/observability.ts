@@ -10,4 +10,6 @@
 import { injectLogger } from "@workers-powertools/hono/logger";
 import { logger } from "../lib/logger";
 
-export const observabilityMiddleware = injectLogger(logger, { wideEvent: true });
+export const observabilityMiddleware = injectLogger(logger, {
+  wideEvent: true,
+});

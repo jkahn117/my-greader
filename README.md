@@ -228,7 +228,9 @@ pnpm deploy     # compile CSS + wrangler deploy
 | `pnpm test`       | Run vitest suite                                                 |
 | `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config      |
 | `pnpm studio`     | Open Drizzle Studio against local D1 (run `wrangler dev` first)  |
-| `pnpm format`     | Format all TypeScript source files with Prettier                 |
+| `pnpm format`     | Format TypeScript source files with Oxfmt                        |
+| `pnpm format:check` | Check TypeScript source formatting                             |
+| `pnpm lint`       | Lint TypeScript source files with Oxlint                        |
 
 ## Env vars and secrets
 

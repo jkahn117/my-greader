@@ -216,7 +216,11 @@ export async function fetchAndStoreFeed(
       durationMs: performance.now() - start,
       error: errorMessage,
     });
-    event.set({ status: "error", parseStatus: ParseStatus.FAILURE, error: errorMessage });
+    event.set({
+      status: "error",
+      parseStatus: ParseStatus.FAILURE,
+      error: errorMessage,
+    });
     event.emit();
     await recordError(errorMessage);
     await metrics.flush();
@@ -231,7 +235,6 @@ export async function fetchAndStoreFeed(
   const now = Date.now();
   const itemRows = (
     await Promise.all(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (parsed.items ?? []).map(async (item: any) => {
         const guid = item.guid ?? item.link;
         if (!guid) return null;
@@ -271,7 +274,6 @@ export async function fetchAndStoreFeed(
       db.insert(items).values(row).onConflictDoNothing(),
     );
     // db.batch requires a non-empty tuple — cast needed due to Drizzle's strict overload
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const batchResults = await db.batch(stmts as unknown as [any, ...any[]]);
     newItems = batchResults.reduce((sum, r) => sum + r.meta.changes, 0);
   }

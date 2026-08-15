@@ -2,7 +2,6 @@ import type { Context, Next } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { sha256 } from "../lib/crypto";
-import { createLogger } from "../lib/logger";
 import { apiTokens, users } from "../db/schema";
 
 /**
@@ -13,7 +12,6 @@ import { apiTokens, users } from "../db/schema";
  * every authenticated request so the Access tab can show meaningful activity.
  */
 export async function tokenMiddleware(c: Context, next: Next) {
-  const logger = createLogger({ path: c.req.path });
   const auth = c.req.header("Authorization") ?? "";
   const raw = auth.startsWith("GoogleLogin auth=")
     ? auth.slice("GoogleLogin auth=".length).trim()
@@ -39,9 +37,7 @@ export async function tokenMiddleware(c: Context, next: Next) {
 
   if (!tokenRow) return c.text("Unauthorized", 401);
 
-  if (
-    !tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000
-  ) {
+  if (!tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000) {
     await db
       .update(apiTokens)
       .set({ lastUsedAt: Date.now() })

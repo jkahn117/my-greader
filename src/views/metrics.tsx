@@ -95,10 +95,20 @@ interface StatusData {
 // Stat card — single KPI tile
 // ---------------------------------------------------------------------------
 
-function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function StatCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string | number;
+  sub?: string;
+}) {
   return (
     <div class="rounded-lg border border-border bg-card px-6 py-5 shadow-sm">
-      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
       <p class="mt-1 text-3xl font-semibold text-foreground">{value}</p>
       {sub && <p class="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
     </div>
@@ -114,7 +124,9 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
     return (
       <div class="rounded-lg border border-border bg-card shadow-sm">
         <div class="border-b border-border px-6 py-4">
-          <h2 class="text-base font-semibold text-foreground">Polling cycles</h2>
+          <h2 class="text-base font-semibold text-foreground">
+            Polling cycles
+          </h2>
         </div>
         <p class="px-6 py-6 text-center text-sm text-muted-foreground">
           No cycle data yet — appears after the first Workflow run.
@@ -152,12 +164,26 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
         <div class="grid grid-cols-3 gap-4 text-center shrink-0">
           {[
             { label: "Active feeds", value: recent[0]?.activeFeeds ?? 0 },
-            { label: "Avg due/cycle", value: (recent.reduce((s, c) => s + c.dueFeeds, 0) / recent.length).toFixed(1) },
-            { label: "Avg failed/cycle", value: (recent.reduce((s, c) => s + c.failedFeeds, 0) / recent.length).toFixed(1) },
+            {
+              label: "Avg due/cycle",
+              value: (
+                recent.reduce((s, c) => s + c.dueFeeds, 0) / recent.length
+              ).toFixed(1),
+            },
+            {
+              label: "Avg failed/cycle",
+              value: (
+                recent.reduce((s, c) => s + c.failedFeeds, 0) / recent.length
+              ).toFixed(1),
+            },
           ].map(({ label, value }) => (
             <div>
-              <p class="text-xs text-muted-foreground uppercase tracking-wide">{label}</p>
-              <p class="mt-0.5 text-lg font-semibold text-foreground">{value}</p>
+              <p class="text-xs text-muted-foreground uppercase tracking-wide">
+                {label}
+              </p>
+              <p class="mt-0.5 text-lg font-semibold text-foreground">
+                {value}
+              </p>
             </div>
           ))}
         </div>
@@ -167,12 +193,14 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
       <div class="px-6 py-4">
         <div class="flex items-end gap-0.5 h-24 w-full">
           {[...recent].reverse().map((c) => {
-            const pct = maxNew > 0 ? Math.max((c.newItems / maxNew) * 100, 2) : 2;
-            const barColor = c.failedFeeds > 0
-              ? "bg-destructive/60"
-              : c.newItems > 0
-                ? "bg-primary"
-                : "bg-muted-foreground/30";
+            const pct =
+              maxNew > 0 ? Math.max((c.newItems / maxNew) * 100, 2) : 2;
+            const barColor =
+              c.failedFeeds > 0
+                ? "bg-destructive/60"
+                : c.newItems > 0
+                  ? "bg-primary"
+                  : "bg-muted-foreground/30";
             return (
               <div
                 class="flex-1 min-w-0 rounded-t cursor-default"
@@ -195,10 +223,18 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="px-6 pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">When</th>
-              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Checked</th>
-              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">New</th>
-              <th class="px-6 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Failed</th>
+              <th class="px-6 pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                When
+              </th>
+              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Checked
+              </th>
+              <th class="px-4 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                New
+              </th>
+              <th class="px-6 pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Failed
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -207,7 +243,9 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
                 <td class="px-6 py-2 text-muted-foreground whitespace-nowrap">
                   {relativeTime(c.ranAt)}
                 </td>
-                <td class="px-4 py-2 text-right text-foreground">{c.checkedFeeds}</td>
+                <td class="px-4 py-2 text-right text-foreground">
+                  {c.checkedFeeds}
+                </td>
                 <td class="px-4 py-2 text-right text-foreground font-medium">
                   {c.newItems > 0 ? (
                     <span class="text-primary">+{c.newItems}</span>
@@ -217,7 +255,9 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
                 </td>
                 <td class="px-6 py-2 text-right">
                   {c.failedFeeds > 0 ? (
-                    <span class="text-destructive font-medium">{c.failedFeeds}</span>
+                    <span class="text-destructive font-medium">
+                      {c.failedFeeds}
+                    </span>
                   ) : (
                     <span class="text-muted-foreground">—</span>
                   )}
@@ -236,7 +276,9 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
 // ---------------------------------------------------------------------------
 
 function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
-  const erroring = rows.filter((r) => r.consecutiveErrors > 0 && !r.deactivatedAt);
+  const erroring = rows.filter(
+    (r) => r.consecutiveErrors > 0 && !r.deactivatedAt,
+  );
   const deactivated = rows.filter((r) => !!r.deactivatedAt);
   const rateLimited = rows.filter((r) => r.rateLimited && !r.deactivatedAt);
 
@@ -266,17 +308,30 @@ function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Status</th>
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last error</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last new item</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last fetched</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Status
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Last error
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Last new item
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Last fetched
+              </th>
             </tr>
           </thead>
           <tbody>
             {[...erroring, ...deactivated].map((r) => (
               <tr class="border-b border-border last:border-0">
-                <td class="py-3 pr-4 font-medium text-foreground truncate max-w-48" title={r.feedId}>
+                <td
+                  class="py-3 pr-4 font-medium text-foreground truncate max-w-48"
+                  title={r.feedId}
+                >
                   {r.title}
                 </td>
                 <td class="py-3 pr-4 whitespace-nowrap">
@@ -290,11 +345,15 @@ function FeedHealthCard({ rows }: { rows: FeedHealthRow[] }) {
                     </span>
                   ) : (
                     <span class="inline-flex items-center rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-700">
-                      {r.consecutiveErrors} error{r.consecutiveErrors !== 1 ? "s" : ""}
+                      {r.consecutiveErrors} error
+                      {r.consecutiveErrors !== 1 ? "s" : ""}
                     </span>
                   )}
                 </td>
-                <td class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64" title={r.lastError ?? undefined}>
+                <td
+                  class="py-3 pr-4 font-mono text-xs text-muted-foreground truncate max-w-64"
+                  title={r.lastError ?? undefined}
+                >
                   {r.lastError ?? "—"}
                 </td>
                 <td class="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
@@ -329,21 +388,31 @@ function ReadsByDayCard({ rows }: { rows: ReadsByDay[] }) {
         <div>
           <h2 class="text-base font-semibold text-foreground">
             Reads by day{" "}
-            <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+            <span class="text-muted-foreground font-normal text-sm">
+              (last 7 days)
+            </span>
           </h2>
-          <p class="mt-0.5 text-xs text-muted-foreground">{total} articles read</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            {total} articles read
+          </p>
         </div>
       </div>
       <div class="px-6 py-4">
         <div class="flex items-end gap-1 h-24 w-full">
           {ordered.map((r) => {
-            const pct = Math.max((r.reads / maxReads) * 100, r.reads > 0 ? 4 : 0);
+            const pct = Math.max(
+              (r.reads / maxReads) * 100,
+              r.reads > 0 ? 4 : 0,
+            );
             return (
               <div
                 class="flex-1 min-w-0 flex flex-col items-center gap-1"
                 title={`${r.date}: ${r.reads} read`}
               >
-                <div class="w-full rounded-t bg-primary" style={`height:${pct * 0.96}px; min-height:${r.reads > 0 ? "3px" : "0"}`} />
+                <div
+                  class="w-full rounded-t bg-primary"
+                  style={`height:${pct * 0.96}px; min-height:${r.reads > 0 ? "3px" : "0"}`}
+                />
               </div>
             );
           })}
@@ -371,28 +440,42 @@ function FeedActivityCard({ rows }: { rows: FeedActivityRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Feed activity{" "}
-          <span class="text-muted-foreground font-normal text-sm">(new articles, last 7 days)</span>
+          <span class="text-muted-foreground font-normal text-sm">
+            (new articles, last 7 days)
+          </span>
         </h2>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">New (7d)</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Last item</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                New (7d)
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Last item
+              </th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
-              const pct = maxCount > 0 ? Math.round((r.count7d / maxCount) * 100) : 0;
+              const pct =
+                maxCount > 0 ? Math.round((r.count7d / maxCount) * 100) : 0;
               return (
                 <tr class="border-b border-border last:border-0">
                   <td class="py-2.5 pr-4 text-foreground max-w-0 w-full">
-                    <div class="truncate font-medium" title={r.feedId}>{r.title}</div>
+                    <div class="truncate font-medium" title={r.feedId}>
+                      {r.title}
+                    </div>
                     {/* inline sparkbar showing relative volume */}
                     <div class="mt-1 h-1 w-full rounded-full bg-muted overflow-hidden">
-                      <div class="h-full rounded-full bg-primary/50" style={`width:${pct}%`} />
+                      <div
+                        class="h-full rounded-full bg-primary/50"
+                        style={`width:${pct}%`}
+                      />
                     </div>
                   </td>
                   <td class="py-2.5 pr-4 text-right font-medium text-foreground whitespace-nowrap">
@@ -435,27 +518,35 @@ function PollIntervalDistCard({ rows }: { rows: IntervalDistRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Poll interval distribution{" "}
-          <span class="text-muted-foreground font-normal text-sm">(active feeds)</span>
+          <span class="text-muted-foreground font-normal text-sm">
+            (active feeds)
+          </span>
         </h2>
       </div>
       <div class="px-6 py-4 space-y-3">
         {rows.map((r) => {
           const pct = total > 0 ? Math.round((r.count / total) * 100) : 0;
-          const barClass = r.minutes <= 30
-            ? "bg-green-500"
-            : r.minutes <= 120
-              ? "bg-yellow-400"
-              : "bg-orange-400";
+          const barClass =
+            r.minutes <= 30
+              ? "bg-green-500"
+              : r.minutes <= 120
+                ? "bg-yellow-400"
+                : "bg-orange-400";
           return (
             <div>
               <div class="flex justify-between text-xs mb-1">
-                <span class="text-foreground font-medium">{intervalLabel(r.minutes)}</span>
+                <span class="text-foreground font-medium">
+                  {intervalLabel(r.minutes)}
+                </span>
                 <span class="text-muted-foreground">
                   {r.count} feed{r.count !== 1 ? "s" : ""} · {pct}%
                 </span>
               </div>
               <div class="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div class={`h-full rounded-full ${barClass}`} style={`width:${pct}%`} />
+                <div
+                  class={`h-full rounded-full ${barClass}`}
+                  style={`width:${pct}%`}
+                />
               </div>
             </div>
           );
@@ -489,17 +580,27 @@ function FeedVelocityCard({ rows }: { rows: FeedVelocityRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Feed velocity{" "}
-          <span class="text-muted-foreground font-normal text-sm">(new articles, last 30 days)</span>
+          <span class="text-muted-foreground font-normal text-sm">
+            (new articles, last 30 days)
+          </span>
         </h2>
-        <p class="mt-0.5 text-xs text-muted-foreground">From Analytics Engine — top publishers by volume</p>
+        <p class="mt-0.5 text-xs text-muted-foreground">
+          From Analytics Engine — top publishers by volume
+        </p>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Total (30d)</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Avg / fetch</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Total (30d)
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Avg / fetch
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -508,13 +609,22 @@ function FeedVelocityCard({ rows }: { rows: FeedVelocityRow[] }) {
               return (
                 <tr class="border-b border-border last:border-0">
                   <td class="py-2.5 pr-4 text-foreground max-w-0 w-full">
-                    <div class="truncate font-medium" title={r.feedId}>{r.title}</div>
+                    <div class="truncate font-medium" title={r.feedId}>
+                      {r.title}
+                    </div>
                     <div class="mt-1 h-1 w-full rounded-full bg-muted overflow-hidden">
-                      <div class="h-full rounded-full bg-primary/50" style={`width:${pct}%`} />
+                      <div
+                        class="h-full rounded-full bg-primary/50"
+                        style={`width:${pct}%`}
+                      />
                     </div>
                   </td>
-                  <td class="py-2.5 pr-4 text-right font-medium text-primary whitespace-nowrap">+{r.total30d}</td>
-                  <td class="py-2.5 text-right text-muted-foreground whitespace-nowrap">{r.avgPerFetch}</td>
+                  <td class="py-2.5 pr-4 text-right font-medium text-primary whitespace-nowrap">
+                    +{r.total30d}
+                  </td>
+                  <td class="py-2.5 text-right text-muted-foreground whitespace-nowrap">
+                    {r.avgPerFetch}
+                  </td>
                 </tr>
               );
             })}
@@ -532,35 +642,57 @@ function FetchPerfCard({ rows }: { rows: FetchPerfRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Fetch performance{" "}
-          <span class="text-muted-foreground font-normal text-sm">(slowest feeds, last 7 days)</span>
+          <span class="text-muted-foreground font-normal text-sm">
+            (slowest feeds, last 7 days)
+          </span>
         </h2>
-        <p class="mt-0.5 text-xs text-muted-foreground">Feeds consistently above ~5 s may have slow servers or large payloads</p>
+        <p class="mt-0.5 text-xs text-muted-foreground">
+          Feeds consistently above ~5 s may have slow servers or large payloads
+        </p>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Feed</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Samples</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Avg</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Max</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Feed
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Samples
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Avg
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Max
+              </th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
-              const avgClass = r.avgMs > 5000
-                ? "text-destructive font-medium"
-                : r.avgMs > 2000
-                  ? "text-yellow-700 font-medium"
-                  : "text-muted-foreground";
+              const avgClass =
+                r.avgMs > 5000
+                  ? "text-destructive font-medium"
+                  : r.avgMs > 2000
+                    ? "text-yellow-700 font-medium"
+                    : "text-muted-foreground";
               return (
                 <tr class="border-b border-border last:border-0">
-                  <td class="py-2.5 pr-4 font-medium text-foreground truncate max-w-64" title={r.feedId}>
+                  <td
+                    class="py-2.5 pr-4 font-medium text-foreground truncate max-w-64"
+                    title={r.feedId}
+                  >
                     {r.title}
                   </td>
-                  <td class="py-2.5 pr-4 text-right text-muted-foreground">{r.samples}</td>
-                  <td class={`py-2.5 pr-4 text-right ${avgClass}`}>{(r.avgMs / 1000).toFixed(1)} s</td>
-                  <td class="py-2.5 text-right text-muted-foreground">{(r.maxMs / 1000).toFixed(1)} s</td>
+                  <td class="py-2.5 pr-4 text-right text-muted-foreground">
+                    {r.samples}
+                  </td>
+                  <td class={`py-2.5 pr-4 text-right ${avgClass}`}>
+                    {(r.avgMs / 1000).toFixed(1)} s
+                  </td>
+                  <td class="py-2.5 text-right text-muted-foreground">
+                    {(r.maxMs / 1000).toFixed(1)} s
+                  </td>
                 </tr>
               );
             })}
@@ -578,30 +710,45 @@ function ErrorRatesCard({ rows }: { rows: ErrorRateRow[] }) {
       <div class="border-b border-border px-6 py-4">
         <h2 class="text-base font-semibold text-foreground">
           Fetch errors by status{" "}
-          <span class="text-muted-foreground font-normal text-sm">(last 7 days)</span>
+          <span class="text-muted-foreground font-normal text-sm">
+            (last 7 days)
+          </span>
         </h2>
       </div>
       <div class="px-6 py-2">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-border">
-              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Status</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Occurrences</th>
-              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Feeds affected</th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Status
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Occurrences
+              </th>
+              <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                Feeds affected
+              </th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
-              const statusClass = r.httpStatus === "429"
-                ? "text-orange-700 font-semibold"
-                : r.httpStatus.startsWith("4")
-                  ? "text-destructive font-semibold"
-                  : "text-yellow-700 font-semibold";
+              const statusClass =
+                r.httpStatus === "429"
+                  ? "text-orange-700 font-semibold"
+                  : r.httpStatus.startsWith("4")
+                    ? "text-destructive font-semibold"
+                    : "text-yellow-700 font-semibold";
               return (
                 <tr class="border-b border-border last:border-0">
-                  <td class={`py-2.5 pr-4 font-mono ${statusClass}`}>HTTP {r.httpStatus}</td>
-                  <td class="py-2.5 pr-4 text-right text-foreground font-medium">{r.occurrences}</td>
-                  <td class="py-2.5 text-right text-muted-foreground">{r.affectedFeeds}</td>
+                  <td class={`py-2.5 pr-4 font-mono ${statusClass}`}>
+                    HTTP {r.httpStatus}
+                  </td>
+                  <td class="py-2.5 pr-4 text-right text-foreground font-medium">
+                    {r.occurrences}
+                  </td>
+                  <td class="py-2.5 text-right text-muted-foreground">
+                    {r.affectedFeeds}
+                  </td>
                 </tr>
               );
             })}
@@ -624,15 +771,22 @@ function ArticleTrendCard({ rows }: { rows: ArticleTrendRow[] }) {
         <div>
           <h2 class="text-base font-semibold text-foreground">
             New articles per day{" "}
-            <span class="text-muted-foreground font-normal text-sm">(last 30 days)</span>
+            <span class="text-muted-foreground font-normal text-sm">
+              (last 30 days)
+            </span>
           </h2>
-          <p class="mt-0.5 text-xs text-muted-foreground">{total.toLocaleString()} articles total</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">
+            {total.toLocaleString()} articles total
+          </p>
         </div>
       </div>
       <div class="px-6 py-4">
         <div class="flex items-end gap-px h-24 w-full">
           {ordered.map((r) => {
-            const pct = Math.max((r.newArticles / maxArticles) * 100, r.newArticles > 0 ? 2 : 0);
+            const pct = Math.max(
+              (r.newArticles / maxArticles) * 100,
+              r.newArticles > 0 ? 2 : 0,
+            );
             return (
               <div
                 class="flex-1 min-w-0 rounded-t bg-primary/70"
@@ -678,7 +832,10 @@ export function MetricsTab({ data }: { data: StatusData }) {
     <div class="space-y-8">
       {/* KPI row */}
       <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard label="Total articles" value={data.totalArticles.toLocaleString()} />
+        <StatCard
+          label="Total articles"
+          value={data.totalArticles.toLocaleString()}
+        />
         <StatCard
           label="New this week"
           value={data.newArticles7d}
@@ -687,12 +844,18 @@ export function MetricsTab({ data }: { data: StatusData }) {
         <StatCard
           label="Reads (7d)"
           value={totalReads7d}
-          sub={totalReads7d === 0 ? "reads tracked after this update" : undefined}
+          sub={
+            totalReads7d === 0 ? "reads tracked after this update" : undefined
+          }
         />
         <StatCard
           label="Last cycle"
           value={lastCycle ? `+${lastCycle.newItems}` : "—"}
-          sub={lastCycle ? relativeTime(lastCycle.ranAt) ?? undefined : "no cycles yet"}
+          sub={
+            lastCycle
+              ? (relativeTime(lastCycle.ranAt) ?? undefined)
+              : "no cycles yet"
+          }
         />
       </div>
 
@@ -703,17 +866,21 @@ export function MetricsTab({ data }: { data: StatusData }) {
       <ReadsByDayCard rows={data.readsByDay} />
 
       {/* Analytics Engine section — only rendered when ANALYTICS_ENABLED + CF_API_TOKEN set */}
-      {data.analyticsEnabled && (
-        data.trend30d.length > 0 || data.feedVelocity.length > 0 || data.fetchPerf.length > 0 || data.errorRates.length > 0
-      ) && (
-        <>
-          <AnalyticsSectionHeader>Analytics Engine (30-day)</AnalyticsSectionHeader>
-          <ArticleTrendCard rows={data.trend30d} />
-          <FeedVelocityCard rows={data.feedVelocity} />
-          <FetchPerfCard rows={data.fetchPerf} />
-          <ErrorRatesCard rows={data.errorRates} />
-        </>
-      )}
+      {data.analyticsEnabled &&
+        (data.trend30d.length > 0 ||
+          data.feedVelocity.length > 0 ||
+          data.fetchPerf.length > 0 ||
+          data.errorRates.length > 0) && (
+          <>
+            <AnalyticsSectionHeader>
+              Analytics Engine (30-day)
+            </AnalyticsSectionHeader>
+            <ArticleTrendCard rows={data.trend30d} />
+            <FeedVelocityCard rows={data.feedVelocity} />
+            <FetchPerfCard rows={data.fetchPerf} />
+            <ErrorRatesCard rows={data.errorRates} />
+          </>
+        )}
     </div>
   );
 }

@@ -12,7 +12,6 @@ import { parseHTML } from "linkedom";
 export function extractReadableContent(html: string): string | null {
   try {
     const { document } = parseHTML(`<html><body>${html}</body></html>`);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const article = new Readability(document as any).parse();
     return article?.content ?? null;
   } catch {

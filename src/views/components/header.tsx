@@ -17,5 +17,5 @@ export function Header({ email }: { email: string }) {
         </div>
       </div>
     </header>
-  )
+  );
 }

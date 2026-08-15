@@ -27,7 +27,10 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     path: "/reader/api/0/edit-tag",
     userId: c.get("userId"),
   });
-  const metrics = createMetrics(c.env.ANALYTICS, c.env.ANALYTICS_ENABLED !== "false");
+  const metrics = createMetrics(
+    c.env.ANALYTICS,
+    c.env.ANALYTICS_ENABLED !== "false",
+  );
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
@@ -55,13 +58,19 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   if (removeTag === "user/-/state/com.google/starred") updates.isStarred = 0;
 
   if (Object.keys(updates).length === 0) {
-    logger.debug("edit-tag: no recognised tag operation", { addTag, removeTag });
+    logger.debug("edit-tag: no recognised tag operation", {
+      addTag,
+      removeTag,
+    });
     return c.text("OK");
   }
 
   // Stamp readAt when marking as read so the dashboard can show reads per day
   const readAt = updates.isRead === 1 ? Date.now() : undefined;
-  const fullUpdates = { ...updates, ...(readAt !== undefined ? { readAt } : {}) };
+  const fullUpdates = {
+    ...updates,
+    ...(readAt !== undefined ? { readAt } : {}),
+  };
 
   // Prefetch feedId for all items in one query — needed for the article_read metric
   const feedIdByItemId = new Map<string, string>();
@@ -81,9 +90,8 @@ state.post("/reader/api/0/edit-tag", async (c) => {
       .onConflictDoUpdate({
         target: [itemState.itemId, itemState.userId],
         set: fullUpdates,
-      })
+      }),
   );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await db.batch(stmts as unknown as [any, ...any[]]);
 
   if (updates.isRead === 1) {
@@ -132,7 +140,9 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
     const feed = await db
       .select({ id: feeds.id })
       .from(feeds)
-      .where(or(eq(feeds.id, streamId.value!), eq(feeds.feedUrl, streamId.value!)))
+      .where(
+        or(eq(feeds.id, streamId.value!), eq(feeds.feedUrl, streamId.value!)),
+      )
       .get();
     if (!feed) return c.text("OK");
     feedId = feed.id;
@@ -188,7 +198,9 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
 
   if (cutoffMs !== null) params.push(cutoffMs);
 
-  const result = await c.env.DB.prepare(insertSql).bind(...params).run();
+  const result = await c.env.DB.prepare(insertSql)
+    .bind(...params)
+    .run();
   const count = result.meta.changes ?? 0;
 
   logger.info("mark-all-as-read", { stream: s, count });

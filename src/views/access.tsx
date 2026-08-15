@@ -1,24 +1,26 @@
-import type { InferSelectModel } from 'drizzle-orm'
-import type { apiTokens } from '../db/schema'
-import { relativeTime } from '../lib/dates'
+import type { InferSelectModel } from "drizzle-orm";
+import type { apiTokens } from "../db/schema";
+import { relativeTime } from "../lib/dates";
 
-type ApiToken = InferSelectModel<typeof apiTokens>
+type ApiToken = InferSelectModel<typeof apiTokens>;
 
 // ---------------------------------------------------------------------------
 // Token list — rendered server-side; updated via htmx OOB swap on generate
 // ---------------------------------------------------------------------------
 
 interface TokenRowProps {
-  token: ApiToken
+  token: ApiToken;
 }
 
 /** Single row — has its own ID so htmx can target it for revoke */
 export function TokenRow({ token }: TokenRowProps) {
-  const lastUsed = relativeTime(token.lastUsedAt ?? null)
+  const lastUsed = relativeTime(token.lastUsedAt ?? null);
 
   return (
     <tr id={`token-${token.id}`} class="border-b border-border last:border-0">
-      <td class="py-3 pr-4 text-sm font-medium text-foreground">{token.name}</td>
+      <td class="py-3 pr-4 text-sm font-medium text-foreground">
+        {token.name}
+      </td>
       <td class="py-3 pr-4 text-sm text-muted-foreground">{lastUsed}</td>
       <td class="py-3 text-right">
         <button
@@ -32,26 +34,34 @@ export function TokenRow({ token }: TokenRowProps) {
         </button>
       </td>
     </tr>
-  )
+  );
 }
 
 /** tbody — also rendered on OOB swap after generating a new token.
  *  Pass oob=true to add hx-swap-oob="true" for out-of-band htmx updates. */
-export function TokenList({ tokens, oob }: { tokens: ApiToken[]; oob?: boolean }) {
+export function TokenList({
+  tokens,
+  oob,
+}: {
+  tokens: ApiToken[];
+  oob?: boolean;
+}) {
   return (
-    <tbody id="token-list" hx-swap-oob={oob ? 'true' : undefined}>
-      {tokens.length === 0
-        ? (
-          <tr>
-            <td colspan={3} class="py-6 text-center text-sm text-muted-foreground">
-              No active tokens. Generate one below.
-            </td>
-          </tr>
-        )
-        : tokens.map(t => <TokenRow token={t} />)
-      }
+    <tbody id="token-list" hx-swap-oob={oob ? "true" : undefined}>
+      {tokens.length === 0 ? (
+        <tr>
+          <td
+            colspan={3}
+            class="py-6 text-center text-sm text-muted-foreground"
+          >
+            No active tokens. Generate one below.
+          </td>
+        </tr>
+      ) : (
+        tokens.map((t) => <TokenRow token={t} />)
+      )}
     </tbody>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +79,7 @@ export function TokenReveal({ rawToken }: { rawToken: string }) {
         {rawToken}
       </code>
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +87,7 @@ export function TokenReveal({ rawToken }: { rawToken: string }) {
 // ---------------------------------------------------------------------------
 
 interface AccessTabProps {
-  tokens: ApiToken[]
+  tokens: ApiToken[];
 }
 
 export function AccessTab({ tokens }: AccessTabProps) {
@@ -88,16 +98,23 @@ export function AccessTab({ tokens }: AccessTabProps) {
         <div class="border-b border-border px-6 py-4">
           <h2 class="text-base font-semibold text-foreground">Active tokens</h2>
           <p class="mt-0.5 text-sm text-muted-foreground">
-            API tokens used by GReader clients (e.g. Current). Each token grants full read/write access.
+            API tokens used by GReader clients (e.g. Current). Each token grants
+            full read/write access.
           </p>
         </div>
         <div class="px-6 py-2">
           <table class="w-full">
             <thead>
               <tr class="border-b border-border">
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Name</th>
-                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">Last used</th>
-                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">Actions</th>
+                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                  Name
+                </th>
+                <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                  Last used
+                </th>
+                <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
+                  Actions
+                </th>
               </tr>
             </thead>
             <TokenList tokens={tokens} />
@@ -108,7 +125,9 @@ export function AccessTab({ tokens }: AccessTabProps) {
       {/* Generate new token card */}
       <div class="rounded-lg border border-border bg-card shadow-sm">
         <div class="border-b border-border px-6 py-4">
-          <h2 class="text-base font-semibold text-foreground">Generate token</h2>
+          <h2 class="text-base font-semibold text-foreground">
+            Generate token
+          </h2>
           <p class="mt-0.5 text-sm text-muted-foreground">
             Give the token a name to identify which client is using it.
           </p>
@@ -138,5 +157,5 @@ export function AccessTab({ tokens }: AccessTabProps) {
         </div>
       </div>
     </div>
-  )
+  );
 }

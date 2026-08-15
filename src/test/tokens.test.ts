@@ -3,7 +3,10 @@
 // Access middleware is bypassed via DEV_MODE=true (set in vitest.config.ts).
 
 import { env } from "cloudflare:workers";
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import {
+  createExecutionContext,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../index";
 import { getDb } from "../lib/db";
@@ -34,9 +37,11 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM users");
 
   const db = getDb(env.DB);
-  await db
-    .insert(users)
-    .values({ id: "dev-user-id", email: "dev@localhost", createdAt: Date.now() });
+  await db.insert(users).values({
+    id: "dev-user-id",
+    email: "dev@localhost",
+    createdAt: Date.now(),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -160,9 +165,11 @@ describe("DELETE /tokens/:id", () => {
   it("does not revoke another user's token", async () => {
     // Seed another user and their token
     const db = getDb(env.DB);
-    await db
-      .insert(users)
-      .values({ id: "other-user", email: "other@example.com", createdAt: Date.now() });
+    await db.insert(users).values({
+      id: "other-user",
+      email: "other@example.com",
+      createdAt: Date.now(),
+    });
     await db.insert(apiTokens).values({
       id: "other-tok",
       userId: "other-user",
