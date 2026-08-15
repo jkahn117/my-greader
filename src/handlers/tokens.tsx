@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { z } from "zod";
+import * as v from "valibot";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { sha256 } from "../lib/crypto";
@@ -41,14 +41,16 @@ handler.get("/app/access", async (c) => {
 // POST /tokens/generate — create a new API token
 // ---------------------------------------------------------------------------
 
-const generateSchema = z.object({ name: z.string().min(1).max(100).trim() });
+const generateSchema = v.object({
+  name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(100)),
+});
 
 handler.post("/tokens/generate", async (c) => {
   const userId = c.get("userId");
   const logger = createLogger({ path: "/tokens/generate", userId });
 
   const body = await c.req.parseBody();
-  const parsed = generateSchema.safeParse({ name: body.name });
+  const parsed = v.safeParse(generateSchema, { name: body.name });
 
   if (!parsed.success) {
     return c.html(
@@ -70,12 +72,12 @@ handler.post("/tokens/generate", async (c) => {
   await db.insert(apiTokens).values({
     id,
     userId,
-    name: parsed.data.name,
+    name: parsed.output.name,
     tokenHash: hash,
     createdAt: Date.now(),
   });
 
-  logger.info("token generated", { tokenId: id, name: parsed.data.name });
+  logger.info("token generated", { tokenId: id, name: parsed.output.name });
 
   // Re-fetch the updated list for OOB swap
   const updatedTokens = await db

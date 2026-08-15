@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { eq, inArray, or } from "drizzle-orm";
-import { z } from "zod";
+import * as v from "valibot";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { createMetrics } from "../../lib/metrics";
@@ -16,10 +16,10 @@ const state = new Hono<{ Bindings: Env; Variables: Variables }>();
 // ---------------------------------------------------------------------------
 // Marks individual items as read/unread or starred/unstarred.
 
-const editTagSchema = z.object({
+const editTagSchema = v.object({
   // `i` may appear multiple times — parsed with { all: true }
-  a: z.string().optional(), // add tag
-  r: z.string().optional(), // remove tag
+  a: v.optional(v.string()), // add tag
+  r: v.optional(v.string()), // remove tag
 });
 
 state.post("/reader/api/0/edit-tag", async (c) => {
@@ -35,10 +35,10 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   const userId = c.get("userId");
 
   const body = await c.req.parseBody({ all: true });
-  const parsed = editTagSchema.safeParse(body);
+  const parsed = v.safeParse(editTagSchema, body);
   if (!parsed.success) return c.text("Error", 400);
 
-  const { a, r } = parsed.data;
+  const { a, r } = parsed.output;
 
   // Collect item IDs — may be a single string or array
   const rawIds = Array.isArray(body["i"])
@@ -110,9 +110,11 @@ state.post("/reader/api/0/edit-tag", async (c) => {
 // POST /reader/api/0/mark-all-as-read
 // ---------------------------------------------------------------------------
 
-const markAllReadSchema = z.object({
-  s: z.string().min(1),
-  ts: z.coerce.number().optional(), // timestamp microseconds — mark items older than this
+const markAllReadSchema = v.object({
+  s: v.pipe(v.string(), v.minLength(1)),
+  ts: v.optional(
+    v.pipe(v.string(), v.transform(Number), v.number()),
+  ),
 });
 
 state.post("/reader/api/0/mark-all-as-read", async (c) => {
@@ -124,10 +126,10 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
-  const parsed = markAllReadSchema.safeParse(body);
+  const parsed = v.safeParse(markAllReadSchema, body);
   if (!parsed.success) return c.text("Error", 400);
 
-  const { s, ts } = parsed.data;
+  const { s, ts } = parsed.output;
   const streamId = parseStreamId(s);
 
   // ts is in microseconds; convert to ms for comparison against publishedAt

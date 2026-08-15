@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
-import { z } from "zod";
+import * as v from "valibot";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { sha256 } from "../../lib/crypto";
@@ -16,10 +16,10 @@ const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
 // and returns the same token as the Auth value — clients reuse it as the
 // Authorization header on all subsequent requests.
 
-export const clientLoginSchema = z.object({
-  Email: z.email(),
-  Passwd: z.string().min(1),
-  service: z.string().optional(),
+export const clientLoginSchema = v.object({
+  Email: v.pipe(v.string(), v.email()),
+  Passwd: v.pipe(v.string(), v.minLength(1)),
+  service: v.optional(v.string()),
 });
 
 auth.post("/accounts/ClientLogin", async (c) => {
@@ -36,14 +36,14 @@ auth.post("/accounts/ClientLogin", async (c) => {
   }
 
   const body = await c.req.parseBody();
-  const parsed = clientLoginSchema.safeParse(body);
+  const parsed = v.safeParse(clientLoginSchema, body);
 
   if (!parsed.success) {
-    logger.warn("ClientLogin bad request", { errors: parsed.error.issues });
+    logger.warn("ClientLogin bad request", { errors: parsed.issues });
     return c.text("BadAuthentication", 403);
   }
 
-  const { Passwd } = parsed.data;
+  const { Passwd } = parsed.output;
 
   const db = getDb(c.env.DB);
   const hash = await sha256(Passwd);
@@ -58,7 +58,7 @@ auth.post("/accounts/ClientLogin", async (c) => {
     return c.text("BadAuthentication", 403);
   }
 
-  logger.info("ClientLogin success", { email: parsed.data.Email });
+  logger.info("ClientLogin success", { email: parsed.output.Email });
 
   // GReader clients expect plain-text line-delimited response
   return c.text(`SID=none\nLSID=none\nAuth=${Passwd}\n`);

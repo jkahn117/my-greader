@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { and, eq, isNotNull, or } from "drizzle-orm";
-import { z } from "zod";
+import * as v from "valibot";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { createMetrics } from "../../lib/metrics";
@@ -134,12 +134,12 @@ subs.post("/reader/api/0/subscription/quickadd", async (c) => {
 // POST /reader/api/0/subscription/edit
 // ---------------------------------------------------------------------------
 
-const subscriptionEditSchema = z.object({
-  ac: z.enum(["subscribe", "unsubscribe", "edit"]),
-  s: z.string().min(1), // feed/<feed-url> or feed/<feed-id>
-  t: z.string().optional(), // custom title
-  a: z.string().optional(), // add label: user/-/label/<folder>
-  r: z.string().optional(), // remove label
+const subscriptionEditSchema = v.object({
+  ac: v.picklist(["subscribe", "unsubscribe", "edit"]),
+  s: v.pipe(v.string(), v.minLength(1)),
+  t: v.optional(v.string()),
+  a: v.optional(v.string()),
+  r: v.optional(v.string()),
 });
 
 subs.post("/reader/api/0/subscription/edit", async (c) => {
@@ -155,16 +155,16 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
-  const parsed = subscriptionEditSchema.safeParse(body);
+  const parsed = v.safeParse(subscriptionEditSchema, body);
 
   if (!parsed.success) {
     logger.warn("subscription/edit bad request", {
-      errors: parsed.error.issues,
+      errors: parsed.issues,
     });
     return c.text("Error", 400);
   }
 
-  const { ac, s, t, a, r } = parsed.data;
+  const { ac, s, t, a, r } = parsed.output;
 
   // s is always "feed/<url-or-id>"
   const feedRef = s.startsWith("feed/") ? s.slice(5) : s;

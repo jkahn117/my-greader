@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
+import * as v from "valibot";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import {
@@ -103,10 +104,10 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
-  const parsed = streamContentsSchema.safeParse(c.req.query());
+  const parsed = v.safeParse(streamContentsSchema, c.req.query());
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
-  const { s, n, xt, c: contToken, ot } = parsed.data;
+  const { s, n, xt, c: contToken, ot } = parsed.output;
   const streamId = parseStreamId(s);
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
@@ -170,10 +171,10 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
-  const parsed = streamIdsSchema.safeParse(c.req.query());
+  const parsed = v.safeParse(streamIdsSchema, c.req.query());
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
-  const { s, n, xt, c: contToken, ot } = parsed.data;
+  const { s, n, xt, c: contToken, ot } = parsed.output;
   const streamId = parseStreamId(s);
   const excludeRead = xt === "user/-/state/com.google/read";
   const cursor = contToken ? decodeContinuation(contToken) : null;
