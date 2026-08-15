@@ -1,3 +1,15 @@
+/**
+ * Feed polling module — owns all feed-fetch policy.
+ *
+ * `createFeedPoller(db, transport, observe, now)` returns one
+ * callable function per poll cycle.  The Workflow scheduler
+ * provides bindings; the module handles HTTP responses, XML
+ * parsing, fallback parsing, item storage, interval backoff,
+ * permanent/transient error tracking, and deactivation.
+ *
+ * Observability tools (logger, metrics, wide events) stay in the
+ * Workflow's `PollObserver` adapter — no Powertools imports here.
+ */
 import Parser from "rss-parser";
 import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
@@ -66,6 +78,10 @@ export interface PollObserver {
 export interface FeedPoller {
   poll(feed: FeedToCheck): Promise<FeedPollResult>;
 }
+
+// Returns a poller that fetches and stores one feed at a time.
+// Dependencies (D1, HTTP transport, observer, clock) are provided
+// at creation and shared across all calls to `poll()`.
 
 export function createFeedPoller(
   dbBinding: D1Database,

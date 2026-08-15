@@ -15,6 +15,10 @@ const stream = new Hono<{ Bindings: Env; Variables: Variables }>();
 // ---------------------------------------------------------------------------
 // GET /reader/api/0/stream/contents
 // ---------------------------------------------------------------------------
+//
+// Returns paginated feed articles with full content for a stream
+// (feed, folder, starred, or all).  Supports continuation-based
+// cursor pagination and read-state exclusion.
 
 stream.get("/reader/api/0/stream/contents", async (c) => {
   const logger = createLogger({
@@ -56,6 +60,10 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
 // ---------------------------------------------------------------------------
 // GET /reader/api/0/stream/items/ids
 // ---------------------------------------------------------------------------
+//
+// Lightweight variant: returns only item IDs and timestamps for the
+// same stream scope.  Clients use this to discover new items, then
+// fetch just the missing articles via stream/items/contents.
 
 stream.get("/reader/api/0/stream/items/ids", async (c) => {
   const logger = createLogger({
@@ -99,6 +107,11 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 // ---------------------------------------------------------------------------
 // GET|POST /reader/api/0/stream/items/contents
 // ---------------------------------------------------------------------------
+//
+// Fetches full article content for a specific set of item IDs.
+// Accepts repeated `i` params via GET query string or POST form
+// body.  Only returns items belonging to feeds the user is
+// subscribed to.
 
 type HonoCtx = Context<{ Bindings: Env; Variables: Variables }>;
 

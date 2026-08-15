@@ -1,3 +1,14 @@
+/**
+ * Subscription lifecycle module — owns all feed/subscription CRUD.
+ *
+ * `createSubscriptionLifecycle(db, observe)` returns subscribe,
+ * unsubscribe, edit, list, and get.  Canonical-feed upsert and
+ * feed resolution by ID or URL are handled internally so protocol
+ * adapters (GReader handlers, OPML import) can stay thin.
+ *
+ * Powertools (logger, metrics) stays in the `SubObserver` adapter
+ * that handlers provide — no observability imports here.
+ */
 import { and, asc, eq, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { feeds, subscriptions } from "../db/schema";
@@ -70,6 +81,10 @@ export interface SubscriptionLifecycle {
   list(userId: string): Promise<SubRow[]>;
   get(userId: string, feedId: string): Promise<SubRow | null>;
 }
+
+// Returns a lifecycle instance backed by D1.  `subscribe()` internally
+// upserts the canonical feed row before creating the subscription.
+// `unsubscribe()` and `edit()` resolve the feed reference by ID or URL.
 
 export function createSubscriptionLifecycle(
   dbBinding: D1Database,

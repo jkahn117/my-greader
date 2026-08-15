@@ -1,3 +1,14 @@
+/**
+ * Stream query module — owns GReader stream scope resolution and
+ * paginated item queries.
+ *
+ * `createStreamModule(dbBinding)` returns resolveScope, queryPage,
+ * queryByIds, and resolveFeedRef.  Also exports parseStreamId,
+ * StreamType, ItemRow, and toGReaderItem for response shaping.
+ *
+ * GReader handlers become thin adapters: parse HTTP params, call
+ * this module, and map results to the JSON wire format.
+ */
 import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { getDb } from "../lib/db";
@@ -84,6 +95,10 @@ export interface StreamModule {
     userId: string;
   }): Promise<ItemRow[]>;
 }
+
+// Returns a stream query module backed by D1.  All queries filter
+// by the user's subscriptions — a client can only see items from
+// feeds they are subscribed to.
 
 export function createStreamModule(
   dbBinding: D1Database,
