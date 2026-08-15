@@ -1,10 +1,15 @@
-// Cron handler tests.
-// Outbound fetch (to feed URLs) is mocked via vi.stubGlobal so we control
-// what the parser sees without making real HTTP requests.
+// Feed polling tests.
+// Uses the real D1 from the Cloudflare vitest pool and faked FetchTransport
+// so we exercise the full poll policy without real HTTP requests.
 
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchAndStoreFeed, purgeOldItems } from "../handlers/cron";
+import {
+  createFeedPoller,
+  type FeedTransport,
+  type PollObserver,
+} from "../feed/poll";
+import { purgeOldItems } from "../handlers/cron";
 import { getDb } from "../lib/db";
 import { feeds, items, itemState, users } from "../db/schema";
 import { deriveItemId } from "../lib/crypto";
@@ -52,33 +57,36 @@ const ATOM_FEED = `<?xml version="1.0" encoding="UTF-8"?>
 // Helpers
 // ---------------------------------------------------------------------------
 
-function mockFetch(
+function mockTransport(
   xml: string,
   status = 200,
-  headers: Record<string, string> = {},
-) {
-  // Use a factory so each call gets a fresh Response (bodies are single-use)
-  vi.stubGlobal(
-    "fetch",
-    vi
+  responseHeaders: Record<string, string> = {},
+): FeedTransport {
+  return {
+    get: vi
       .fn()
-      .mockImplementation(() =>
-        Promise.resolve(new Response(xml, { status, headers })),
+      .mockResolvedValue(
+        new Response(xml, { status, headers: responseHeaders }),
       ),
-  );
+  };
 }
 
-function mockFetch304() {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(new Response(null, { status: 304 })),
-  );
+function mockTransport304(): FeedTransport {
+  return {
+    get: vi.fn().mockResolvedValue(new Response(null, { status: 304 })),
+  };
+}
+
+function noopObserver(): PollObserver {
+  return { publish: vi.fn() };
 }
 
 async function seedFeed(feedUrl: string, title = "Test Feed") {
   const db = getDb(env.DB);
   const feedId = crypto.randomUUID();
-  await db.insert(feeds).values({ id: feedId, feedUrl, title, htmlUrl: null });
+  await db
+    .insert(feeds)
+    .values({ id: feedId, feedUrl, title, htmlUrl: null });
   return feedId;
 }
 
@@ -105,29 +113,35 @@ beforeEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// fetchAndStoreFeed
+// FeedPoller
 // ---------------------------------------------------------------------------
 
-describe("fetchAndStoreFeed", () => {
+describe("FeedPoller", () => {
+  const feedRow = (overrides: Record<string, unknown> = {}) => ({
+    id: "",
+    feedUrl: "https://example.com/feed.xml",
+    title: null,
+    htmlUrl: null,
+    etag: null,
+    lastModified: null,
+    lastFetchedAt: null,
+    consecutiveErrors: 0,
+    checkIntervalMinutes: 30,
+    lastNewItemAt: null,
+    ...overrides,
+  });
+
   it("parses RSS and stores items", async () => {
-    mockFetch(RSS_FEED);
+    const transport = mockTransport(RSS_FEED);
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    await poller.poll(feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const stored = await db.select().from(items).all();
@@ -138,23 +152,17 @@ describe("fetchAndStoreFeed", () => {
   });
 
   it("parses Atom feeds", async () => {
-    mockFetch(ATOM_FEED);
+    const transport = mockTransport(ATOM_FEED);
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://atom.example.com/feed.xml");
 
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://atom.example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
+    await poller.poll(
+      feedRow({ id: feedId, feedUrl: "https://atom.example.com/feed.xml" }),
     );
 
     const db = getDb(env.DB);
@@ -164,25 +172,17 @@ describe("fetchAndStoreFeed", () => {
   });
 
   it("skips parsing on 304 and updates lastFetchedAt", async () => {
-    mockFetch304();
+    const transport = mockTransport304();
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const before = Date.now();
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: "abc123",
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    await poller.poll(feedRow({ id: feedId, etag: "abc123" }));
 
     const db = getDb(env.DB);
     const row = await db
@@ -190,63 +190,47 @@ describe("fetchAndStoreFeed", () => {
       .from(feeds)
       .get();
 
-    // No items stored
     const stored = await db.select().from(items).all();
     expect(stored).toHaveLength(0);
 
-    // But lastFetchedAt was updated
     expect(row?.lastFetchedAt).toBeGreaterThanOrEqual(before);
   });
 
   it("sends If-None-Match header when etag is stored", async () => {
-    const mockFetchFn = vi
+    const getFn = vi
       .fn()
       .mockResolvedValue(new Response(null, { status: 304 }));
-    vi.stubGlobal("fetch", mockFetchFn);
+    const transport: FeedTransport = { get: getFn };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: 'W/"abc123"',
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    await poller.poll(feedRow({ id: feedId, etag: 'W/"abc123"' }));
 
-    const [, init] = mockFetchFn.mock.calls[0];
-    expect(init.headers["If-None-Match"]).toBe('W/"abc123"');
+    expect(getFn).toHaveBeenCalledWith(
+      "https://example.com/feed.xml",
+      expect.objectContaining({ "If-None-Match": 'W/"abc123"' }),
+    );
   });
 
   it("stores ETag and Last-Modified from response", async () => {
-    mockFetch(RSS_FEED, 200, {
+    const transport = mockTransport(RSS_FEED, 200, {
       ETag: 'W/"new-etag"',
       "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT",
     });
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    await poller.poll(feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const row = await db
@@ -259,38 +243,31 @@ describe("fetchAndStoreFeed", () => {
   });
 
   it("does not insert duplicate items on second fetch", async () => {
-    // Each call gets a fresh Response — bodies are single-use
-    vi.stubGlobal(
-      "fetch",
-      vi
+    const transport: FeedTransport = {
+      get: vi
         .fn()
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 }))
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 })),
+    };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
-    const feedRow = {
-      id: feedId,
-      feedUrl: "https://example.com/feed.xml",
-      title: null,
-      htmlUrl: null,
-      etag: null,
-      lastModified: null,
-      lastFetchedAt: null,
-      consecutiveErrors: 0,
-      checkIntervalMinutes: 30,
-      lastNewItemAt: null,
-    };
+    const row = feedRow({ id: feedId });
 
-    await fetchAndStoreFeed(feedRow, env);
-    await fetchAndStoreFeed(feedRow, env);
+    await poller.poll(row);
+    await poller.poll(row);
 
     const db = getDb(env.DB);
     const stored = await db.select().from(items).all();
-    expect(stored).toHaveLength(2); // not 4
+    expect(stored).toHaveLength(2);
   });
 
   it("trims content exceeding 50KB", async () => {
-    const bigContent = "x".repeat(60 * 1024); // 60KB
+    const bigContent = "x".repeat(60 * 1024);
     const bigFeed = `<?xml version="1.0"?><rss version="2.0"><channel>
       <title>Big Feed</title><link>https://example.com</link>
       <item>
@@ -301,24 +278,16 @@ describe("fetchAndStoreFeed", () => {
       </item>
     </channel></rss>`;
 
-    mockFetch(bigFeed);
+    const transport = mockTransport(bigFeed);
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    await poller.poll(feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const stored = await db
@@ -330,24 +299,16 @@ describe("fetchAndStoreFeed", () => {
   });
 
   it("handles non-OK HTTP status gracefully without throwing", async () => {
-    mockFetch("", 500);
+    const transport = mockTransport("", 500);
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    const result = await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
-    );
+    const result = await poller.poll(feedRow({ id: feedId }));
     expect(result.status).toBe("error");
 
     const db = getDb(env.DB);
@@ -357,36 +318,41 @@ describe("fetchAndStoreFeed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// fetchAndStoreFeed — error propagation (network-level throw)
+// FeedPoller error handling
 // ---------------------------------------------------------------------------
 
-describe("fetchAndStoreFeed error handling", () => {
+describe("FeedPoller error handling", () => {
+  const feedRow = (overrides: Record<string, unknown> = {}) => ({
+    id: "",
+    feedUrl: "https://bad.example.com/feed.xml",
+    title: null,
+    htmlUrl: null,
+    etag: null,
+    lastModified: null,
+    lastFetchedAt: null,
+    consecutiveErrors: 0,
+    checkIntervalMinutes: 30,
+    lastNewItemAt: null,
+    ...overrides,
+  });
+
   it("returns error result on network error", async () => {
-    // Network errors (including timeouts) are caught and returned as a
-    // FeedResult with status "error" so the Workflow can continue.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValueOnce(new Error("Network error")),
+    const transport: FeedTransport = {
+      get: vi.fn().mockRejectedValueOnce(new Error("Network error")),
+    };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
     );
     const feedId = await seedFeed(
       "https://bad.example.com/feed.xml",
       "Bad Feed",
     );
 
-    const result = await fetchAndStoreFeed(
-      {
-        id: feedId,
-        feedUrl: "https://bad.example.com/feed.xml",
-        title: null,
-        htmlUrl: null,
-        etag: null,
-        lastModified: null,
-        lastFetchedAt: null,
-        consecutiveErrors: 0,
-        checkIntervalMinutes: 30,
-        lastNewItemAt: null,
-      },
-      env,
+    const result = await poller.poll(
+      feedRow({ id: feedId, feedUrl: "https://bad.example.com/feed.xml" }),
     );
     expect(result.status).toBe("error");
   });
@@ -402,7 +368,6 @@ describe("purgeOldItems", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
     const db = getDb(env.DB);
 
-    // Old item (31 days ago)
     const oldItemId = await deriveItemId("https://example.com/old");
     const oldTime = Date.now() - 31 * 24 * 60 * 60 * 1000;
     await db.insert(items).values({
@@ -415,7 +380,6 @@ describe("purgeOldItems", () => {
       publishedAt: oldTime,
     });
 
-    // Recent item (1 day ago)
     const newItemId = await deriveItemId("https://example.com/new");
     await db.insert(items).values({
       id: newItemId,
@@ -473,7 +437,6 @@ describe("purgeOldItems", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
     const db = getDb(env.DB);
 
-    // Item 8 days old
     const itemId = await deriveItemId("https://example.com/week-old");
     const weekAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
     await db.insert(items).values({
@@ -486,8 +449,10 @@ describe("purgeOldItems", () => {
       publishedAt: weekAgo,
     });
 
-    // With 7-day retention, it should be deleted
-    await purgeOldItems({ ...env, ITEM_RETENTION_DAYS: "7" } as unknown as Env);
+    await purgeOldItems({
+      ...env,
+      ITEM_RETENTION_DAYS: "7",
+    } as unknown as Env);
 
     const remaining = await db.select().from(items).all();
     expect(remaining).toHaveLength(0);

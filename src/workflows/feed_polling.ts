@@ -6,9 +6,14 @@ import {
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
-import { createMetrics } from "../lib/metrics";
+import { createMetrics, ParseStatus } from "../lib/metrics";
 import { feeds, subscriptions, cycleRuns } from "../db/schema";
-import { fetchAndStoreFeed, FeedResult } from "../handlers/cron";
+import {
+  createFeedPoller,
+  type FeedPollResult,
+  type FeedTransport,
+  type PollObserver,
+} from "../feed/poll";
 
 // No per-run parameters needed — the Workflow always fetches all due feeds
 type Params = Record<string, never>;
@@ -75,7 +80,7 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 //
 // Error handling:
 //   - Individual feed failures are caught inside Promise.allSettled and
-//     returned as FeedResult { status: "error" }. They do not fail the step.
+//     returned as FeedPollResult { status: "error" }. They do not fail the step.
 //   - Step-level failures (e.g. D1 outage, binding error) will be retried by
 //     the Workflow runtime before propagating.
 //   - run() wraps everything in a try/catch that logs the full error message
@@ -108,7 +113,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         using analytics = asDisposable(this.env.ANALYTICS);
         const metrics = createMetrics(
           analytics as unknown as Env["ANALYTICS"],
-          this.env.ANALYTICS_ENABLED !== "false",
+          (this.env.ANALYTICS_ENABLED as string) !== "false",
         );
         metrics.recordCycleError({ error: errorMessage });
         await metrics.flush();
@@ -200,7 +205,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // Sequential steps each run in a fresh Worker invocation with a new budget.
     // ------------------------------------------------------------------
 
-    const allResults: FeedResult[] = [];
+    const allResults: FeedPollResult[] = [];
 
     for (let i = 0; i < dueFeeds.length; i += FEEDS_PER_STEP) {
       const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
@@ -212,17 +217,104 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           try {
             using d1 = asDisposable(this.env.DB);
             using analytics = asDisposable(this.env.ANALYTICS);
-            const stepEnv = {
-              DB: d1,
-              ANALYTICS: analytics,
-              ANALYTICS_ENABLED: this.env.ANALYTICS_ENABLED,
-            } as unknown as Env;
-
-            const settled = await Promise.allSettled(
-              batch.map((feed) => fetchAndStoreFeed(feed, stepEnv)),
+            const metrics = createMetrics(
+              analytics as unknown as Env["ANALYTICS"],
+              (this.env.ANALYTICS_ENABLED as string) !== "false",
             );
 
-            return settled.map((s, j): FeedResult => {
+            const transport: FeedTransport = {
+              get(url, headers) {
+                return fetch(url, {
+                  headers,
+                  signal: AbortSignal.timeout(15000),
+                });
+              },
+            };
+
+            const observer: PollObserver = {
+              publish(event) {
+                switch (event.kind) {
+                  case "feedPolled":
+                    logger.info("feed polled", {
+                      feedId: event.feedId,
+                      newItems: event.newItems,
+                      durationMs: event.durationMs,
+                      parseStatus: event.parseStatus,
+                    });
+                    metrics.recordParse({
+                      feedId: event.feedId,
+                      status:
+                        event.parseStatus === "fallback"
+                          ? ParseStatus.FALLBACK
+                          : ParseStatus.SUCCESS,
+                      durationMs: event.durationMs,
+                      articleCount: event.newItems,
+                    });
+                    break;
+                  case "feedNotModified":
+                    break;
+                  case "feedRateLimited":
+                    logger.warn("feed rate limited", {
+                      feedId: event.feedId,
+                      backoffMinutes: event.backoffMinutes,
+                    });
+                    metrics.recordFetchError({
+                      feedId: event.feedId,
+                      httpStatus: 429,
+                    });
+                    break;
+                  case "feedFetchFailed":
+                    logger.warn("feed fetch failed", {
+                      feedId: event.feedId,
+                      status: event.status,
+                      error: event.error,
+                    });
+                    if (event.status) {
+                      metrics.recordFetchError({
+                        feedId: event.feedId,
+                        httpStatus: event.status,
+                      });
+                    }
+                    break;
+                  case "feedParseFailed":
+                    logger.warn("feed parse failed", {
+                      feedId: event.feedId,
+                      error: event.error,
+                    });
+                    metrics.recordParse({
+                      feedId: event.feedId,
+                      status: ParseStatus.FAILURE,
+                      durationMs: 0,
+                      error: event.error,
+                    });
+                    break;
+                  case "feedDeactivated":
+                    logger.warn(
+                      "feed deactivated after repeated errors",
+                      {
+                        feedId: event.feedId,
+                        consecutiveErrors: event.consecutiveErrors,
+                      },
+                    );
+                    break;
+                }
+              },
+            };
+
+            const poller = createFeedPoller(
+              d1,
+              transport,
+              observer,
+              () => Date.now(),
+            );
+
+            const settled = await Promise.allSettled(
+              batch.map((feed) => poller.poll(feed)),
+            );
+
+            await metrics.flush();
+
+            return settled.map((s, j): FeedPollResult => {
               if (s.status === "fulfilled") return s.value;
               return {
                 feedId: batch[j].id,
@@ -278,7 +370,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         const db = getDb(d1);
         const metrics = createMetrics(
           analytics as unknown as Env["ANALYTICS"],
-          this.env.ANALYTICS_ENABLED !== "false",
+          (this.env.ANALYTICS_ENABLED as string) !== "false",
         );
         const now = Date.now();
 

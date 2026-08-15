@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { parseOpml } from "../lib/opml";
-import { fetchAndStoreFeed, triggerFeedPollingWorkflow } from "./cron";
+import { triggerFeedPollingWorkflow } from "./cron";
 import { feeds, subscriptions } from "../db/schema";
 import { selectUserSubscriptions } from "../db/queries";
 import { ImportResult } from "../views/import";
@@ -47,7 +47,7 @@ handler.post("/import", async (c) => {
   let imported = 0;
   let duplicates = 0;
   const errors: string[] = [];
-  const newFeedRows: Parameters<typeof fetchAndStoreFeed>[0][] = [];
+  const newFeedRows: (typeof feeds.$inferSelect)[] = [];
 
   for (const parsed of parsedList) {
     try {
