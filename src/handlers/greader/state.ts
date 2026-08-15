@@ -1,12 +1,12 @@
 import { Hono } from "hono";
-import { eq, inArray, or } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import * as v from "valibot";
 import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { createMetrics } from "../../lib/metrics";
 import { normalizeItemId } from "../../lib/crypto";
-import { feeds, items, itemState } from "../../db/schema";
-import { parseStreamId } from "./helpers";
+import { items, itemState } from "../../db/schema";
+import { parseStreamId, createStreamModule } from "../../feed/stream";
 import type { Variables } from "./helpers";
 
 const state = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -29,7 +29,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
   });
   const metrics = createMetrics(
     c.env.ANALYTICS,
-    c.env.ANALYTICS_ENABLED !== "false",
+    (c.env.ANALYTICS_ENABLED as string) !== "false",
   );
   const db = getDb(c.env.DB);
   const userId = c.get("userId");
@@ -112,9 +112,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
 
 const markAllReadSchema = v.object({
   s: v.pipe(v.string(), v.minLength(1)),
-  ts: v.optional(
-    v.pipe(v.string(), v.transform(Number), v.number()),
-  ),
+  ts: v.optional(v.pipe(v.string(), v.transform(Number), v.number())),
 });
 
 state.post("/reader/api/0/mark-all-as-read", async (c) => {
@@ -122,7 +120,6 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
     path: "/reader/api/0/mark-all-as-read",
     userId: c.get("userId"),
   });
-  const db = getDb(c.env.DB);
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
@@ -139,13 +136,8 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
   // For "feed" type, resolve the canonical feed ID first (value may be URL or ID)
   let feedId: string | null = null;
   if (streamId.type === "feed") {
-    const feed = await db
-      .select({ id: feeds.id })
-      .from(feeds)
-      .where(
-        or(eq(feeds.id, streamId.value!), eq(feeds.feedUrl, streamId.value!)),
-      )
-      .get();
+    const mod = createStreamModule(c.env.DB);
+    const feed = await mod.resolveFeedRef(streamId.value!);
     if (!feed) return c.text("OK");
     feedId = feed.id;
   }
