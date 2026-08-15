@@ -3,6 +3,19 @@
 // ---------------------------------------------------------------------------
 
 import { relativeTime, shortUtc } from "../lib/dates";
+import type {
+  FeedVelocityRow,
+  FetchPerfRow,
+  ErrorRateRow,
+  ArticleTrendRow,
+} from "../feed/analytics";
+
+export type {
+  FeedVelocityRow,
+  FetchPerfRow,
+  ErrorRateRow,
+  ArticleTrendRow,
+};
 
 // ---------------------------------------------------------------------------
 // Shared types (exported so the handler can construct typed data objects)
@@ -28,33 +41,6 @@ export interface FeedActivityRow {
 export interface ReadsByDay {
   date: string;
   reads: number;
-}
-
-// Analytics Engine SQL types — populated when ANALYTICS_ENABLED and CF_API_TOKEN are set
-export interface FeedVelocityRow {
-  feedId: string;
-  title: string;
-  total30d: number;
-  avgPerFetch: number;
-}
-
-export interface FetchPerfRow {
-  feedId: string;
-  title: string;
-  samples: number;
-  avgMs: number;
-  maxMs: number;
-}
-
-export interface ErrorRateRow {
-  httpStatus: string;
-  occurrences: number;
-  affectedFeeds: number;
-}
-
-export interface ArticleTrendRow {
-  day: string;
-  newArticles: number;
 }
 
 interface IntervalDistRow {
