@@ -20,14 +20,15 @@
     "@workers-powertools/hono": "^0.4.0",
     "@workers-powertools/logger": "^0.2.0",
     "@workers-powertools/metrics": "^0.4.0",
+    "@workers-powertools/tracer": "^0.2.0",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
-    "fast-xml-parser": "^5.10.1",
+    "fast-xml-parser": "^5.11.0",
     "hono": "^4.13.2",
     "linkedom": "^0.18.13",
     "rss-parser": "^3.13.0",
-    "vitest": "^4.1.10",
-    "valibot": "^1.4.2"
+    "valibot": "^1.4.2",
+    "vitest": "^4.1.10"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.52.1",

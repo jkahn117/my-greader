@@ -13,13 +13,16 @@ importers:
         version: 0.6.0
       '@workers-powertools/hono':
         specifier: ^0.4.0
-        version: 0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.1.1)(hono@4.13.2)
+        version: 0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.2.0)(hono@4.13.2)
       '@workers-powertools/logger':
         specifier: ^0.2.0
         version: 0.2.0
       '@workers-powertools/metrics':
         specifier: ^0.4.0
         version: 0.4.0
+      '@workers-powertools/tracer':
+        specifier: ^0.2.0
+        version: 0.2.0
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
@@ -27,8 +30,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
       fast-xml-parser:
-        specifier: ^5.10.1
-        version: 5.10.1
+        specifier: ^5.11.0
+        version: 5.11.0
       hono:
         specifier: ^4.13.2
         version: 4.13.2
@@ -1968,9 +1971,6 @@ packages:
   '@vitest/utils@4.1.10':
     resolution: {integrity: sha512-fy9am/HWxbaGt/Sawrp90vt6Y6jQwf1RX77cz3uwoJwJVMli/e1IEwRPnMNJ7vKfPTwo0diXifkpPvwH9v7nGA==}
 
-  '@workers-powertools/commons@0.1.1':
-    resolution: {integrity: sha512-ek0xqu9yYn5nupCywBSrw0+EDVY+lFzj2SY9PuGGrNjSgj7UUwKg8qCKOqDkJq4gDA5FPzptreA4YXxauvRT+Q==}
-
   '@workers-powertools/commons@0.2.0':
     resolution: {integrity: sha512-iBea7HuhzrQEti6kESHBzVxc0wEu086bBgqfotGskTc04+R5rk5Ou+IjdqXb4etfHQmDJXsInf+oq89Buo+ICA==}
 
@@ -1993,8 +1993,8 @@ packages:
   '@workers-powertools/metrics@0.4.0':
     resolution: {integrity: sha512-S9DUbbr67VnrxwhloAJ7xVp0WHnvqwXkYRzRmzGsBtHEKWRH3cyNtw40AlnKv/D1H27XlyGPxRmVl9LSPORxaQ==}
 
-  '@workers-powertools/tracer@0.1.1':
-    resolution: {integrity: sha512-FuyfqBZ5BmqFZsLjqxqDuEZhBRwmOwrvlKujm9xsI7dXlC6BKl8Oa4FMdbW8DPladfUBZ7PfI+JczpMNBvOBxA==}
+  '@workers-powertools/tracer@0.2.0':
+    resolution: {integrity: sha512-Wt6zeXnWnMoUvKhDy+TpvzpYASRADzCKM5CwN+p/4Bt9L22fmfZuD8VQ0EmAyu1rPvdXkZa/iK1Xmy9QuPBXBw==}
 
   anynum@1.0.1:
     resolution: {integrity: sha512-N6//FLET/tXYNM/F6ABca1oH6fWB+KlTt909Le28WMDBk8oaT4vY17DCrwg2MvmuqUKt3Ni4N5dGJ/EoBgcO6A==}
@@ -2237,8 +2237,8 @@ packages:
   error-stack-parser-es@1.0.5:
     resolution: {integrity: sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==}
 
-  es-module-lexer@2.3.1:
-    resolution: {integrity: sha512-shc1dbU90Yl/xq1QrC7QRtfcwURZuVRfPhZbDoldJ1cn1gzDvBaBWlv0eFolj5+0znnPJz5TXLxsN77X/12KTA==}
+  es-module-lexer@2.3.2:
+    resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
 
   esbuild@0.18.20:
     resolution: {integrity: sha512-ceqxoedUrcayh7Y7ZX6NdbbDzGROiyVBgC4PriJThBKSVPWnnFHZAkfI1lJT8QFkOwH4qOS2SJkS4wvpGl8BpA==}
@@ -2279,8 +2279,8 @@ packages:
   fast-xml-builder@1.3.1:
     resolution: {integrity: sha512-pIM/1n3ntFXKYrUZwW7QCK0gAW7XY+wzj1YMIV3tLDvPj/V+zTGJK5e3/4WJfwj0qWw2ElNXiTixda/R+3YSug==}
 
-  fast-xml-parser@5.10.1:
-    resolution: {integrity: sha512-IEMIf7298kXuZSRFoGfMYrl7is8LpavODgbNz1cwIudv7KwVFnuU+UsMporfq6PD6aXSlawZlARiA3UywCTfMw==}
+  fast-xml-parser@5.11.0:
+    resolution: {integrity: sha512-9IGxMqvqLOnqP+Egi1nqDHKv5k8aZ7r9n558enxcucmyVGEBNPAU+MOg/8jPIS7rO7sSq4gFm1/nHtiaubMruw==}
     hasBin: true
 
   fdir@6.5.0:
@@ -2307,8 +2307,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  get-tsconfig@4.14.2:
-    resolution: {integrity: sha512-XpwZALwwl/BaKTAyC6+c5T8y6kCg2jk+XGqOVrKIQmW49pNypYLMRjCUXqa28tQgJlhS2RlzP7sc+Rx7W6qsfw==}
+  get-tsconfig@4.14.3:
+    resolution: {integrity: sha512-++QEw4DIY7WGoukz+/+A/8dGYPT9l9yIadnmSgZ8Rjr3YVSVDipQSO9CdnJo9ePqFqUUqh+wk9uIaoiAwsiPkA==}
 
   github-from-package@0.0.0:
     resolution: {integrity: sha512-SyHy3T1v2NUXn29OsWdxmK6RwHD+vkj3v8en8AOBZ1wBQ/hCAQ5bAQTD02kW4W9tUp/3Qh6J8r9EvntiyCmOOw==}
@@ -3038,7 +3038,7 @@ snapshots:
   '@esbuild-kit/esm-loader@2.6.5':
     dependencies:
       '@esbuild-kit/core-utils': 3.3.2
-      get-tsconfig: 4.14.2
+      get-tsconfig: 4.14.3
 
   '@esbuild/aix-ppc64@0.25.12':
     optional: true
@@ -4045,17 +4045,15 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  '@workers-powertools/commons@0.1.1': {}
-
   '@workers-powertools/commons@0.2.0': {}
 
-  '@workers-powertools/hono@0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.1.1)(hono@4.13.2)':
+  '@workers-powertools/hono@0.4.0(@workers-powertools/commons@0.2.0)(@workers-powertools/idempotency@0.2.0)(@workers-powertools/logger@0.2.0)(@workers-powertools/metrics@0.4.0)(@workers-powertools/tracer@0.2.0)(hono@4.13.2)':
     dependencies:
       '@workers-powertools/commons': 0.2.0
       '@workers-powertools/idempotency': 0.2.0
       '@workers-powertools/logger': 0.2.0
       '@workers-powertools/metrics': 0.4.0
-      '@workers-powertools/tracer': 0.1.1
+      '@workers-powertools/tracer': 0.2.0
       hono: 4.13.2
 
   '@workers-powertools/idempotency@0.2.0':
@@ -4070,9 +4068,9 @@ snapshots:
     dependencies:
       '@workers-powertools/commons': 0.2.0
 
-  '@workers-powertools/tracer@0.1.1':
+  '@workers-powertools/tracer@0.2.0':
     dependencies:
-      '@workers-powertools/commons': 0.1.1
+      '@workers-powertools/commons': 0.2.0
 
   anynum@1.0.1: {}
 
@@ -4213,7 +4211,7 @@ snapshots:
 
   error-stack-parser-es@1.0.5: {}
 
-  es-module-lexer@2.3.1: {}
+  es-module-lexer@2.3.2: {}
 
   esbuild@0.18.20:
     optionalDependencies:
@@ -4369,7 +4367,7 @@ snapshots:
       path-expression-matcher: 1.6.2
       xml-naming: 0.3.0
 
-  fast-xml-parser@5.10.1:
+  fast-xml-parser@5.11.0:
     dependencies:
       '@nodable/entities': 3.0.0
       fast-xml-builder: 1.3.1
@@ -4393,7 +4391,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  get-tsconfig@4.14.2:
+  get-tsconfig@4.14.3:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
@@ -4897,7 +4895,7 @@ snapshots:
       '@vitest/snapshot': 4.1.10
       '@vitest/spy': 4.1.10
       '@vitest/utils': 4.1.10
-      es-module-lexer: 2.3.1
+      es-module-lexer: 2.3.2
       expect-type: 1.4.0
       magic-string: 0.30.21
       obug: 2.1.4
