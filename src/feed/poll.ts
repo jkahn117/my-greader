@@ -310,13 +310,13 @@ export function createFeedPoller(
     await d
       .update(feeds)
       .set({
-        title: parsed.title ?? feed.title,
-        htmlUrl: parsed.link ?? feed.htmlUrl,
         lastFetchedAt: time,
         consecutiveErrors: 0,
         lastError: null,
         checkIntervalMinutes: newInterval,
-        ...(newItems > 0 ? { lastNewItemAt: time } : {}),
+        lastNewItemAt: newItems > 0 ? time : (feed.lastNewItemAt ?? time),
+        ...(feed.title == null && parsed.title != null ? { title: parsed.title } : {}),
+        ...(feed.htmlUrl == null && parsed.link != null ? { htmlUrl: parsed.link } : {}),
         ...(newEtag != null ? { etag: newEtag } : {}),
         ...(newLastModified != null ? { lastModified: newLastModified } : {}),
       })
