@@ -43,15 +43,16 @@ export async function purgeOldItems(env: Env): Promise<void> {
   const retentionDays = parseInt(env.ITEM_RETENTION_DAYS ?? "30", 10);
   const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
 
-  // Delete item_state first to satisfy FK constraint, then items
+  // Delete non-starred item_state first to satisfy FK constraint
   const stateResult = await env.DB.prepare(
-    "DELETE FROM item_state WHERE item_id IN (SELECT id FROM items WHERE fetched_at < ?)",
+    "DELETE FROM item_state WHERE item_id IN (SELECT id FROM items WHERE fetched_at < ?) AND is_starred = 0",
   )
     .bind(cutoffMs)
     .run();
 
+  // Delete items that are old AND not starred by any user
   const itemResult = await env.DB.prepare(
-    "DELETE FROM items WHERE fetched_at < ?",
+    "DELETE FROM items WHERE fetched_at < ? AND id NOT IN (SELECT item_id FROM item_state WHERE is_starred = 1)",
   )
     .bind(cutoffMs)
     .run();

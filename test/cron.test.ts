@@ -2,17 +2,18 @@
 // Uses the real D1 from the Cloudflare vitest pool and faked FetchTransport
 // so we exercise the full poll policy without real HTTP requests.
 
+import { eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFeedPoller,
   type FeedTransport,
   type PollObserver,
-} from "../feed/poll";
-import { purgeOldItems } from "../handlers/cron";
-import { getDb } from "../lib/db";
-import { feeds, items, itemState, users } from "../db/schema";
-import { deriveItemId } from "../lib/crypto";
+} from "../src/feed/poll";
+import { purgeOldItems } from "../src/handlers/cron";
+import { getDb } from "../src/lib/db";
+import { feeds, items, itemState, users } from "../src/db/schema";
+import { deriveItemId } from "../src/lib/crypto";
 
 // ---------------------------------------------------------------------------
 // Sample feed XML fixtures
@@ -315,6 +316,40 @@ describe("FeedPoller", () => {
     const stored = await db.select().from(items).all();
     expect(stored).toHaveLength(0);
   });
+
+  it("gates inserts after initial backload to prevent re-backloading purged items", async () => {
+    const db = getDb(env.DB);
+
+    // Old feed that was first polled 31 days ago (beyond retention)
+    const lastPoll = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const feedId = await seedFeed("https://example.com/old-feed.xml");
+    // Set lastNewItemAt to simulate a prior poll that already backloaded
+    await db
+      .update(feeds)
+      .set({ lastNewItemAt: lastPoll })
+      .where(eq(feeds.id, feedId));
+
+    // Transport returns the standard feed (two items from Jan 2024)
+    const transport = mockTransport(RSS_FEED);
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => Date.now(),
+    );
+
+    const result = await poller.poll(
+      feedRow({ id: feedId, feedUrl: "https://example.com/old-feed.xml", lastNewItemAt: lastPoll }),
+    );
+
+    // The RSS items are from Jan 2024 — well before lastNewItemAt - window.
+    // They should be filtered out by the backload gate.
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.newItems).toBe(0);
+
+    const stored = await db.select().from(items).all();
+    expect(stored).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -456,5 +491,113 @@ describe("purgeOldItems", () => {
 
     const remaining = await db.select().from(items).all();
     expect(remaining).toHaveLength(0);
+  });
+
+  it("preserves starred items during purge", async () => {
+    await seedUser();
+    const feedId = await seedFeed("https://example.com/feed.xml");
+    const db = getDb(env.DB);
+
+    const oldTime = Date.now() - 31 * 24 * 60 * 60 * 1000;
+
+    const starredId = await deriveItemId("https://example.com/starred");
+    await db.insert(items).values({
+      id: starredId,
+      feedId,
+      title: "Starred Old Article",
+      url: "https://example.com/starred",
+      content: "starred",
+      fetchedAt: oldTime,
+      publishedAt: oldTime,
+    });
+    await db.insert(itemState).values({
+      itemId: starredId,
+      userId: "test-user",
+      isStarred: 1,
+    });
+
+    const unstarredId = await deriveItemId("https://example.com/unstarred");
+    await db.insert(items).values({
+      id: unstarredId,
+      feedId,
+      title: "Unstarred Old Article",
+      url: "https://example.com/unstarred",
+      content: "unstarred",
+      fetchedAt: oldTime,
+      publishedAt: oldTime,
+    });
+    await db.insert(itemState).values({
+      itemId: unstarredId,
+      userId: "test-user",
+      isStarred: 0,
+    });
+
+    await purgeOldItems({
+      ...env,
+      ITEM_RETENTION_DAYS: "30",
+    } as unknown as Env);
+
+    const remaining = await db.select({ id: items.id }).from(items).all();
+    const itemIds = remaining.map((r) => r.id);
+
+    expect(itemIds).toContain(starredId);
+    expect(itemIds).not.toContain(unstarredId);
+  });
+
+  it("preserves item when any user has starred it", async () => {
+    await seedUser();
+    const feedId = await seedFeed("https://example.com/feed.xml");
+    const db = getDb(env.DB);
+
+    // second user
+    await db.insert(users).values({
+      id: "other-user",
+      email: "other@example.com",
+      createdAt: Date.now(),
+    });
+
+    const oldTime = Date.now() - 31 * 24 * 60 * 60 * 1000;
+
+    const sharedId = await deriveItemId("https://example.com/shared");
+    await db.insert(items).values({
+      id: sharedId,
+      feedId,
+      title: "Shared Old Article",
+      url: "https://example.com/shared",
+      content: "shared",
+      fetchedAt: oldTime,
+      publishedAt: oldTime,
+    });
+    // test-user has not starred, other-user has starred
+    await db.insert(itemState).values({
+      itemId: sharedId,
+      userId: "test-user",
+      isStarred: 0,
+    });
+    await db.insert(itemState).values({
+      itemId: sharedId,
+      userId: "other-user",
+      isStarred: 1,
+    });
+
+    await purgeOldItems({
+      ...env,
+      ITEM_RETENTION_DAYS: "30",
+    } as unknown as Env);
+
+    const remaining = await db
+      .select({ id: items.id })
+      .from(items)
+      .all();
+    expect(remaining.map((r) => r.id)).toContain(sharedId);
+
+    // test-user's non-starred state row should be gone
+    const states = await db
+      .select()
+      .from(itemState)
+      .all();
+    expect(states).toHaveLength(1);
+    expect(states[0].isStarred).toBe(1);
+    expect(states[0].userId).toBe("other-user");
   });
 });

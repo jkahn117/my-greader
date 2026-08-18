@@ -285,9 +285,20 @@ export function createFeedPoller(
       )
     ).filter((r): r is NonNullable<typeof r> => r !== null);
 
+    // After the initial backload, only insert items published recently
+    // enough to prevent re-backloading purged items from long-tail feeds.
+    const BACKLOAD_WINDOW_MS = MAX_INTERVAL_MINUTES * 2 * 60 * 1000;
+    const lastNew = feed.lastNewItemAt;
+    const toInsert =
+      lastNew != null
+        ? itemRows.filter(
+            (row) => row.publishedAt >= lastNew - BACKLOAD_WINDOW_MS,
+          )
+        : itemRows;
+
     let newItems = 0;
-    if (itemRows.length > 0) {
-      const stmts = itemRows.map((row) =>
+    if (toInsert.length > 0) {
+      const stmts = toInsert.map((row) =>
         d.insert(items).values(row).onConflictDoNothing(),
       );
       const batchResults = await d.batch(
