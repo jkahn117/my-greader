@@ -7,9 +7,9 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../index";
-import { getDb } from "../lib/db";
-import { users } from "../db/schema";
+import worker from "../src/index";
+import { getDb } from "../src/lib/db";
+import { users } from "../src/db/schema";
 
 // ---------------------------------------------------------------------------
 // Helpers

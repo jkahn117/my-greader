@@ -109,8 +109,7 @@ export function createFeedPoller(
     try {
       response = await transport.get(feed.feedUrl, headers);
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : String(err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
       await recordError(feed, errorMessage, "transient");
       observe.publish({
         kind: "feedFetchFailed",
@@ -154,10 +153,7 @@ export function createFeedPoller(
       if (retryAfter) {
         const seconds = parseInt(retryAfter, 10);
         if (!isNaN(seconds)) {
-          backoffMinutes = Math.max(
-            Math.ceil(seconds / 60),
-            backoffMinutes,
-          );
+          backoffMinutes = Math.max(Math.ceil(seconds / 60), backoffMinutes);
         } else {
           const retryMs = new Date(retryAfter).getTime();
           if (!isNaN(retryMs)) {
@@ -192,9 +188,7 @@ export function createFeedPoller(
 
     if (!response.ok) {
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
-      const errorClass: ErrorClass = isPermanent
-        ? "permanent"
-        : "transient";
+      const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
       await recordError(feed, errorMessage, errorClass);
       observe.publish({
@@ -270,15 +264,11 @@ export function createFeedPoller(
                   "",
                 );
               const cleaned =
-                raw.length > 500
-                  ? (extractReadableContent(raw) ?? raw)
-                  : raw;
+                raw.length > 500 ? (extractReadableContent(raw) ?? raw) : raw;
               return trimContent(cleaned, MAX_CONTENT_BYTES);
             })(),
             author: item.creator ?? item.author ?? null,
-            publishedAt: item.isoDate
-              ? new Date(item.isoDate).getTime()
-              : time,
+            publishedAt: item.isoDate ? new Date(item.isoDate).getTime() : time,
             fetchedAt: time,
           };
         }),
@@ -301,13 +291,8 @@ export function createFeedPoller(
       const stmts = toInsert.map((row) =>
         d.insert(items).values(row).onConflictDoNothing(),
       );
-      const batchResults = await d.batch(
-        stmts as unknown as [any, ...any[]],
-      );
-      newItems = batchResults.reduce(
-        (sum, r) => sum + r.meta.changes,
-        0,
-      );
+      const batchResults = await d.batch(stmts as unknown as [any, ...any[]]);
+      newItems = batchResults.reduce((sum, r) => sum + r.meta.changes, 0);
     }
 
     const feedTtlMinutes = parsed.ttl
@@ -333,9 +318,7 @@ export function createFeedPoller(
         checkIntervalMinutes: newInterval,
         ...(newItems > 0 ? { lastNewItemAt: time } : {}),
         ...(newEtag != null ? { etag: newEtag } : {}),
-        ...(newLastModified != null
-          ? { lastModified: newLastModified }
-          : {}),
+        ...(newLastModified != null ? { lastModified: newLastModified } : {}),
       })
       .where(eq(feeds.id, feed.id));
 

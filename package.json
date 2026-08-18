@@ -10,9 +10,9 @@
     "deploy": "$npm_execpath run build && wrangler deploy",
     "test": "vitest run",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "format": "oxfmt --write \"src/**/*.{ts,tsx}\"",
-    "format:check": "oxfmt --check \"src/**/*.{ts,tsx}\"",
-    "lint": "oxlint src",
+    "format": "oxfmt --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
+    "format:check": "oxfmt --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\"",
+    "lint": "oxlint src test",
     "studio": "drizzle-kit studio --config drizzle.local.config.ts"
   },
   "dependencies": {

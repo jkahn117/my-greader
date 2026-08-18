@@ -1,7 +1,7 @@
 // OPML parser unit tests — pure function, no D1 or Workers env required.
 
 import { describe, expect, it } from "vitest";
-import { parseOpml } from "../lib/opml";
+import { parseOpml } from "../src/lib/opml";
 
 // ---------------------------------------------------------------------------
 // Fixtures

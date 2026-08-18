@@ -182,6 +182,32 @@ Returns only item IDs for a stream — used by Current for efficient sync.
 
 ---
 
+### `GET|POST /reader/api/0/stream/items/contents`
+
+Fetch full article bodies for specific item IDs — Current's follow-up after `stream/items/ids`.
+
+**Query / body**: one or more `i=<item-id>` (full tag or short hex).
+
+**Response**: same item shape as `stream/contents`. Only items the user is subscribed to are returned.
+
+---
+
+### `GET /reader/api/0/tag/list`
+
+Returns the starred state plus one tag per folder.
+
+```json
+{ "tags": [{ "id": "user/-/state/com.google/starred" }, { "id": "user/-/label/Tech" }] }
+```
+
+---
+
+### `POST /reader/api/0/subscription/quickadd`
+
+Subscribe by raw feed URL (`quickadd=<url>`). Returns `{ numResults, query, streamId }`.
+
+---
+
 ### `POST /reader/api/0/edit-tag`
 
 Mark items as read, unread, or starred.

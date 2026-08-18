@@ -181,10 +181,7 @@ export function createSubscriptionLifecycle(
     return { feedId: feed.id, subscriptionId: subId, created };
   }
 
-  async function unsubscribe(
-    userId: string,
-    feedRef: string,
-  ): Promise<void> {
+  async function unsubscribe(userId: string, feedRef: string): Promise<void> {
     const feed = await resolveFeed(feedRef);
     if (!feed) return;
 
@@ -256,19 +253,13 @@ export function createSubscriptionLifecycle(
       .orderBy(asc(sql`coalesce(${subscriptions.title}, ${feeds.title})`));
   }
 
-  async function get(
-    userId: string,
-    feedId: string,
-  ): Promise<SubRow | null> {
+  async function get(userId: string, feedId: string): Promise<SubRow | null> {
     const row = await d
       .select(subSelection)
       .from(subscriptions)
       .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
       .where(
-        and(
-          eq(subscriptions.userId, userId),
-          eq(subscriptions.feedId, feedId),
-        ),
+        and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, feedId)),
       )
       .get();
     return row ?? null;

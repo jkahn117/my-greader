@@ -289,23 +289,17 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                     });
                     break;
                   case "feedDeactivated":
-                    logger.warn(
-                      "feed deactivated after repeated errors",
-                      {
-                        feedId: event.feedId,
-                        consecutiveErrors: event.consecutiveErrors,
-                      },
-                    );
+                    logger.warn("feed deactivated after repeated errors", {
+                      feedId: event.feedId,
+                      consecutiveErrors: event.consecutiveErrors,
+                    });
                     break;
                 }
               },
             };
 
-            const poller = createFeedPoller(
-              d1,
-              transport,
-              observer,
-              () => Date.now(),
+            const poller = createFeedPoller(d1, transport, observer, () =>
+              Date.now(),
             );
 
             const settled = await Promise.allSettled(

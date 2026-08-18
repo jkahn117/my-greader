@@ -4,7 +4,7 @@ A personal RSS aggregator on Cloudflare Workers exposing a Google Reader-compati
 
 - **Package manager**: pnpm (never npm/yarn)
 - **Quality gate**: `pnpm lint` (oxlint) — run after any code change
-- **Tests**: `pnpm test` (vitest with Cloudflare Workers pool)
+- **Tests**: `pnpm test` (vitest with Cloudflare Workers pool) — live in `test/`
 
 ## Core Tenets
 

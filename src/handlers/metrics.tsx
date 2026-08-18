@@ -108,9 +108,7 @@ handler.get("/app/metrics", async (c) => {
           sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`,
         )
         .orderBy(
-          desc(
-            sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`,
-          ),
+          desc(sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`),
         )
         .limit(7),
 
@@ -125,10 +123,7 @@ handler.get("/app/metrics", async (c) => {
         .from(subscriptions)
         .innerJoin(
           feeds,
-          and(
-            eq(subscriptions.feedId, feeds.id),
-            isNull(feeds.deactivatedAt),
-          ),
+          and(eq(subscriptions.feedId, feeds.id), isNull(feeds.deactivatedAt)),
         )
         .leftJoin(
           items,

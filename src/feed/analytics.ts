@@ -61,8 +61,7 @@ export function createAnalyticsReader(params: {
   async function query(sql: string): Promise<AeSqlResult> {
     if (!enabled) return { data: [], meta: [] };
 
-    const url =
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -93,13 +92,10 @@ export function createAnalyticsReader(params: {
   async function queryAll(
     feedActivity: { feedId: string; title: string }[],
   ): Promise<AnalyticsData> {
-    const feedTitleMap = new Map(
-      feedActivity.map((f) => [f.feedId, f.title]),
-    );
-    const [velocityRaw, perfRaw, errorRaw, trendRaw] =
-      await Promise.all([
-        query(
-          `SELECT blob5 AS feedId,
+    const feedTitleMap = new Map(feedActivity.map((f) => [f.feedId, f.title]));
+    const [velocityRaw, perfRaw, errorRaw, trendRaw] = await Promise.all([
+      query(
+        `SELECT blob5 AS feedId,
                 SUM(double1) AS total_new_articles,
                 ROUND(AVG(double1), 1) AS avg_per_fetch
          FROM rss_reader_metrics
@@ -108,9 +104,9 @@ export function createAnalyticsReader(params: {
          GROUP BY blob5
          ORDER BY total_new_articles DESC
          LIMIT 20`,
-        ),
-        query(
-          `SELECT blob5 AS feedId,
+      ),
+      query(
+        `SELECT blob5 AS feedId,
                 COUNT(*) AS samples,
                 ROUND(AVG(double1)) AS avg_ms,
                 ROUND(MAX(double1)) AS max_ms
@@ -120,9 +116,9 @@ export function createAnalyticsReader(params: {
          GROUP BY blob5
          ORDER BY avg_ms DESC
          LIMIT 20`,
-        ),
-        query(
-          `SELECT blob6 AS httpStatus,
+      ),
+      query(
+        `SELECT blob6 AS httpStatus,
                 COUNT(*) AS occurrences,
                 COUNT(DISTINCT blob5) AS affected_feeds
          FROM rss_reader_metrics
@@ -130,51 +126,45 @@ export function createAnalyticsReader(params: {
            AND timestamp > NOW() - INTERVAL '7' DAY
          GROUP BY blob6
          ORDER BY occurrences DESC`,
-        ),
-        query(
-          `SELECT toStartOfDay(timestamp) AS day,
+      ),
+      query(
+        `SELECT toStartOfDay(timestamp) AS day,
                 SUM(double1) AS new_articles
          FROM rss_reader_metrics
          WHERE index1 = 'feed_new_articles'
            AND timestamp > NOW() - INTERVAL '30' DAY
          GROUP BY day
          ORDER BY day DESC`,
-        ),
-      ]);
+      ),
+    ]);
 
-    const feedVelocity: FeedVelocityRow[] = (
-      velocityRaw.data ?? []
-    ).map((row) => ({
-      feedId: String(row.feedId ?? ""),
-      title: resolveTitle(feedTitleMap, String(row.feedId ?? "")),
-      total30d: Number(row.total_new_articles ?? 0),
-      avgPerFetch: Number(row.avg_per_fetch ?? 0),
-    }));
-
-    const fetchPerf: FetchPerfRow[] = (perfRaw.data ?? []).map(
+    const feedVelocity: FeedVelocityRow[] = (velocityRaw.data ?? []).map(
       (row) => ({
         feedId: String(row.feedId ?? ""),
         title: resolveTitle(feedTitleMap, String(row.feedId ?? "")),
-        samples: Number(row.samples ?? 0),
-        avgMs: Number(row.avg_ms ?? 0),
-        maxMs: Number(row.max_ms ?? 0),
+        total30d: Number(row.total_new_articles ?? 0),
+        avgPerFetch: Number(row.avg_per_fetch ?? 0),
       }),
     );
 
-    const errorRates: ErrorRateRow[] = (errorRaw.data ?? []).map(
-      (row) => ({
-        httpStatus: String(row.httpStatus ?? "?"),
-        occurrences: Number(row.occurrences ?? 0),
-        affectedFeeds: Number(row.affected_feeds ?? 0),
-      }),
-    );
+    const fetchPerf: FetchPerfRow[] = (perfRaw.data ?? []).map((row) => ({
+      feedId: String(row.feedId ?? ""),
+      title: resolveTitle(feedTitleMap, String(row.feedId ?? "")),
+      samples: Number(row.samples ?? 0),
+      avgMs: Number(row.avg_ms ?? 0),
+      maxMs: Number(row.max_ms ?? 0),
+    }));
 
-    const trend30d: ArticleTrendRow[] = (trendRaw.data ?? []).map(
-      (row) => ({
-        day: String(row.day ?? "").slice(0, 10),
-        newArticles: Number(row.new_articles ?? 0),
-      }),
-    );
+    const errorRates: ErrorRateRow[] = (errorRaw.data ?? []).map((row) => ({
+      httpStatus: String(row.httpStatus ?? "?"),
+      occurrences: Number(row.occurrences ?? 0),
+      affectedFeeds: Number(row.affected_feeds ?? 0),
+    }));
+
+    const trend30d: ArticleTrendRow[] = (trendRaw.data ?? []).map((row) => ({
+      day: String(row.day ?? "").slice(0, 10),
+      newArticles: Number(row.new_articles ?? 0),
+    }));
 
     return { feedVelocity, fetchPerf, errorRates, trend30d };
   }

@@ -85,9 +85,7 @@ function noopObserver(): PollObserver {
 async function seedFeed(feedUrl: string, title = "Test Feed") {
   const db = getDb(env.DB);
   const feedId = crypto.randomUUID();
-  await db
-    .insert(feeds)
-    .values({ id: feedId, feedUrl, title, htmlUrl: null });
+  await db.insert(feeds).values({ id: feedId, feedUrl, title, htmlUrl: null });
   return feedId;
 }
 
@@ -134,11 +132,8 @@ describe("FeedPoller", () => {
 
   it("parses RSS and stores items", async () => {
     const transport = mockTransport(RSS_FEED);
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -154,11 +149,8 @@ describe("FeedPoller", () => {
 
   it("parses Atom feeds", async () => {
     const transport = mockTransport(ATOM_FEED);
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://atom.example.com/feed.xml");
 
@@ -174,11 +166,8 @@ describe("FeedPoller", () => {
 
   it("skips parsing on 304 and updates lastFetchedAt", async () => {
     const transport = mockTransport304();
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -202,11 +191,8 @@ describe("FeedPoller", () => {
       .fn()
       .mockResolvedValue(new Response(null, { status: 304 }));
     const transport: FeedTransport = { get: getFn };
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -223,11 +209,8 @@ describe("FeedPoller", () => {
       ETag: 'W/"new-etag"',
       "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT",
     });
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -250,11 +233,8 @@ describe("FeedPoller", () => {
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 }))
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 })),
     };
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
     const row = feedRow({ id: feedId });
@@ -280,11 +260,8 @@ describe("FeedPoller", () => {
     </channel></rss>`;
 
     const transport = mockTransport(bigFeed);
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -301,11 +278,8 @@ describe("FeedPoller", () => {
 
   it("handles non-OK HTTP status gracefully without throwing", async () => {
     const transport = mockTransport("", 500);
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
@@ -331,15 +305,16 @@ describe("FeedPoller", () => {
 
     // Transport returns the standard feed (two items from Jan 2024)
     const transport = mockTransport(RSS_FEED);
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
 
     const result = await poller.poll(
-      feedRow({ id: feedId, feedUrl: "https://example.com/old-feed.xml", lastNewItemAt: lastPoll }),
+      feedRow({
+        id: feedId,
+        feedUrl: "https://example.com/old-feed.xml",
+        lastNewItemAt: lastPoll,
+      }),
     );
 
     // The RSS items are from Jan 2024 — well before lastNewItemAt - window.
@@ -349,6 +324,57 @@ describe("FeedPoller", () => {
 
     const stored = await db.select().from(items).all();
     expect(stored).toHaveLength(0);
+  });
+
+  it("backs off on 429 without incrementing consecutive errors", async () => {
+    const transport: FeedTransport = {
+      get: vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 429,
+          headers: { "Retry-After": "180" },
+        }),
+      ),
+    };
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://example.com/feed.xml");
+
+    const result = await poller.poll(feedRow({ id: feedId }));
+    expect(result.status).toBe("error");
+
+    const db = getDb(env.DB);
+    const row = await db
+      .select({
+        consecutiveErrors: feeds.consecutiveErrors,
+        checkIntervalMinutes: feeds.checkIntervalMinutes,
+        lastError: feeds.lastError,
+        deactivatedAt: feeds.deactivatedAt,
+      })
+      .from(feeds)
+      .get();
+
+    expect(row?.consecutiveErrors).toBe(0);
+    expect(row?.deactivatedAt).toBeNull();
+    expect(row?.checkIntervalMinutes).toBe(60);
+    expect(row?.lastError).toContain("429");
+  });
+
+  it("resets check interval when new items arrive", async () => {
+    const transport = mockTransport(RSS_FEED);
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://example.com/feed.xml");
+
+    await poller.poll(feedRow({ id: feedId, checkIntervalMinutes: 120 }));
+
+    const db = getDb(env.DB);
+    const row = await db
+      .select({ checkIntervalMinutes: feeds.checkIntervalMinutes })
+      .from(feeds)
+      .get();
+    expect(row?.checkIntervalMinutes).toBe(30);
   });
 });
 
@@ -375,11 +401,8 @@ describe("FeedPoller error handling", () => {
     const transport: FeedTransport = {
       get: vi.fn().mockRejectedValueOnce(new Error("Network error")),
     };
-    const poller = createFeedPoller(
-      env.DB,
-      transport,
-      noopObserver(),
-      () => Date.now(),
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
     );
     const feedId = await seedFeed(
       "https://bad.example.com/feed.xml",
@@ -390,6 +413,66 @@ describe("FeedPoller error handling", () => {
       feedRow({ id: feedId, feedUrl: "https://bad.example.com/feed.xml" }),
     );
     expect(result.status).toBe("error");
+  });
+
+  it("deactivates after 5 transient errors", async () => {
+    const transport = mockTransport("", 500);
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://bad.example.com/feed.xml");
+
+    const result = await poller.poll(
+      feedRow({
+        id: feedId,
+        feedUrl: "https://bad.example.com/feed.xml",
+        consecutiveErrors: 4,
+      }),
+    );
+    expect(result.status).toBe("error");
+
+    const db = getDb(env.DB);
+    const row = await db
+      .select({
+        consecutiveErrors: feeds.consecutiveErrors,
+        deactivatedAt: feeds.deactivatedAt,
+        lastError: feeds.lastError,
+      })
+      .from(feeds)
+      .get();
+    expect(row?.consecutiveErrors).toBe(5);
+    expect(row?.deactivatedAt).not.toBeNull();
+    expect(row?.lastError).toContain("HTTP 500");
+  });
+
+  it("deactivates after 2 permanent errors", async () => {
+    const transport = mockTransport("", 404);
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://gone.example.com/feed.xml");
+
+    const result = await poller.poll(
+      feedRow({
+        id: feedId,
+        feedUrl: "https://gone.example.com/feed.xml",
+        consecutiveErrors: 1,
+      }),
+    );
+    expect(result.status).toBe("error");
+
+    const db = getDb(env.DB);
+    const row = await db
+      .select({
+        consecutiveErrors: feeds.consecutiveErrors,
+        deactivatedAt: feeds.deactivatedAt,
+        lastError: feeds.lastError,
+      })
+      .from(feeds)
+      .get();
+    expect(row?.consecutiveErrors).toBe(2);
+    expect(row?.deactivatedAt).not.toBeNull();
+    expect(row?.lastError).toContain("permanent");
   });
 });
 
@@ -585,17 +668,11 @@ describe("purgeOldItems", () => {
       ITEM_RETENTION_DAYS: "30",
     } as unknown as Env);
 
-    const remaining = await db
-      .select({ id: items.id })
-      .from(items)
-      .all();
+    const remaining = await db.select({ id: items.id }).from(items).all();
     expect(remaining.map((r) => r.id)).toContain(sharedId);
 
     // test-user's non-starred state row should be gone
-    const states = await db
-      .select()
-      .from(itemState)
-      .all();
+    const states = await db.select().from(itemState).all();
     expect(states).toHaveLength(1);
     expect(states[0].isStarred).toBe(1);
     expect(states[0].userId).toBe("other-user");

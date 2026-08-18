@@ -8,10 +8,10 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../index";
-import { getDb } from "../lib/db";
-import { apiTokens, users } from "../db/schema";
-import { sha256 } from "../lib/crypto";
+import worker from "../src/index";
+import { getDb } from "../src/lib/db";
+import { apiTokens, users } from "../src/db/schema";
+import { sha256 } from "../src/lib/crypto";
 import { eq } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
@@ -187,5 +187,58 @@ describe("DELETE /tokens/:id", () => {
       .where(eq(apiTokens.id, "other-tok"))
       .get();
     expect(row!.revokedAt).toBeNull();
+  });
+});
+
+describe("token lifecycle", () => {
+  it("generated token authenticates GReader until revoked", async () => {
+    const generated = await fetch("/tokens/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ name: "Current" }).toString(),
+    });
+    const html = await generated.text();
+    const rawToken = html.match(/[0-9a-f]{64}/)?.[0];
+    expect(rawToken).toBeTruthy();
+
+    const login = await fetch("/accounts/ClientLogin", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        Email: "dev@example.com",
+        Passwd: rawToken!,
+      }).toString(),
+    });
+    expect(login.status).toBe(200);
+    expect(await login.text()).toContain(`Auth=${rawToken}`);
+
+    const info = await fetch("/reader/api/0/user-info", {
+      headers: { Authorization: `GoogleLogin auth=${rawToken}` },
+    });
+    expect(info.status).toBe(200);
+
+    const db = getDb(env.DB);
+    const row = await db
+      .select({ id: apiTokens.id })
+      .from(apiTokens)
+      .where(eq(apiTokens.userId, "dev-user-id"))
+      .get();
+
+    await fetch(`/tokens/${row!.id}`, { method: "DELETE" });
+
+    const afterRevoke = await fetch("/reader/api/0/user-info", {
+      headers: { Authorization: `GoogleLogin auth=${rawToken}` },
+    });
+    expect(afterRevoke.status).toBe(401);
+
+    const loginAgain = await fetch("/accounts/ClientLogin", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        Email: "dev@example.com",
+        Passwd: rawToken!,
+      }).toString(),
+    });
+    expect(loginAgain.status).toBe(403);
   });
 });

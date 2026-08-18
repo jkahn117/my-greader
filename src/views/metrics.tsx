@@ -10,12 +10,7 @@ import type {
   ArticleTrendRow,
 } from "../feed/analytics";
 
-export type {
-  FeedVelocityRow,
-  FetchPerfRow,
-  ErrorRateRow,
-  ArticleTrendRow,
-};
+export type { FeedVelocityRow, FetchPerfRow, ErrorRateRow, ArticleTrendRow };
 
 // ---------------------------------------------------------------------------
 // Shared types (exported so the handler can construct typed data objects)
