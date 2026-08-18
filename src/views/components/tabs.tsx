@@ -1,4 +1,4 @@
-export type ActiveTab = "metrics" | "feed" | "access";
+export type ActiveTab = "metrics" | "feed" | "access" | "timeline";
 
 interface TabItemProps {
   href: string;
@@ -40,6 +40,11 @@ export function Tabs({ active }: { active: ActiveTab }) {
           active={active === "metrics"}
         />
         <TabItem href="/app/feeds" label="Feed" active={active === "feed"} />
+        <TabItem
+          href="/app/timeline"
+          label="Timeline"
+          active={active === "timeline"}
+        />
         <TabItem
           href="/app/access"
           label="Access"

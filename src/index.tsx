@@ -7,6 +7,7 @@ import { tokensHandler } from "./handlers/tokens";
 import { feedsUiHandler } from "./handlers/feeds_ui";
 import { importHandler } from "./handlers/import";
 import { metricsHandler } from "./handlers/metrics";
+import { timelineHandler } from "./handlers/timeline";
 import { scheduled } from "./handlers/cron";
 import { FeedPollingWorkflow } from "./workflows/feed_polling";
 import type { Variables } from "./types/context";
@@ -40,6 +41,7 @@ app.use("/feeds/*", accessMiddleware);
 app.use("/import", accessMiddleware);
 
 app.route("/", metricsHandler); // GET /app/metrics
+app.route("/", timelineHandler); // GET /app/timeline
 
 // Logout: redirect to Cloudflare Access logout endpoint on the same domain
 app.get("/auth/logout", (c) => {
