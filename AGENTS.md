@@ -31,6 +31,16 @@ carry domain event payloads.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full overview.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: read `CONTEXT.md` and relevant ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Project conventions
 
 - [Coding style](docs/agents/style.md) — TypeScript, Valibot, logging, commenting
