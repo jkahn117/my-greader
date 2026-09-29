@@ -146,9 +146,13 @@ handler.get("/app/metrics", async (c) => {
       ranAt: r.ranAt,
       activeFeeds: r.activeFeeds,
       dueFeeds: r.dueFeeds,
+      selectedFeeds: r.selectedFeeds,
       checkedFeeds: r.checkedFeeds,
       newItems: r.newItems,
       failedFeeds: r.failedFeeds,
+      skippedFeeds: r.skippedFeeds,
+      status: r.status,
+      outcome: r.outcome,
     }));
 
     const intervalDist = intervalDistRows.map((r) => ({

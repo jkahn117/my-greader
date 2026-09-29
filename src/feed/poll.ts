@@ -11,12 +11,18 @@
  * Workflow's `PollObserver` adapter — no Powertools imports here.
  */
 import Parser from "rss-parser";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNull } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
-import { feedPollAttempts, feeds, items } from "../db/schema";
+import {
+  feedPollAttempts,
+  feeds,
+  items,
+  type FeedAttemptErrorClass,
+  type FeedAttemptOutcome,
+} from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
 const TRANSIENT_ERROR_THRESHOLD = 5;
@@ -44,9 +50,28 @@ export type FeedToCheck = {
 };
 
 export type FeedPollResult =
-  | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
-  | { feedId: string; feedTitle: string; status: "not_modified" }
-  | { feedId: string; feedTitle: string; status: "error"; error: string };
+  | {
+      feedId: string;
+      feedTitle: string;
+      outcome: "new_items";
+      newItems: number;
+    }
+  | {
+      feedId: string;
+      feedTitle: string;
+      outcome: "unchanged";
+      newItems: number;
+    }
+  | { feedId: string; feedTitle: string; outcome: "not_modified" }
+  | { feedId: string; feedTitle: string; outcome: "rate_limited" }
+  | { feedId: string; feedTitle: string; outcome: "skipped" }
+  | {
+      feedId: string;
+      feedTitle: string;
+      outcome: "failed";
+      errorClass: FeedAttemptErrorClass;
+      error: string;
+    };
 
 export type PollEvent =
   | {
@@ -107,6 +132,49 @@ export function createFeedPoller(
     const start = now();
     const feedTitle = feed.title ?? feed.feedUrl;
 
+    // Persist progress before external work. A Workflow retry returns a prior
+    // terminal result instead of fetching or mutating Feed policy again.
+    const [, attemptRows, currentFeeds] = await d.batch([
+      d
+        .insert(feedPollAttempts)
+        .values({
+          id: attempt.attemptId,
+          cycleRunId: attempt.cycleRunId,
+          feedId: feed.id,
+          startedAt: start,
+        })
+        .onConflictDoNothing(),
+      d
+        .select({
+          outcome: feedPollAttempts.outcome,
+          newItems: feedPollAttempts.newItems,
+          errorClass: feedPollAttempts.errorClass,
+          diagnostic: feedPollAttempts.diagnostic,
+        })
+        .from(feedPollAttempts)
+        .where(eq(feedPollAttempts.id, attempt.attemptId)),
+      d
+        .select({ deactivatedAt: feeds.deactivatedAt })
+        .from(feeds)
+        .where(eq(feeds.id, feed.id)),
+    ]);
+    const durableAttempt = attemptRows[0];
+    if (durableAttempt?.outcome != null) {
+      return resultFromAttempt(feed.id, feedTitle, {
+        ...durableAttempt,
+        outcome: durableAttempt.outcome,
+      });
+    }
+
+    if (currentFeeds[0]?.deactivatedAt != null) {
+      await completeAttempt(attempt.attemptId, {
+        outcome: "skipped",
+        parserStatus: "not_attempted",
+        diagnostic: "Feed became ineligible after selection",
+      });
+      return { feedId: feed.id, feedTitle, outcome: "skipped" };
+    }
+
     const headers: Record<string, string> = {
       "User-Agent": "my-greader/1.0 (+https://github.com)",
       Accept:
@@ -119,9 +187,17 @@ export function createFeedPoller(
     try {
       response = await transport.get(feed.feedUrl, headers);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = safeDiagnostic(
+        err instanceof Error ? err.message : String(err),
+      );
       await recordError(feed, errorMessage, "transient");
-      observe.publish({
+      await completeAttempt(attempt.attemptId, {
+        outcome: "failed",
+        errorClass: "network",
+        parserStatus: "not_attempted",
+        diagnostic: errorMessage,
+      });
+      publish({
         kind: "feedFetchFailed",
         feedId: feed.id,
         error: errorMessage,
@@ -129,7 +205,8 @@ export function createFeedPoller(
       return {
         feedId: feed.id,
         feedTitle,
-        status: "error",
+        outcome: "failed",
+        errorClass: "network",
         error: errorMessage,
       };
     }
@@ -146,12 +223,17 @@ export function createFeedPoller(
           checkIntervalMinutes: newInterval,
         })
         .where(eq(feeds.id, feed.id));
-      observe.publish({
+      await completeAttempt(attempt.attemptId, {
+        outcome: "not_modified",
+        httpStatus: 304,
+        parserStatus: "not_attempted",
+      });
+      publish({
         kind: "feedNotModified",
         feedId: feed.id,
         newInterval,
       });
-      return { feedId: feed.id, feedTitle, status: "not_modified" };
+      return { feedId: feed.id, feedTitle, outcome: "not_modified" };
     }
 
     if (response.status === 429) {
@@ -183,7 +265,13 @@ export function createFeedPoller(
           lastError: errorMessage,
         })
         .where(eq(feeds.id, feed.id));
-      observe.publish({
+      await completeAttempt(attempt.attemptId, {
+        outcome: "rate_limited",
+        httpStatus: 429,
+        parserStatus: "not_attempted",
+        diagnostic: errorMessage,
+      });
+      publish({
         kind: "feedRateLimited",
         feedId: feed.id,
         backoffMinutes,
@@ -191,8 +279,7 @@ export function createFeedPoller(
       return {
         feedId: feed.id,
         feedTitle,
-        status: "error",
-        error: errorMessage,
+        outcome: "rate_limited",
       };
     }
 
@@ -201,7 +288,14 @@ export function createFeedPoller(
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
       await recordError(feed, errorMessage, errorClass);
-      observe.publish({
+      await completeAttempt(attempt.attemptId, {
+        outcome: "failed",
+        errorClass: "http",
+        httpStatus: response.status,
+        parserStatus: "not_attempted",
+        diagnostic: errorMessage,
+      });
+      publish({
         kind: "feedFetchFailed",
         feedId: feed.id,
         status: response.status,
@@ -210,12 +304,41 @@ export function createFeedPoller(
       return {
         feedId: feed.id,
         feedTitle,
-        status: "error",
+        outcome: "failed",
+        errorClass: "http",
         error: errorMessage,
       };
     }
 
-    const xml = await response.text();
+    let xml: string;
+    try {
+      xml = await response.text();
+    } catch (err) {
+      const errorMessage = safeDiagnostic(
+        err instanceof Error ? err.message : String(err),
+      );
+      await recordError(feed, errorMessage, "transient");
+      await completeAttempt(attempt.attemptId, {
+        outcome: "failed",
+        errorClass: "network",
+        httpStatus: response.status,
+        parserStatus: "not_attempted",
+        diagnostic: errorMessage,
+      });
+      publish({
+        kind: "feedFetchFailed",
+        feedId: feed.id,
+        status: response.status,
+        error: errorMessage,
+      });
+      return {
+        feedId: feed.id,
+        feedTitle,
+        outcome: "failed",
+        errorClass: "network",
+        error: errorMessage,
+      };
+    }
     const parser = new Parser({
       customFields: { item: [["content:encoded", "contentEncoded"]] },
     });
@@ -225,7 +348,7 @@ export function createFeedPoller(
     try {
       parsed = await parser.parseString(xml);
     } catch (e) {
-      const parserError = (e as Error).message;
+      const parserError = safeDiagnostic((e as Error).message);
 
       const fallback = parseFeedLenient(xml);
       if (fallback && fallback.items.length > 0) {
@@ -233,7 +356,14 @@ export function createFeedPoller(
         parseStatus = "fallback";
       } else {
         await recordError(feed, parserError, "transient");
-        observe.publish({
+        await completeAttempt(attempt.attemptId, {
+          outcome: "failed",
+          errorClass: "parse",
+          httpStatus: response.status,
+          parserStatus: "failure",
+          diagnostic: parserError,
+        });
+        publish({
           kind: "feedParseFailed",
           feedId: feed.id,
           error: parserError,
@@ -241,7 +371,8 @@ export function createFeedPoller(
         return {
           feedId: feed.id,
           feedTitle,
-          status: "error",
+          outcome: "failed",
+          errorClass: "parse",
           error: parserError,
         };
       }
@@ -297,25 +428,19 @@ export function createFeedPoller(
           )
         : itemRows;
 
-    const attemptInsert = d
-      .insert(feedPollAttempts)
-      .values({
-        id: attempt.attemptId,
-        cycleRunId: attempt.cycleRunId,
-        feedId: feed.id,
-        startedAt: start,
-      })
-      .onConflictDoNothing();
     const itemInserts = toInsert.map((row) =>
       d.insert(items).values(row).onConflictDoNothing(),
     );
-    const batchResults = await d.batch([
-      attemptInsert,
-      ...itemInserts,
-    ] as unknown as [any, ...any[]]);
-    const newItems = batchResults
-      .slice(1)
-      .reduce((sum, result) => sum + result.meta.changes, 0);
+    if (itemInserts.length > 0) {
+      await d.batch(itemInserts as unknown as [any, ...any[]]);
+    }
+    // Count durable attribution rather than this execution's insert changes.
+    // A retry after Item insertion but before completion reconstructs the same count.
+    const attributed = await d
+      .select({ count: count(items.id) })
+      .from(items)
+      .where(eq(items.firstIngestionAttemptId, attempt.attemptId));
+    const newItems = Number(attributed[0]?.count ?? 0);
 
     const feedTtlMinutes = parsed.ttl
       ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
@@ -337,6 +462,8 @@ export function createFeedPoller(
           completedAt: now(),
           outcome,
           newItems,
+          httpStatus: response.status,
+          parserStatus: parseStatus,
         })
         .where(
           and(
@@ -364,7 +491,7 @@ export function createFeedPoller(
         .where(eq(feeds.id, feed.id)),
     ]);
 
-    observe.publish({
+    publish({
       kind: "feedPolled",
       feedId: feed.id,
       newItems,
@@ -372,7 +499,41 @@ export function createFeedPoller(
       parseStatus,
     });
 
-    return { feedId: feed.id, feedTitle, status: "ok", newItems };
+    return { feedId: feed.id, feedTitle, outcome, newItems };
+  }
+
+  /** Records one terminal attempt without overwriting an earlier completion. */
+  async function completeAttempt(
+    attemptId: string,
+    values: {
+      outcome: "not_modified" | "rate_limited" | "failed" | "skipped";
+      errorClass?: FeedAttemptErrorClass;
+      httpStatus?: number;
+      parserStatus: "not_attempted" | "failure";
+      diagnostic?: string;
+    },
+  ): Promise<void> {
+    await d
+      .update(feedPollAttempts)
+      .set({
+        ...values,
+        completedAt: now(),
+      })
+      .where(
+        and(
+          eq(feedPollAttempts.id, attemptId),
+          isNull(feedPollAttempts.outcome),
+        ),
+      );
+  }
+
+  /** Keeps observer failures outside the durable polling contract. */
+  function publish(event: PollEvent): void {
+    try {
+      observe.publish(event);
+    } catch {
+      // Observers are best effort and cannot alter a committed domain outcome.
+    }
   }
 
   async function recordError(
@@ -396,7 +557,7 @@ export function createFeedPoller(
       })
       .where(eq(feeds.id, feed.id));
     if (deactivate) {
-      observe.publish({
+      publish({
         kind: "feedDeactivated",
         feedId: feed.id,
         consecutiveErrors: next,
@@ -405,8 +566,58 @@ export function createFeedPoller(
   }
 }
 
+/** Reconstructs a completed logical attempt for a Workflow step retry. */
+function resultFromAttempt(
+  feedId: string,
+  feedTitle: string,
+  attempt: {
+    outcome: FeedAttemptOutcome;
+    newItems: number;
+    errorClass: FeedAttemptErrorClass | null;
+    diagnostic: string | null;
+  },
+): FeedPollResult {
+  switch (attempt.outcome) {
+    case "new_items":
+    case "unchanged":
+      return {
+        feedId,
+        feedTitle,
+        outcome: attempt.outcome,
+        newItems: attempt.newItems,
+      };
+    case "not_modified":
+    case "rate_limited":
+    case "skipped":
+      return { feedId, feedTitle, outcome: attempt.outcome };
+    case "failed":
+      if (attempt.errorClass == null) {
+        throw new Error(
+          `Completed attempt for Feed ${feedId} lacks an error class`,
+        );
+      }
+      return {
+        feedId,
+        feedTitle,
+        outcome: "failed",
+        errorClass: attempt.errorClass,
+        error: attempt.diagnostic ?? "Feed polling failed",
+      };
+  }
+}
+
 function trimContent(content: string, maxBytes: number): string {
   const encoded = new TextEncoder().encode(content);
   if (encoded.length <= maxBytes) return content;
   return new TextDecoder().decode(encoded.slice(0, maxBytes));
+}
+
+/** Removes common credential-bearing URL detail and bounds stored diagnostics. */
+function safeDiagnostic(message: string): string {
+  const redacted = message
+    .replace(/(https?:\/\/)([^@\s/]+)@/gi, "$1[redacted]@")
+    .replace(/(https?:\/\/[^\s?]+)\?[^\s]*/gi, "$1?[redacted]")
+    .replace(/\b(Bearer|GoogleLogin)\s+[^\s]+/gi, "$1 [redacted]")
+    .replace(/\b(auth|token|key|secret)=([^\s&]+)/gi, "$1=[redacted]");
+  return redacted.slice(0, 500);
 }

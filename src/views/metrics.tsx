@@ -21,9 +21,13 @@ export interface CycleRun {
   ranAt: number;
   activeFeeds: number;
   dueFeeds: number;
+  selectedFeeds: number;
   checkedFeeds: number;
   newItems: number;
   failedFeeds: number;
+  skippedFeeds: number;
+  status: "running" | "completed" | null;
+  outcome: "completed" | "empty" | null;
 }
 
 export interface FeedActivityRow {
@@ -173,7 +177,7 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
               <div
                 class="flex-1 min-w-0 rounded-t cursor-default"
                 style={`height:${pct}%`}
-                title={`${shortUtc(c.ranAt)}: ${c.newItems} new, ${c.checkedFeeds} checked${c.failedFeeds > 0 ? `, ${c.failedFeeds} failed` : ""}`}
+                title={`${shortUtc(c.ranAt)}: ${c.status === "running" ? "in progress" : c.outcome === "empty" ? "no eligible Feeds" : `${c.newItems} new, ${c.checkedFeeds} checked${c.failedFeeds > 0 ? `, ${c.failedFeeds} failed` : ""}`}`}
               >
                 <div class={`h-full w-full rounded-t ${barColor}`} />
               </div>
@@ -212,10 +216,16 @@ function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
                   {relativeTime(c.ranAt)}
                 </td>
                 <td class="px-4 py-2 text-right text-foreground">
-                  {c.checkedFeeds}
+                  {c.status === "running"
+                    ? `${c.checkedFeeds}/${c.selectedFeeds}`
+                    : c.checkedFeeds}
                 </td>
                 <td class="px-4 py-2 text-right text-foreground font-medium">
-                  {c.newItems > 0 ? (
+                  {c.status === "running" ? (
+                    <span class="text-muted-foreground">In progress</span>
+                  ) : c.outcome === "empty" ? (
+                    <span class="text-muted-foreground">Empty</span>
+                  ) : c.newItems > 0 ? (
                     <span class="text-primary">+{c.newItems}</span>
                   ) : (
                     <span class="text-muted-foreground">0</span>
@@ -718,7 +728,15 @@ export function MetricsTab({ data }: { data: StatusData }) {
         />
         <StatCard
           label="Last cycle"
-          value={lastCycle ? `+${lastCycle.newItems}` : "—"}
+          value={
+            lastCycle?.status === "running"
+              ? "In progress"
+              : lastCycle?.outcome === "empty"
+                ? "Empty"
+                : lastCycle
+                  ? `+${lastCycle.newItems}`
+                  : "—"
+          }
           sub={
             lastCycle
               ? (relativeTime(lastCycle.ranAt) ?? undefined)

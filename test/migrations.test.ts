@@ -72,6 +72,18 @@ describe("legacy data migration", () => {
       status: null,
     });
 
+    const explicitOutcomeFields = await env.DB.prepare(
+      `SELECT selected_feeds, skipped_feeds, outcome
+       FROM cycle_runs WHERE id = ?`,
+    )
+      .bind("1700000300000")
+      .first();
+    expect(explicitOutcomeFields).toEqual({
+      selected_feeds: 0,
+      skipped_feeds: 0,
+      outcome: null,
+    });
+
     const attempts = await env.DB.prepare(
       "SELECT count(*) AS count FROM feed_poll_attempts",
     ).first<{ count: number }>();

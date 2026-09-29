@@ -63,3 +63,9 @@ The migration adds nullable lifecycle fields to `cycle_runs`, creates `feed_poll
 The previous Worker version remains readable after the migration because it ignores the new table and columns. A code rollback may leave new attempt rows and Item references in place. The previous version can still read and insert Items because the attribution column is nullable. Items ingested during the rollback will be unattributed. Do not remove the new schema as part of rollback.
 
 Before deployment, run the migration and GReader compatibility tests, export D1, apply the migration, and verify row counts plus `PRAGMA foreign_key_check`. Then deploy the Worker. If verification fails before traffic reaches the new code, roll back the Worker and retain the additive schema. If new writes have started, prefer a forward fix; restoring the export requires stopping all writers first.
+
+## Explicit polling outcomes rollout
+
+Migration `0007_poll_outcomes.sql` is additive and must run after `0006`. It adds default-zero selected and skipped counts plus a nullable Cycle Run outcome. It also adds nullable classification, HTTP, parser, and bounded diagnostic fields to Feed attempts. Existing Cycle Runs keep unknown outcomes, and existing attempts keep unknown diagnostic fields. The migration does not reinterpret historical counts or statuses.
+
+Apply `0007` before deploying code that writes in-progress attempts prior to HTTP work. The previous Worker ignores every new column, so a Worker rollback remains readable. New attempt outcomes written before rollback remain in the existing `outcome` column, but the previous Worker does not display their added classification detail. Keep the additive schema in place during rollback. Use the same export, row-count, foreign-key, GReader, and Current checks described above.

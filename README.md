@@ -94,12 +94,12 @@ Current treats this Worker as a FreshRSS instance. It speaks the standard GReade
 Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each run:
 
 1. Queries all feeds whose `check_interval_minutes` has elapsed (stale-first ordering)
-2. Processes them in sequential batches of 20, fetching each batch concurrently
-3. Creates a `cycle_runs` row keyed by the stable Workflow instance ID
-4. Records successful logical Feed attempts and first-ingestion Item attribution
-5. Completes the Cycle Run summary and emits batched metrics
+2. Processes them in sequential batches of 8, fetching each batch concurrently
+3. Creates a `cycle_runs` row keyed by the stable Workflow instance ID, even when no Feed is eligible
+4. Records in-progress logical Feed attempts before HTTP work, then commits distinct unchanged, not-modified, rate-limited, or classified failure outcomes
+5. Derives the Cycle Run summary from durable attempts and emits batched metrics
 
-**Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each feed fetch costs ~2 (1 HTTP GET + 1 D1 batch write). Sequential Workflow steps each run in a fresh invocation with a fresh budget, so there is no cap on total feed count.
+**Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each Feed poll can use five subrequests for durable progress, HTTP, Item insertion, attribution reconciliation, and terminal outcome writes. Sequential Workflow steps each run in a fresh invocation with a fresh budget, so the total Feed count is not capped by one invocation.
 
 **Adaptive backoff** — `check_interval_minutes` per feed, default 30 min:
 
@@ -217,7 +217,7 @@ For CSS hot-reload during UI development, run `pnpm dev:css` in a separate termi
 
 ## Deployment
 
-Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. For `0006_poll_traceability.sql`, apply the migration before deploying the matching Worker. The previous Worker can read the additive schema during rollback.
+Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. Apply `0006_poll_traceability.sql` and `0007_poll_outcomes.sql` before deploying the matching Worker. The previous Worker can read both additive migrations during rollback.
 
 ```bash
 pnpm deploy     # compile CSS + wrangler deploy

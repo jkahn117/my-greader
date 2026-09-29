@@ -54,16 +54,35 @@ export const cycleRuns = sqliteTable("cycle_runs", {
   ranAt: integer("ran_at").notNull(),
   activeFeeds: integer("active_feeds").notNull().default(0),
   dueFeeds: integer("due_feeds").notNull().default(0),
+  selectedFeeds: integer("selected_feeds").notNull().default(0),
   checkedFeeds: integer("checked_feeds").notNull().default(0),
   newItems: integer("new_items").notNull().default(0),
   failedFeeds: integer("failed_feeds").notNull().default(0),
+  skippedFeeds: integer("skipped_feeds").notNull().default(0),
   startedAt: integer("started_at"),
   completedAt: integer("completed_at"),
   triggerReason: text("trigger_reason", {
     enum: ["scheduled", "manual", "forced"],
   }),
   status: text("status", { enum: ["running", "completed"] }),
+  outcome: text("outcome", { enum: ["completed", "empty"] }),
 });
+
+export type FeedAttemptOutcome =
+  | "new_items"
+  | "unchanged"
+  | "not_modified"
+  | "rate_limited"
+  | "failed"
+  | "skipped";
+
+export type FeedAttemptErrorClass = "network" | "http" | "parse";
+
+export type FeedAttemptParserStatus =
+  | "not_attempted"
+  | "success"
+  | "fallback"
+  | "failure";
 
 // One logical Feed poll within a Cycle Run. Runtime retries reuse the same ID.
 export const feedPollAttempts = sqliteTable("feed_poll_attempts", {
@@ -76,8 +95,25 @@ export const feedPollAttempts = sqliteTable("feed_poll_attempts", {
     .references(() => feeds.id),
   startedAt: integer("started_at").notNull(),
   completedAt: integer("completed_at"),
-  outcome: text("outcome", { enum: ["new_items", "unchanged"] }),
+  outcome: text("outcome", {
+    enum: [
+      "new_items",
+      "unchanged",
+      "not_modified",
+      "rate_limited",
+      "failed",
+      "skipped",
+    ],
+  }),
   newItems: integer("new_items").notNull().default(0),
+  errorClass: text("error_class", {
+    enum: ["network", "http", "parse"],
+  }),
+  httpStatus: integer("http_status"),
+  parserStatus: text("parser_status", {
+    enum: ["not_attempted", "success", "fallback", "failure"],
+  }),
+  diagnostic: text("diagnostic"),
 });
 
 // Fetched Items are shared, not per-User. The nullable attempt reference preserves explicit

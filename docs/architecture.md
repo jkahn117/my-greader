@@ -52,8 +52,10 @@ See [`docs/greader-api.md`](greader-api.md) for endpoint details.
 ## Feed polling
 
 Triggered every 30 minutes.  The cron handler starts a `FeedPollingWorkflow`
-which queries due feeds and processes them in batches of 20 (each batch
-consumes ~40 subrequests, staying under the 50-per-invocation budget).
+which queries due Feeds and processes them in batches of 8. Each Feed can use
+five HTTP or D1 subrequests because progress is checked before the network
+request, Item attribution is reconciled, and terminal state is written
+afterward. The smaller batch stays under the 50-subrequest invocation budget.
 
 Per-feed logic is owned by the `FeedPoller` module.  The Workflow provides
 a narrow `FeedTransport` (global `fetch` with 15s timeout) and a `PollObserver`
@@ -63,7 +65,9 @@ Retry-After), two-tier error deactivation (2 strikes for permanent errors
 like 404/410, 5 for transient), lenient fallback parsing, and adaptive
 interval backoff (30 → 240 minutes).
 
-The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID, so a retried Workflow step addresses the same record. For a run with selected Feeds, the Workflow creates the Cycle Run before Feed processing and completes it after its Feed batches finish. `FeedPoller` records successful parsed attempts and writes each new Item's first-attempt reference. Later migration stages add retry fencing and the remaining terminal attempt outcomes.
+The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID, so a retried Workflow step addresses the same record. The Workflow always creates a Cycle Run, including a completed `empty` run when no active subscribed Feed is eligible. `FeedPoller` creates an in-progress attempt before HTTP work and commits one of `new_items`, `unchanged`, `not_modified`, `rate_limited`, or `failed`. A retry returns an existing terminal attempt without repeating HTTP. If Item insertion completed before interruption, the retry reconstructs the committed count from first-ingestion attribution. Failed attempts use stable `network`, `http`, or `parse` classifications and store diagnostics redacted and capped at 500 characters. A null attempt outcome or a running Cycle Run means work did not complete.
+
+Cycle Run summaries derive from durable attempts. `active_feeds` and `selected_feeds` count distinct Feeds, not Subscription rows. `checked_feeds` counts terminal attempts except `skipped`; `failed_feeds` counts the `failed` subset; `skipped_feeds` counts selected Feeds deliberately not checked; and `new_items` sums committed attempt counts. Forced runs bypass due time but still exclude deactivated and unsubscribed Feeds.
 
 ## Metrics
 

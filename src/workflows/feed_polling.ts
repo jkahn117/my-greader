@@ -7,7 +7,12 @@ import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
-import { feeds, subscriptions, cycleRuns } from "../db/schema";
+import {
+  cycleRuns,
+  feedPollAttempts,
+  feeds,
+  subscriptions,
+} from "../db/schema";
 import {
   createFeedPoller,
   type FeedPollResult,
@@ -18,10 +23,10 @@ import {
 
 type Params = { force?: boolean; triggerReason?: PollTriggerReason };
 
-// Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
-// Sequential steps each get their own fresh subrequest budget (free plan: 50).
-// Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
-const FEEDS_PER_STEP = 20;
+// Each Feed uses up to five subrequests: attempt start/replay check, HTTP,
+// Item insertion, attribution count, and completion. Eight concurrent Feeds
+// stay below the 50-subrequest budget with headroom for metrics delivery.
+const FEEDS_PER_STEP = 8;
 
 // ---------------------------------------------------------------------------
 // asDisposable
@@ -66,21 +71,21 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 //
 // Why Workflows instead of a plain cron handler?
 // A single Worker invocation on the free plan has a budget of 50 subrequests.
-// Each feed fetch costs ~2 (1 HTTP GET + 1 D1 batch write). A plain cron
-// handler would hit the limit after ~25 feeds. Workflows solve this because
+// Each Feed poll uses several D1 and HTTP subrequests. A plain cron handler
+// would hit the invocation limit. Workflows solve this because
 // each sequential step.do() runs in its own fresh Worker invocation with its
 // own fresh 50-subrequest budget. There is no limit on the number of steps.
 //
 // Batching strategy:
 //   - Feeds within a batch are fetched concurrently (Promise.allSettled) to
 //     minimise wall time. Concurrent fetches within one step share that step's
-//     budget, so batch size = floor(50 / 2) - safety margin = 20.
+//     budget, so the batch size leaves room for five subrequests per Feed.
 //   - Batches are processed sequentially (one step.do per batch), each in a
 //     fresh invocation, so total feed count is not constrained by subrequests.
 //
 // Error handling:
 //   - Individual feed failures are caught inside Promise.allSettled and
-//     returned as FeedPollResult { status: "error" }. They do not fail the step.
+//     returned as a terminal FeedPollResult. They do not fail the step.
 //   - Step-level failures (e.g. D1 outage, binding error) will be retried by
 //     the Workflow runtime before propagating.
 //   - run() wraps everything in a try/catch that logs the full error message
@@ -89,380 +94,436 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
-    // withRpcContext enriches all log entries for this Workflow run with the
-    // correlation ID, agent name, and instance ID (no Request is available).
-    using _ctx = logger.withRpcContext({
-      correlationId: event.instanceId,
-      agent: "FeedPollingWorkflow",
-      instanceId: event.instanceId,
+    return runFeedPollingWorkflow(this.env, event, step);
+  }
+}
+
+/** Runs the Workflow adapter through an exported seam shared with local tests. */
+export async function runFeedPollingWorkflow(
+  env: Env,
+  event: WorkflowEvent<Params>,
+  step: WorkflowStep,
+): Promise<void> {
+  using _ctx = logger.withRpcContext({
+    correlationId: event.instanceId,
+    agent: "FeedPollingWorkflow",
+    instanceId: event.instanceId,
+  });
+
+  try {
+    // `force` remains a read-only compatibility field for Workflows started
+    // before triggerReason became the single source of selection policy.
+    const triggerReason =
+      event.payload.triggerReason ??
+      (event.payload.force === true ? "forced" : "scheduled");
+    await pollWorkflow(env, step, triggerReason, event.instanceId);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    logger.error("feed polling workflow failed", {
+      error: errorMessage,
+      stack,
     });
 
     try {
-      // `force` remains a read-only compatibility field for Workflows started
-      // before triggerReason became the single source of selection policy.
-      const triggerReason =
-        event.payload.triggerReason ??
-        (event.payload.force === true ? "forced" : "scheduled");
-      await this.#poll(step, triggerReason, event.instanceId);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack : undefined;
-      // logger.error flushes the buffer — all buffered DEBUG/INFO logs emitted
-      // before this point are now visible in structured logs alongside the error.
-      logger.error("feed polling workflow failed", {
-        error: errorMessage,
-        stack,
-      });
-
-      try {
-        using analytics = asDisposable(this.env.ANALYTICS);
-        const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (this.env.ANALYTICS_ENABLED as string) !== "false",
-        );
-        metrics.recordCycleError({ error: errorMessage });
-        await metrics.flush();
-      } catch {
-        // Don't mask the original error if metrics emission itself fails
-      }
-
-      throw err;
+      using analytics = asDisposable(env.ANALYTICS);
+      const metrics = createMetrics(
+        analytics as unknown as Env["ANALYTICS"],
+        (env.ANALYTICS_ENABLED as string) !== "false",
+      );
+      metrics.recordCycleError({ error: errorMessage });
+      await metrics.flush();
+    } catch {
+      // Do not mask the domain or infrastructure failure with metrics delivery.
     }
+
+    throw err;
   }
+}
 
-  async #poll(
-    step: WorkflowStep,
-    triggerReason: PollTriggerReason,
-    cycleRunId: string,
-  ): Promise<void> {
-    // ------------------------------------------------------------------
-    // Step 1 — query feeds that are due for a check (or all active feeds when forced)
-    // ------------------------------------------------------------------
+/** Coordinates selection and step placement while FeedPoller owns Feed policy. */
+async function pollWorkflow(
+  env: Env,
+  step: WorkflowStep,
+  triggerReason: PollTriggerReason,
+  cycleRunId: string,
+): Promise<void> {
+  // ------------------------------------------------------------------
+  // Step 1 — query feeds that are due for a check (or all active feeds when forced)
+  // ------------------------------------------------------------------
 
-    const force = triggerReason === "forced";
-    const stepName = force ? "get-all-active-feeds" : "get-due-feeds";
+  const force = triggerReason === "forced";
+  const stepName = force ? "get-all-active-feeds" : "get-due-feeds";
 
-    const { dueFeeds, totalActiveFeeds } = await step.do(stepName, async () => {
-      try {
-        using d1 = asDisposable(this.env.DB);
-        const db = getDb(d1);
-        const now = Date.now();
+  const { dueFeeds, totalActiveFeeds } = await step.do(stepName, async () => {
+    try {
+      using d1 = asDisposable(env.DB);
+      const db = getDb(d1);
+      const now = Date.now();
 
-        const dueQuery = db
-          .selectDistinct({
-            id: feeds.id,
-            feedUrl: feeds.feedUrl,
-            title: feeds.title,
-            htmlUrl: feeds.htmlUrl,
-            etag: feeds.etag,
-            lastModified: feeds.lastModified,
-            lastFetchedAt: feeds.lastFetchedAt,
-            consecutiveErrors: feeds.consecutiveErrors,
-            checkIntervalMinutes: feeds.checkIntervalMinutes,
-            lastNewItemAt: feeds.lastNewItemAt,
-          })
-          .from(feeds)
-          .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-          .where(
-            force
-              ? isNull(feeds.deactivatedAt)
-              : and(
-                  isNull(feeds.deactivatedAt),
-                  or(
-                    isNull(feeds.lastFetchedAt),
-                    lte(
-                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                      now,
-                    ),
+      const dueQuery = db
+        .selectDistinct({
+          id: feeds.id,
+          feedUrl: feeds.feedUrl,
+          title: feeds.title,
+          htmlUrl: feeds.htmlUrl,
+          etag: feeds.etag,
+          lastModified: feeds.lastModified,
+          lastFetchedAt: feeds.lastFetchedAt,
+          consecutiveErrors: feeds.consecutiveErrors,
+          checkIntervalMinutes: feeds.checkIntervalMinutes,
+          lastNewItemAt: feeds.lastNewItemAt,
+        })
+        .from(feeds)
+        .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+        .where(
+          force
+            ? isNull(feeds.deactivatedAt)
+            : and(
+                isNull(feeds.deactivatedAt),
+                or(
+                  isNull(feeds.lastFetchedAt),
+                  lte(
+                    sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
+                    now,
                   ),
                 ),
-          )
-          .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
-
-        const [due, activeCount] = await db.batch([
-          dueQuery,
-          db
-            .select({ count: sql<number>`count(*)` })
-            .from(feeds)
-            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-            .where(isNull(feeds.deactivatedAt)),
-        ]);
-
-        const totalActiveFeeds = Number(activeCount[0]?.count ?? 0);
-        if (due.length > 0) {
-          await db
-            .insert(cycleRuns)
-            .values({
-              id: cycleRunId,
-              ranAt: now,
-              startedAt: now,
-              triggerReason,
-              status: "running",
-              activeFeeds: totalActiveFeeds,
-              dueFeeds: due.length,
-            })
-            .onConflictDoNothing();
-        }
-
-        return {
-          dueFeeds: due,
-          totalActiveFeeds,
-        };
-      } catch (err) {
-        logger.error("get-due-feeds step failed", {
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-        throw err;
-      }
-    });
-
-    logger.info("feed polling cycle starting", {
-      cycleRunId,
-      totalActiveFeeds,
-      dueFeeds: dueFeeds.length,
-    });
-
-    if (dueFeeds.length === 0) {
-      logger.info("no feeds due, skipping cycle", { cycleRunId });
-      return;
-    }
-
-    // ------------------------------------------------------------------
-    // Steps 2…N — one step per batch of FEEDS_PER_STEP feeds.
-    // Within each step, feeds are fetched concurrently to minimise wall time.
-    // Sequential steps each run in a fresh Worker invocation with a new budget.
-    // ------------------------------------------------------------------
-
-    const allResults: FeedPollResult[] = [];
-
-    for (let i = 0; i < dueFeeds.length; i += FEEDS_PER_STEP) {
-      const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
-      const batchIndex = Math.floor(i / FEEDS_PER_STEP);
-
-      const batchResults = await step.do(
-        `fetch-batch-${batchIndex}`,
-        async () => {
-          try {
-            using d1 = asDisposable(this.env.DB);
-            using analytics = asDisposable(this.env.ANALYTICS);
-            const metrics = createMetrics(
-              analytics as unknown as Env["ANALYTICS"],
-              (this.env.ANALYTICS_ENABLED as string) !== "false",
-            );
-
-            const transport: FeedTransport = {
-              get(url, headers) {
-                return fetch(url, {
-                  headers,
-                  signal: AbortSignal.timeout(15000),
-                });
-              },
-            };
-
-            const observer: PollObserver = {
-              publish(event) {
-                switch (event.kind) {
-                  case "feedPolled":
-                    logger.info("feed polled", {
-                      cycleRunId,
-                      attemptId: attemptIdFor(cycleRunId, event.feedId),
-                      feedId: event.feedId,
-                      newItems: event.newItems,
-                      durationMs: event.durationMs,
-                      parseStatus: event.parseStatus,
-                    });
-                    metrics.recordParse({
-                      feedId: event.feedId,
-                      status:
-                        event.parseStatus === "fallback"
-                          ? ParseStatus.FALLBACK
-                          : ParseStatus.SUCCESS,
-                      durationMs: event.durationMs,
-                      articleCount: event.newItems,
-                    });
-                    break;
-                  case "feedNotModified":
-                    break;
-                  case "feedRateLimited":
-                    logger.warn("feed rate limited", {
-                      cycleRunId,
-                      attemptId: attemptIdFor(cycleRunId, event.feedId),
-                      feedId: event.feedId,
-                      backoffMinutes: event.backoffMinutes,
-                    });
-                    metrics.recordFetchError({
-                      feedId: event.feedId,
-                      httpStatus: 429,
-                    });
-                    break;
-                  case "feedFetchFailed":
-                    logger.warn("feed fetch failed", {
-                      cycleRunId,
-                      attemptId: attemptIdFor(cycleRunId, event.feedId),
-                      feedId: event.feedId,
-                      status: event.status,
-                      error: event.error,
-                    });
-                    if (event.status) {
-                      metrics.recordFetchError({
-                        feedId: event.feedId,
-                        httpStatus: event.status,
-                      });
-                    }
-                    break;
-                  case "feedParseFailed":
-                    logger.warn("feed parse failed", {
-                      cycleRunId,
-                      attemptId: attemptIdFor(cycleRunId, event.feedId),
-                      feedId: event.feedId,
-                      error: event.error,
-                    });
-                    metrics.recordParse({
-                      feedId: event.feedId,
-                      status: ParseStatus.FAILURE,
-                      durationMs: 0,
-                      error: event.error,
-                    });
-                    break;
-                  case "feedDeactivated":
-                    logger.warn("feed deactivated after repeated errors", {
-                      cycleRunId,
-                      attemptId: attemptIdFor(cycleRunId, event.feedId),
-                      feedId: event.feedId,
-                      consecutiveErrors: event.consecutiveErrors,
-                    });
-                    break;
-                }
-              },
-            };
-
-            const poller = createFeedPoller(d1, transport, observer, () =>
-              Date.now(),
-            );
-
-            const settled = await Promise.allSettled(
-              batch.map((feed) =>
-                poller.poll(feed, {
-                  cycleRunId,
-                  attemptId: attemptIdFor(cycleRunId, feed.id),
-                }),
               ),
-            );
+        )
+        .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
 
-            await metrics.flush();
+      const [due, activeCount] = await db.batch([
+        dueQuery,
+        db
+          .select({ count: sql<number>`count(distinct ${feeds.id})` })
+          .from(feeds)
+          .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+          .where(isNull(feeds.deactivatedAt)),
+      ]);
 
-            return settled.map((s, j): FeedPollResult => {
-              if (s.status === "fulfilled") return s.value;
-              return {
-                feedId: batch[j].id,
-                feedTitle: batch[j].title ?? batch[j].feedUrl,
-                status: "error",
-                error: String(s.reason),
-              };
-            });
-          } catch (err) {
-            logger.error(`fetch-batch-${batchIndex} step failed`, {
-              batchIndex,
-              batchSize: batch.length,
-              error: err instanceof Error ? err.message : String(err),
-              stack: err instanceof Error ? err.stack : undefined,
-            });
-            throw err;
-          }
-        },
-      );
-
-      for (const r of batchResults) {
-        if (r.status === "error") {
-          logger.error("feed fetch failed", {
-            feedId: r.feedId,
-            feedTitle: r.feedTitle,
-            error: r.error,
-          });
-        }
-        allResults.push(r);
-      }
-    }
-
-    // ------------------------------------------------------------------
-    // Final step — write cycle summary to D1 + emit Pipeline metrics
-    // ------------------------------------------------------------------
-
-    const newArticles = allResults.reduce(
-      (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
-      0,
-    );
-    const failedFeeds = allResults.filter((r) => r.status === "error").length;
-
-    const detail = allResults.map((r) => {
-      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
-      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
-      return `${r.feedTitle}: error — ${r.error}`;
-    });
-
-    await step.do("record-cycle", async () => {
-      try {
-        using d1 = asDisposable(this.env.DB);
-        using analytics = asDisposable(this.env.ANALYTICS);
-        const db = getDb(d1);
-        const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (this.env.ANALYTICS_ENABLED as string) !== "false",
-        );
-        const now = Date.now();
-
-        // Complete the stable Cycle Run created before Feed processing.
-        await db
-          .update(cycleRuns)
-          .set({
-            completedAt: now,
-            status: "completed",
-            activeFeeds: totalActiveFeeds,
-            dueFeeds: dueFeeds.length,
-            checkedFeeds: allResults.length,
-            newItems: newArticles,
-            failedFeeds,
-          })
-          .where(eq(cycleRuns.id, cycleRunId));
-
-        // Pipeline write for long-term analytics — batched with flush
-        metrics.recordCycle({
-          totalActiveFeeds,
-          dueFeeds: dueFeeds.length,
-          checkedFeeds: allResults.length,
-          newArticles,
-          failedFeeds,
-        });
-        await metrics.flush();
-      } catch (err) {
-        logger.error("record-cycle step failed", {
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-        throw err;
-      }
+      const totalActiveFeeds = Number(activeCount[0]?.count ?? 0);
+      const empty = due.length === 0;
+      await db
+        .insert(cycleRuns)
+        .values({
+          id: cycleRunId,
+          ranAt: now,
+          startedAt: now,
+          completedAt: empty ? now : null,
+          triggerReason,
+          status: empty ? "completed" : "running",
+          outcome: empty ? "empty" : null,
+          activeFeeds: totalActiveFeeds,
+          dueFeeds: due.length,
+          selectedFeeds: due.length,
+        })
+        .onConflictDoNothing();
 
       return {
+        dueFeeds: due,
+        totalActiveFeeds,
+      };
+    } catch (err) {
+      logger.error("get-due-feeds step failed", {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      throw err;
+    }
+  });
+
+  logger.info("feed polling cycle starting", {
+    cycleRunId,
+    totalActiveFeeds,
+    dueFeeds: dueFeeds.length,
+  });
+
+  if (dueFeeds.length === 0) {
+    logger.info("no feeds due, skipping cycle", { cycleRunId });
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // Steps 2…N — one step per batch of FEEDS_PER_STEP feeds.
+  // Within each step, feeds are fetched concurrently to minimise wall time.
+  // Sequential steps each run in a fresh Worker invocation with a new budget.
+  // ------------------------------------------------------------------
+
+  const allResults: FeedPollResult[] = [];
+
+  for (let i = 0; i < dueFeeds.length; i += FEEDS_PER_STEP) {
+    const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
+    const batchIndex = Math.floor(i / FEEDS_PER_STEP);
+
+    const batchResults = await step.do(
+      `fetch-batch-${batchIndex}`,
+      async () => {
+        try {
+          using d1 = asDisposable(env.DB);
+          using analytics = asDisposable(env.ANALYTICS);
+          const metrics = createMetrics(
+            analytics as unknown as Env["ANALYTICS"],
+            (env.ANALYTICS_ENABLED as string) !== "false",
+          );
+
+          const transport: FeedTransport = {
+            get(url, headers) {
+              return fetch(url, {
+                headers,
+                signal: AbortSignal.timeout(15000),
+              });
+            },
+          };
+
+          const observer: PollObserver = {
+            publish(event) {
+              switch (event.kind) {
+                case "feedPolled":
+                  logger.info("feed polled", {
+                    cycleRunId,
+                    attemptId: attemptIdFor(cycleRunId, event.feedId),
+                    feedId: event.feedId,
+                    newItems: event.newItems,
+                    durationMs: event.durationMs,
+                    parseStatus: event.parseStatus,
+                  });
+                  metrics.recordParse({
+                    feedId: event.feedId,
+                    status:
+                      event.parseStatus === "fallback"
+                        ? ParseStatus.FALLBACK
+                        : ParseStatus.SUCCESS,
+                    durationMs: event.durationMs,
+                    articleCount: event.newItems,
+                  });
+                  break;
+                case "feedNotModified":
+                  break;
+                case "feedRateLimited":
+                  logger.warn("feed rate limited", {
+                    cycleRunId,
+                    attemptId: attemptIdFor(cycleRunId, event.feedId),
+                    feedId: event.feedId,
+                    backoffMinutes: event.backoffMinutes,
+                  });
+                  metrics.recordFetchError({
+                    feedId: event.feedId,
+                    httpStatus: 429,
+                  });
+                  break;
+                case "feedFetchFailed":
+                  logger.warn("feed fetch failed", {
+                    cycleRunId,
+                    attemptId: attemptIdFor(cycleRunId, event.feedId),
+                    feedId: event.feedId,
+                    status: event.status,
+                    error: event.error,
+                  });
+                  if (event.status) {
+                    metrics.recordFetchError({
+                      feedId: event.feedId,
+                      httpStatus: event.status,
+                    });
+                  }
+                  break;
+                case "feedParseFailed":
+                  logger.warn("feed parse failed", {
+                    cycleRunId,
+                    attemptId: attemptIdFor(cycleRunId, event.feedId),
+                    feedId: event.feedId,
+                    error: event.error,
+                  });
+                  metrics.recordParse({
+                    feedId: event.feedId,
+                    status: ParseStatus.FAILURE,
+                    durationMs: 0,
+                    error: event.error,
+                  });
+                  break;
+                case "feedDeactivated":
+                  logger.warn("feed deactivated after repeated errors", {
+                    cycleRunId,
+                    attemptId: attemptIdFor(cycleRunId, event.feedId),
+                    feedId: event.feedId,
+                    consecutiveErrors: event.consecutiveErrors,
+                  });
+                  break;
+              }
+            },
+          };
+
+          const poller = createFeedPoller(d1, transport, observer, () =>
+            Date.now(),
+          );
+
+          const settled = await Promise.allSettled(
+            batch.map((feed) =>
+              poller.poll(feed, {
+                cycleRunId,
+                attemptId: attemptIdFor(cycleRunId, feed.id),
+              }),
+            ),
+          );
+
+          try {
+            await metrics.flush();
+          } catch (err) {
+            logger.warn("Feed metrics delivery failed", {
+              cycleRunId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+
+          const rejected = settled.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === "rejected",
+          );
+          if (rejected) throw rejected.reason;
+          return settled.map(
+            (result) =>
+              (result as PromiseFulfilledResult<FeedPollResult>).value,
+          );
+        } catch (err) {
+          logger.error(`fetch-batch-${batchIndex} step failed`, {
+            batchIndex,
+            batchSize: batch.length,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
+          throw err;
+        }
+      },
+    );
+
+    for (const result of batchResults) {
+      if (result.outcome === "failed") {
+        logger.error("feed fetch failed", {
+          feedId: result.feedId,
+          feedTitle: result.feedTitle,
+          errorClass: result.errorClass,
+          error: result.error,
+        });
+      }
+      allResults.push(result);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Final step — write cycle summary to D1 + emit Pipeline metrics
+  // ------------------------------------------------------------------
+
+  const detail = allResults.map((result) => {
+    if (result.outcome === "new_items" || result.outcome === "unchanged") {
+      return `${result.feedTitle}: +${result.newItems}`;
+    }
+    if (result.outcome === "not_modified") {
+      return `${result.feedTitle}: not modified`;
+    }
+    if (result.outcome === "rate_limited") {
+      return `${result.feedTitle}: rate limited`;
+    }
+    if (result.outcome === "skipped") {
+      return `${result.feedTitle}: skipped`;
+    }
+    return `${result.feedTitle}: ${result.errorClass} failure, ${result.error}`;
+  });
+
+  const summary = await step.do("record-cycle", async () => {
+    try {
+      using d1 = asDisposable(env.DB);
+      using analytics = asDisposable(env.ANALYTICS);
+      const db = getDb(d1);
+      const metrics = createMetrics(
+        analytics as unknown as Env["ANALYTICS"],
+        (env.ANALYTICS_ENABLED as string) !== "false",
+      );
+      const now = Date.now();
+      const attempts = await db
+        .select({
+          outcome: feedPollAttempts.outcome,
+          newItems: feedPollAttempts.newItems,
+        })
+        .from(feedPollAttempts)
+        .where(eq(feedPollAttempts.cycleRunId, cycleRunId));
+      const terminalAttempts = attempts.filter(
+        (attempt) => attempt.outcome != null,
+      );
+      if (
+        attempts.length !== dueFeeds.length ||
+        terminalAttempts.length !== dueFeeds.length
+      ) {
+        throw new Error(`Cycle Run ${cycleRunId} has incomplete Feed attempts`);
+      }
+
+      const skippedFeeds = terminalAttempts.filter(
+        (attempt) => attempt.outcome === "skipped",
+      ).length;
+      const checkedFeeds = terminalAttempts.length - skippedFeeds;
+      const failedFeeds = terminalAttempts.filter(
+        (attempt) => attempt.outcome === "failed",
+      ).length;
+      const newArticles = terminalAttempts.reduce(
+        (sum, attempt) => sum + attempt.newItems,
+        0,
+      );
+
+      // Durable attempts are the only source for the completed summary.
+      await db
+        .update(cycleRuns)
+        .set({
+          completedAt: now,
+          status: "completed",
+          outcome: "completed",
+          activeFeeds: totalActiveFeeds,
+          dueFeeds: dueFeeds.length,
+          selectedFeeds: dueFeeds.length,
+          checkedFeeds,
+          newItems: newArticles,
+          failedFeeds,
+          skippedFeeds,
+        })
+        .where(eq(cycleRuns.id, cycleRunId));
+
+      metrics.recordCycle({
         totalActiveFeeds,
         dueFeeds: dueFeeds.length,
-        checkedFeeds: allResults.length,
+        checkedFeeds,
         newArticles,
         failedFeeds,
-        feeds: detail,
+      });
+      try {
+        await metrics.flush();
+      } catch (err) {
+        logger.warn("Cycle metrics delivery failed", {
+          cycleRunId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return {
+        checkedFeeds,
+        newItems: newArticles,
+        failedFeeds,
+        skippedFeeds,
       };
-    });
+    } catch (err) {
+      logger.error("record-cycle step failed", {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      throw err;
+    }
+  });
 
-    logger.info("feed polling cycle complete", {
-      cycleRunId,
-      totalActiveFeeds,
-      dueFeeds: dueFeeds.length,
-      checkedFeeds: allResults.length,
-      newArticles,
-      failedFeeds,
-      feeds: detail,
-    });
-  }
+  logger.info("feed polling cycle complete", {
+    cycleRunId,
+    totalActiveFeeds,
+    selectedFeeds: dueFeeds.length,
+    checkedFeeds: summary.checkedFeeds,
+    newArticles: summary.newItems,
+    failedFeeds: summary.failedFeeds,
+    skippedFeeds: summary.skippedFeeds,
+    feeds: detail,
+  });
 }
 
 /** Builds the durable logical attempt ID reused by Workflow step retries. */

@@ -13,6 +13,7 @@ import { App } from "../views/app";
 import {
   TimelineTab,
   type CycleTimeline,
+  type TimelineAttempt,
   type TimelineItem,
 } from "../views/timeline";
 
@@ -52,6 +53,31 @@ handler.get("/app/timeline", async (c) => {
         </App>,
       );
     }
+
+    const attemptRows = await db
+      .select({
+        id: feedPollAttempts.id,
+        cycleRunId: feedPollAttempts.cycleRunId,
+        feedTitle: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
+        outcome: feedPollAttempts.outcome,
+        errorClass: feedPollAttempts.errorClass,
+        httpStatus: feedPollAttempts.httpStatus,
+        parserStatus: feedPollAttempts.parserStatus,
+        diagnostic: feedPollAttempts.diagnostic,
+      })
+      .from(feedPollAttempts)
+      .innerJoin(feeds, eq(feedPollAttempts.feedId, feeds.id))
+      .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+      .where(
+        and(
+          eq(subscriptions.userId, userId),
+          inArray(
+            feedPollAttempts.cycleRunId,
+            cycles.map((cycle) => cycle.id),
+          ),
+        ),
+      )
+      .orderBy(desc(feedPollAttempts.startedAt));
 
     // Follow committed foreign keys only. Timestamp proximity is not evidence
     // that a historical Item belongs to a Cycle Run.
@@ -94,20 +120,38 @@ handler.get("/app/timeline", async (c) => {
           attemptId: row.attemptId,
         }));
 
+      const cycleAttempts: TimelineAttempt[] = attemptRows
+        .filter((row) => row.cycleRunId === cycle.id)
+        .map((row) => ({
+          id: row.id,
+          feedTitle: row.feedTitle,
+          outcome: row.outcome,
+          errorClass: row.errorClass,
+          httpStatus: row.httpStatus,
+          parserStatus: row.parserStatus,
+          diagnostic: row.diagnostic,
+        }));
+
       return {
         cycleId: cycle.id,
         ranAt: cycle.ranAt,
+        selectedFeeds: cycle.selectedFeeds,
         checkedFeeds: cycle.checkedFeeds,
+        failedFeeds: cycle.failedFeeds,
+        skippedFeeds: cycle.skippedFeeds,
         newItems: cycle.newItems,
         triggerReason: cycle.triggerReason,
         status: cycle.status,
+        outcome: cycle.outcome,
         attributed: cycle.startedAt != null,
+        attempts: cycleAttempts,
         items: cycleItems,
       };
     });
 
     logger.info("timeline loaded", {
       cycleCount: cycles.length,
+      attemptCount: attemptRows.length,
       itemCount: itemRows.length,
     });
 

@@ -188,6 +188,53 @@ describe("feed deactivate / reactivate", () => {
 });
 
 describe("GET /app/timeline", () => {
+  it("shows empty, interrupted, and failed durable outcomes without Analytics Engine", async () => {
+    const feedId = await seedFeedAndSub({
+      feedUrl: "https://failed.example/feed.xml",
+      title: "Failed Feed",
+    });
+    const now = Date.now();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO cycle_runs
+          (id, ran_at, active_feeds, due_feeds, selected_feeds, checked_feeds,
+           new_items, failed_feeds, skipped_feeds, started_at, completed_at,
+           trigger_reason, status, outcome)
+         VALUES (?, ?, 1, 0, 0, 0, 0, 0, 0, ?, ?, 'scheduled', 'completed', 'empty')`,
+      ).bind("empty-cycle", now - 2, now - 2, now - 2),
+      env.DB.prepare(
+        `INSERT INTO cycle_runs
+          (id, ran_at, active_feeds, due_feeds, selected_feeds, checked_feeds,
+           new_items, failed_feeds, skipped_feeds, started_at, trigger_reason, status)
+         VALUES (?, ?, 1, 1, 1, 0, 0, 0, 0, ?, 'forced', 'running')`,
+      ).bind("interrupted-cycle", now, now),
+      env.DB.prepare(
+        `INSERT INTO feed_poll_attempts
+          (id, cycle_run_id, feed_id, started_at, completed_at, outcome,
+           new_items, error_class, http_status, parser_status, diagnostic)
+         VALUES (?, ?, ?, ?, ?, 'failed', 0, 'http', 503, 'not_attempted', ?)`,
+      ).bind(
+        "failed-attempt",
+        "interrupted-cycle",
+        feedId,
+        now,
+        now + 1,
+        "HTTP 503",
+      ),
+    ]);
+
+    const res = await fetch("/app/timeline");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("No eligible Feeds");
+    expect(html).toContain("In progress");
+    expect(html).toContain("Failed Feed");
+    expect(html).toContain("HTTP failure");
+    expect(html).toContain("HTTP 503");
+    expect(html).toContain("1 selected");
+  });
+
   it("links attributed Items through attempts while preserving User visibility", async () => {
     const visibleFeedId = await seedFeedAndSub({
       feedUrl: "https://visible.example/feed.xml",

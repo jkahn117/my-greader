@@ -395,7 +395,7 @@ describe("FeedPoller", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
-    expect(result.status).toBe("error");
+    expect(result.outcome).toBe("failed");
 
     const db = getDb(env.DB);
     const stored = await db.select().from(items).all();
@@ -431,8 +431,8 @@ describe("FeedPoller", () => {
 
     // The RSS items are from Jan 2024 — well before lastNewItemAt - window.
     // They should be filtered out by the backload gate.
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") expect(result.newItems).toBe(0);
+    expect(result.outcome).toBe("unchanged");
+    if (result.outcome === "unchanged") expect(result.newItems).toBe(0);
 
     const stored = await db.select().from(items).all();
     expect(stored).toHaveLength(0);
@@ -453,7 +453,7 @@ describe("FeedPoller", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
-    expect(result.status).toBe("error");
+    expect(result.outcome).toBe("rate_limited");
 
     const db = getDb(env.DB);
     const row = await db
@@ -528,7 +528,7 @@ describe("FeedPoller error handling", () => {
       poller,
       feedRow({ id: feedId, feedUrl: "https://bad.example.com/feed.xml" }),
     );
-    expect(result.status).toBe("error");
+    expect(result.outcome).toBe("failed");
   });
 
   it("deactivates after 5 transient errors", async () => {
@@ -546,7 +546,7 @@ describe("FeedPoller error handling", () => {
         consecutiveErrors: 4,
       }),
     );
-    expect(result.status).toBe("error");
+    expect(result.outcome).toBe("failed");
 
     const db = getDb(env.DB);
     const row = await db
@@ -577,7 +577,7 @@ describe("FeedPoller error handling", () => {
         consecutiveErrors: 1,
       }),
     );
-    expect(result.status).toBe("error");
+    expect(result.outcome).toBe("failed");
 
     const db = getDb(env.DB);
     const row = await db
