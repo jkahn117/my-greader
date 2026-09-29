@@ -114,13 +114,13 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
   if (!parsed.success) return c.text("Error", 400);
 
   const { s, ts } = parsed.output;
-  const streamId = parseStreamId(s);
+  const scope = parseStreamId(s);
 
   // GReader timestamps use microseconds while Item timestamps use milliseconds.
   const cutoffMs = ts ? Math.floor(ts / 1000) : null;
   const count = await createItemStateModule(c.env.DB).markAllRead({
     userId,
-    scope: streamId,
+    scope,
     before: cutoffMs,
   });
 

@@ -27,10 +27,7 @@ export interface ItemStateModule {
 }
 
 /** Owns per-User Item State transitions and scoped bulk updates. */
-export function createItemStateModule(
-  dbBinding: D1Database,
-  clock: () => number = Date.now,
-): ItemStateModule {
+export function createItemStateModule(dbBinding: D1Database): ItemStateModule {
   const db = getDb(dbBinding);
 
   /** Filters requested Items through the User's Subscriptions before changing state. */
@@ -68,7 +65,7 @@ export function createItemStateModule(
 
     const isRead = params.changes.isRead === true ? 1 : 0;
     const isStarred = params.changes.isStarred === true ? 1 : 0;
-    const readAt = params.changes.isRead === true ? clock() : null;
+    const readAt = params.changes.isRead === true ? Date.now() : null;
     const sql = `
       INSERT INTO item_state (item_id, user_id, is_read, is_starred, read_at)
       VALUES (?, ?, ?, ?, ?)
@@ -90,12 +87,17 @@ export function createItemStateModule(
     scope: StreamScope;
     before: number | null;
   }): Promise<number> {
-    if (params.scope.type === "starred") return 0;
+    if (
+      params.scope.type === "starred" ||
+      params.scope.type === "unsupported"
+    ) {
+      return 0;
+    }
 
     const scopeClauses: string[] = [];
     const bindings: (string | number | null)[] = [
       params.userId,
-      clock(),
+      Date.now(),
       params.userId,
       params.userId,
     ];

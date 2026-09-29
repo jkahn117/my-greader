@@ -17,7 +17,10 @@ export function parseStreamId(streamId: string): StreamScope {
   if (streamId === "user/-/state/com.google/starred") {
     return { type: "starred", value: null };
   }
-  return { type: "all", value: null };
+  if (streamId === "user/-/state/com.google/reading-list") {
+    return { type: "all", value: null };
+  }
+  return { type: "unsupported", value: streamId };
 }
 
 // ---------------------------------------------------------------------------

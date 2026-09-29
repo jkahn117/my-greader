@@ -17,7 +17,7 @@ import type { ContinuationCursor } from "../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../db/schema";
 import type { items as itemsTable } from "../db/schema";
 
-export type StreamType = "feed" | "folder" | "all" | "starred";
+export type StreamType = "feed" | "folder" | "all" | "starred" | "unsupported";
 
 export interface StreamScope {
   type: StreamType;
@@ -86,6 +86,7 @@ export interface StreamModule {
 export function createStreamModule(dbBinding: D1Database): StreamModule {
   const d = getDb(dbBinding);
 
+  /** Resolves the Feed ID and URL forms accepted by GReader clients. */
   async function resolveFeedRef(ref: string) {
     return d
       .select({ id: feeds.id, feedUrl: feeds.feedUrl })
@@ -95,6 +96,7 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
       .then((r) => r ?? null);
   }
 
+  /** Builds private query conditions from a User-scoped Stream request. */
   async function resolveScope(params: ScopeParams): Promise<SQL<unknown>[]> {
     const { scope, userId, excludeRead, newerThan, cursor } = params;
     const conditions: SQL<unknown>[] = [eq(subscriptions.userId, userId)];
@@ -106,6 +108,8 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
       conditions.push(eq(subscriptions.folder, scope.value!));
     } else if (scope.type === "starred") {
       conditions.push(eq(itemState.isStarred, 1));
+    } else if (scope.type === "unsupported") {
+      conditions.push(sql`0 = 1`);
     }
 
     if (excludeRead) {
@@ -135,6 +139,7 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     return conditions;
   }
 
+  /** Returns one ordered page while keeping scope predicates inside the module. */
   async function queryPage(
     params: ScopeParams & { limit: number },
   ): Promise<PageResult> {
@@ -172,6 +177,7 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     return { page, hasMore, ...(continuation ? { continuation } : {}) };
   }
 
+  /** Looks up requested Items while enforcing the User's Subscriptions. */
   async function queryByIds(params: {
     ids: string[];
     userId: string;

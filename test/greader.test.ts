@@ -809,6 +809,34 @@ describe("mark-all-as-read", () => {
     expect(body.items.map((item) => item.title)).toEqual(["Starred article"]);
   });
 
+  it("keeps the compatible no-op response for an unsupported Stream", async () => {
+    const { feedId } = await seedFeed({
+      feedUrl: "https://example.com/feed.xml",
+      title: "Feed",
+      itemGuid: "https://example.com/a1",
+      itemTitle: "Unread article",
+    });
+    await subscribeUser("dev-user-id", feedId);
+
+    const res = await fetch("/reader/api/0/mark-all-as-read", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({ s: "user/-/state/com.google/read" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("OK");
+
+    const unread = await fetch(
+      "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
+      { headers: authHeaders() },
+    );
+    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    expect(body.items.map((item) => item.title)).toEqual(["Unread article"]);
+  });
+
   it("does not mark Items in an unsubscribed Feed", async () => {
     const { feedId } = await seedFeed({
       feedUrl: "https://other.example.com/feed.xml",

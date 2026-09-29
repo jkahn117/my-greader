@@ -35,11 +35,11 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
   const { s, n, xt, c: contToken, ot } = parsed.output;
-  const streamId = parseStreamId(s);
+  const scope = parseStreamId(s);
 
   const mod = createStreamModule(c.env.DB);
   const { page, hasMore, continuation } = await mod.queryPage({
-    scope: streamId,
+    scope,
     userId,
     excludeRead: xt === "user/-/state/com.google/read",
     newerThan: ot ?? null,
@@ -75,11 +75,11 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
   const { s, n, xt, c: contToken, ot } = parsed.output;
-  const streamId = parseStreamId(s);
+  const scope = parseStreamId(s);
 
   const mod = createStreamModule(c.env.DB);
   const { page, continuation } = await mod.queryPage({
-    scope: streamId,
+    scope,
     userId,
     excludeRead: xt === "user/-/state/com.google/read",
     newerThan: ot ?? null,
