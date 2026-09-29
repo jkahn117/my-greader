@@ -1,5 +1,7 @@
 # Architecture
 
+This document describes the current implementation. The [target architecture for next](next-architecture.md) records the directory layout and module ownership for the migration in [issue #18](https://github.com/jkahn117/my-greader/issues/18).
+
 ## Stack
 
 Single Cloudflare Worker (Hono + JSX) backed by D1 (SQLite) and Workers
