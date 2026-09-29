@@ -213,6 +213,8 @@ For CSS hot-reload during UI development, run `pnpm dev:css` in a separate termi
 
 ## Deployment
 
+Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema.
+
 ```bash
 pnpm deploy     # compile CSS + wrangler deploy
 ```
@@ -248,4 +250,5 @@ pnpm deploy     # compile CSS + wrangler deploy
 - [`docs/architecture.md`](docs/architecture.md) — project structure, D1 schema, cron jobs
 - [`docs/auth-flow.md`](docs/auth-flow.md) — Cloudflare Access + API token lifecycle
 - [`docs/greader-api.md`](docs/greader-api.md) — GReader endpoint reference
+- [`docs/migration-baseline.md`](docs/migration-baseline.md) — compatibility checks and migration recovery
 - [`docs/decisions.md`](docs/decisions.md) — rationale behind key technical choices
