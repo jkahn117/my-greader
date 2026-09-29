@@ -38,7 +38,7 @@ handler.get("/app/feeds", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /feeds/sync — manually trigger a full feed fetch cycle
+// POST /feeds/sync — trigger a normal sync (due feeds only)
 // ---------------------------------------------------------------------------
 
 handler.post("/feeds/sync", async (c) => {
@@ -47,11 +47,29 @@ handler.post("/feeds/sync", async (c) => {
     userId: c.get("userId"),
   });
   logger.info("manual sync triggered");
-  // Trigger the Workflow — returns immediately, fetch runs asynchronously
   c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env));
   return c.html(
     <p class="text-sm text-muted-foreground">
       Sync started — refresh the page in a moment to see updated fetch times.
+    </p>,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// POST /feeds/sync/force — trigger a force sync (all active feeds)
+// ---------------------------------------------------------------------------
+
+handler.post("/feeds/sync/force", async (c) => {
+  const logger = createLogger({
+    path: "/feeds/sync/force",
+    userId: c.get("userId"),
+  });
+  logger.info("force sync triggered");
+  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env, true));
+  return c.html(
+    <p class="text-sm text-muted-foreground">
+      Force sync started — refresh the page in a moment to see updated fetch
+      times.
     </p>,
   );
 });

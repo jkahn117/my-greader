@@ -15,8 +15,7 @@ import {
   type PollObserver,
 } from "../feed/poll";
 
-// No per-run parameters needed — the Workflow always fetches all due feeds
-type Params = Record<string, never>;
+type Params = { force?: boolean };
 
 // Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
 // Sequential steps each get their own fresh subrequest budget (free plan: 50).
@@ -98,7 +97,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     try {
-      await this.#poll(step);
+      const force = event.payload.force === true;
+      await this.#poll(step, force);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -125,49 +125,54 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(step: WorkflowStep): Promise<void> {
+  async #poll(step: WorkflowStep, force: boolean): Promise<void> {
     // ------------------------------------------------------------------
-    // Step 1 — query feeds that are due for a check
+    // Step 1 — query feeds that are due for a check (or all active feeds when forced)
     // ------------------------------------------------------------------
 
+    const stepName = force ? "get-all-active-feeds" : "get-due-feeds";
+
     const { dueFeeds, totalActiveFeeds } = await step.do(
-      "get-due-feeds",
+      stepName,
       async () => {
         try {
           using d1 = asDisposable(this.env.DB);
           const db = getDb(d1);
           const now = Date.now();
 
-          const [due, activeCount] = await db.batch([
-            db
-              .selectDistinct({
-                id: feeds.id,
-                feedUrl: feeds.feedUrl,
-                title: feeds.title,
-                htmlUrl: feeds.htmlUrl,
-                etag: feeds.etag,
-                lastModified: feeds.lastModified,
-                lastFetchedAt: feeds.lastFetchedAt,
-                consecutiveErrors: feeds.consecutiveErrors,
-                checkIntervalMinutes: feeds.checkIntervalMinutes,
-                lastNewItemAt: feeds.lastNewItemAt,
-              })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(
-                and(
-                  isNull(feeds.deactivatedAt),
-                  or(
-                    isNull(feeds.lastFetchedAt),
-                    lte(
-                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                      now,
+          const dueQuery = db
+            .selectDistinct({
+              id: feeds.id,
+              feedUrl: feeds.feedUrl,
+              title: feeds.title,
+              htmlUrl: feeds.htmlUrl,
+              etag: feeds.etag,
+              lastModified: feeds.lastModified,
+              lastFetchedAt: feeds.lastFetchedAt,
+              consecutiveErrors: feeds.consecutiveErrors,
+              checkIntervalMinutes: feeds.checkIntervalMinutes,
+              lastNewItemAt: feeds.lastNewItemAt,
+            })
+            .from(feeds)
+            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+            .where(
+              force
+                ? isNull(feeds.deactivatedAt)
+                : and(
+                    isNull(feeds.deactivatedAt),
+                    or(
+                      isNull(feeds.lastFetchedAt),
+                      lte(
+                        sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
+                        now,
+                      ),
                     ),
                   ),
-                ),
-              )
-              .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
+            )
+            .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
 
+          const [due, activeCount] = await db.batch([
+            dueQuery,
             db
               .select({ count: sql<number>`count(*)` })
               .from(feeds)

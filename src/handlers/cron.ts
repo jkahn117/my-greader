@@ -28,10 +28,10 @@ export async function scheduled(
 // Trigger the FeedPollingWorkflow — replaces the old inline fetchFeeds loop
 // ---------------------------------------------------------------------------
 
-export async function triggerFeedPollingWorkflow(env: Env): Promise<void> {
-  const logger = createLogger({ cron: "triggerFeedPollingWorkflow" });
-  const instance = await env.FEED_POLLING_WORKFLOW.create();
-  logger.info("feed polling workflow started", { instanceId: instance.id });
+export async function triggerFeedPollingWorkflow(env: Env, force = false): Promise<void> {
+  const logger = createLogger({ cron: force ? "triggerForcePollingWorkflow" : "triggerFeedPollingWorkflow" });
+  const instance = await env.FEED_POLLING_WORKFLOW.create({ params: { force } });
+  logger.info("feed polling workflow started", { instanceId: instance.id, force });
 }
 
 // ---------------------------------------------------------------------------

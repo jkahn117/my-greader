@@ -317,15 +317,34 @@ function ManageFeedsCard({ subs }: { subs: SubscriptionRow[] }) {
           </p>
         </div>
         <div class="shrink-0">
-          <button
-            hx-post="/feeds/sync"
-            hx-target="#sync-result"
-            hx-swap="innerHTML"
-            hx-disabled-elt="this"
-            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
-          >
-            Sync now
-          </button>
+          <div class="relative inline-flex rounded-md shadow-sm" role="group">
+            <button
+              hx-post="/feeds/sync"
+              hx-target="#sync-result"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this"
+              class="rounded-l-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
+            >
+              Sync now
+            </button>
+            <button
+              type="button"
+              class="rounded-r-md border-l border-primary-foreground/20 bg-primary px-2 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-80"
+              onclick="this.nextElementSibling.classList.toggle('hidden'); this.blur()"
+            >
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="absolute right-0 top-full z-50 mt-1 w-44 rounded-md border border-border bg-card shadow-sm hidden">
+              <button
+                hx-post="/feeds/sync/force"
+                hx-target="#sync-result"
+                hx-swap="innerHTML"
+                class="block w-full rounded-md px-4 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted/50"
+              >
+                Force sync all
+              </button>
+            </div>
+          </div>
           <div id="sync-result" class="mt-1 text-right" />
         </div>
       </div>
