@@ -1,6 +1,24 @@
 import * as v from "valibot";
+import type { StreamScope } from "../../feed/stream";
 
 export type { Variables } from "../../types/context";
+
+/** Maps GReader Stream IDs to the shared domain scope representation. */
+export function parseStreamId(streamId: string): StreamScope {
+  if (streamId.startsWith("feed/")) {
+    return { type: "feed", value: streamId.slice(5) };
+  }
+  if (streamId.startsWith("user/-/label/")) {
+    return {
+      type: "folder",
+      value: streamId.slice("user/-/label/".length),
+    };
+  }
+  if (streamId === "user/-/state/com.google/starred") {
+    return { type: "starred", value: null };
+  }
+  return { type: "all", value: null };
+}
 
 // ---------------------------------------------------------------------------
 // Stream query schemas

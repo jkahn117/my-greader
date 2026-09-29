@@ -223,7 +223,10 @@ r=user/-/state/com.google/starred   — remove starred
 
 **Response**: `OK` (plain text).
 
-Upserts into `item_state` for the authenticated user.
+Updates Item State only for Items in the authenticated User's Subscriptions.
+Marking an Item read records the transition time; marking it unread clears that
+time. Unknown or inaccessible Item IDs retain the compatible `OK` response but
+make no change.
 
 ---
 
@@ -233,12 +236,14 @@ Mark all items in a stream as read.
 
 **Request body** (form-encoded):
 ```
-s=feed/<feed-id>          — mark all in feed
-s=user/-/state/com.google/reading-list  — mark everything
+s=feed/<feed-id>          — mark all in a subscribed Feed
+s=user/-/label/<folder>   — mark all in a Folder
+s=user/-/state/com.google/reading-list  — mark everything subscribed
 ts=<timestamp-usec>       — only mark items older than this timestamp
 ```
 
-**Response**: `OK` (plain text).
+**Response**: `OK` (plain text). Unsupported scopes, including the starred
+Stream, retain the compatible no-op response.
 
 ---
 

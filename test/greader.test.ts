@@ -564,6 +564,54 @@ describe("edit-tag", () => {
     );
   });
 
+  it("removes read and starred state", async () => {
+    const { feedId, itemId } = await seedFeed({
+      feedUrl: "https://example.com/feed.xml",
+      title: "Feed",
+      itemGuid: "https://example.com/a1",
+      itemTitle: "Article 1",
+    });
+    await subscribeUser("dev-user-id", feedId);
+
+    for (const tag of [
+      "user/-/state/com.google/read",
+      "user/-/state/com.google/starred",
+    ]) {
+      await fetch("/reader/api/0/edit-tag", {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: formBody({ i: itemId, a: tag }),
+      });
+      const res = await fetch("/reader/api/0/edit-tag", {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: formBody({ i: itemId, r: tag }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("OK");
+    }
+
+    const unread = await fetch(
+      "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
+      { headers: authHeaders() },
+    );
+    const unreadBody = (await unread.json()) as { items: unknown[] };
+    expect(unreadBody.items).toHaveLength(1);
+
+    const starred = await fetch(
+      "/reader/api/0/stream/contents?s=user/-/state/com.google/starred",
+      { headers: authHeaders() },
+    );
+    const starredBody = (await starred.json()) as { items: unknown[] };
+    expect(starredBody.items).toEqual([]);
+  });
+
   it("accepts short item ID form (without tag prefix)", async () => {
     const { feedId, itemId } = await seedFeed({
       feedUrl: "https://example.com/feed.xml",
@@ -582,6 +630,37 @@ describe("edit-tag", () => {
       body: formBody({ i: itemId, a: "user/-/state/com.google/read" }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it("does not change Item State for an unsubscribed Feed", async () => {
+    const { feedId, itemId } = await seedFeed({
+      feedUrl: "https://other.example.com/feed.xml",
+      title: "Other Feed",
+      itemGuid: "https://other.example.com/a1",
+      itemTitle: "Other article",
+    });
+
+    const res = await fetch("/reader/api/0/edit-tag", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({
+        i: itemId,
+        a: "user/-/state/com.google/starred",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("OK");
+
+    await subscribeUser("dev-user-id", feedId);
+    const starred = await fetch(
+      "/reader/api/0/stream/contents?s=user/-/state/com.google/starred",
+      { headers: authHeaders() },
+    );
+    const body = (await starred.json()) as { items: unknown[] };
+    expect(body.items).toEqual([]);
   });
 });
 
@@ -654,6 +733,108 @@ describe("mark-all-as-read", () => {
     };
     expect(unreadBody.items).toHaveLength(1);
     expect(unreadBody.items[0].title).toBe("Other article");
+  });
+
+  it("marks all Items in a Folder as read", async () => {
+    const tech = await seedFeed({
+      feedUrl: "https://tech.example.com/feed.xml",
+      title: "Tech",
+      itemGuid: "https://tech.example.com/a1",
+      itemTitle: "Tech article",
+    });
+    const news = await seedFeed({
+      feedUrl: "https://news.example.com/feed.xml",
+      title: "News",
+      itemGuid: "https://news.example.com/a1",
+      itemTitle: "News article",
+    });
+    await subscribeUser("dev-user-id", tech.feedId, "Tech");
+    await subscribeUser("dev-user-id", news.feedId, "News");
+
+    const res = await fetch("/reader/api/0/mark-all-as-read", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({ s: "user/-/label/Tech" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("OK");
+
+    const unread = await fetch(
+      "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
+      { headers: authHeaders() },
+    );
+    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    expect(body.items.map((item) => item.title)).toEqual(["News article"]);
+  });
+
+  it("keeps the compatible no-op response for a starred Stream", async () => {
+    const { feedId, itemId } = await seedFeed({
+      feedUrl: "https://example.com/feed.xml",
+      title: "Feed",
+      itemGuid: "https://example.com/a1",
+      itemTitle: "Starred article",
+    });
+    await subscribeUser("dev-user-id", feedId);
+    await fetch("/reader/api/0/edit-tag", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({
+        i: itemId,
+        a: "user/-/state/com.google/starred",
+      }),
+    });
+
+    const res = await fetch("/reader/api/0/mark-all-as-read", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({ s: "user/-/state/com.google/starred" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("OK");
+
+    const unread = await fetch(
+      "/reader/api/0/stream/contents?s=user/-/state/com.google/starred&xt=user/-/state/com.google/read",
+      { headers: authHeaders() },
+    );
+    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    expect(body.items.map((item) => item.title)).toEqual(["Starred article"]);
+  });
+
+  it("does not mark Items in an unsubscribed Feed", async () => {
+    const { feedId } = await seedFeed({
+      feedUrl: "https://other.example.com/feed.xml",
+      title: "Other Feed",
+      itemGuid: "https://other.example.com/a1",
+      itemTitle: "Other article",
+    });
+
+    const res = await fetch("/reader/api/0/mark-all-as-read", {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: formBody({ s: `feed/${feedId}` }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("OK");
+
+    await subscribeUser("dev-user-id", feedId);
+    const unread = await fetch(
+      "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
+      { headers: authHeaders() },
+    );
+    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    expect(body.items.map((item) => item.title)).toEqual(["Other article"]);
   });
 
   it("respects ts cutoff so newer items stay unread", async () => {
@@ -974,6 +1155,24 @@ describe("stream selectors", () => {
     );
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((i) => i.title)).toEqual(["From A"]);
+  });
+
+  it("returns no Items for an unknown Feed reference", async () => {
+    const { feedId } = await seedFeed({
+      feedUrl: "https://a.example.com/feed.xml",
+      title: "A",
+      itemGuid: "https://a.example.com/1",
+      itemTitle: "From A",
+    });
+    await subscribeUser("dev-user-id", feedId);
+
+    const res = await fetch(
+      "/reader/api/0/stream/contents?s=feed/unknown-feed-id",
+      { headers: authHeaders() },
+    );
+    const body = (await res.json()) as { items: unknown[] };
+    expect(res.status).toBe(200);
+    expect(body.items).toEqual([]);
   });
 
   it("filters to a single feed by URL", async () => {

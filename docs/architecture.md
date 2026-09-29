@@ -11,19 +11,21 @@ for interactivity without a client bundle.
 
 ## Deep modules (`src/feed/`)
 
-Feed-level business logic lives in four modules, each behind a small factory
-interface.  Handlers and the Workflow become thin adapters that parse
-protocol concerns and delegate.
+Feed-level business logic lives in five modules, each behind a small factory
+interface. Handlers and the Workflow are thin adapters that parse protocol
+concerns and delegate.
 
 | Module | Responsibility | Observer? |
 |--------|---------------|-----------|
 | `poll.ts` | Fetch, parse, store items; interval backoff; error tracking and deactivation | `PollObserver` — Powertools stays in the Workflow |
 | `subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver` — Powertools stays in handlers |
-| `stream.ts` | GReader stream scope resolution, paginated item queries, feed-ID lookup | None — pure query module |
+| `item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None — domain persistence module |
+| `stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None — pure query module |
 | `analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None — read adapter |
 
-These modules accept D1 directly (no repository adapter) because there is only
-one store implementation.
+These modules accept D1 directly because there is one store implementation.
+`item-state.ts` and `stream.ts` share a small Stream scope value, while the
+GReader adapter owns parsing protocol Stream IDs into that value.
 
 Observability tools (`@workers-powertools`) never cross the module seams.
 Observer interfaces carry domain event payloads; the caller wires them to
