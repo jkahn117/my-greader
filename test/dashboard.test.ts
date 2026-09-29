@@ -19,6 +19,11 @@ import {
   users,
 } from "../src/db/schema";
 import { deriveItemId } from "../src/lib/crypto";
+import {
+  createFeedPoller,
+  type FeedToCheck,
+  type FeedTransport,
+} from "../src/feed/poll";
 
 const BASE = "http://localhost";
 
@@ -68,6 +73,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM api_tokens");
   await env.DB.exec("DELETE FROM subscriptions");
   await env.DB.exec("DELETE FROM items");
+  await env.DB.exec("DELETE FROM feed_poll_attempts");
   await env.DB.exec("DELETE FROM feeds");
   await env.DB.exec("DELETE FROM cycle_runs");
   await env.DB.exec("DELETE FROM users");
@@ -178,6 +184,96 @@ describe("feed deactivate / reactivate", () => {
 
     const res = await fetch(`/feeds/${feedId}/deactivate`, { method: "POST" });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /app/timeline", () => {
+  it("links attributed Items through attempts while preserving User visibility", async () => {
+    const visibleFeedId = await seedFeedAndSub({
+      feedUrl: "https://visible.example/feed.xml",
+      title: "Visible Feed",
+    });
+    await seedUser("other-user", "other@example.com");
+    const otherFeedId = await seedFeedAndSub({
+      userId: "other-user",
+      feedUrl: "https://other.example/feed.xml",
+      title: "Other Feed",
+    });
+    const db = getDb(env.DB);
+    const now = Date.now();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO cycle_runs
+          (id, ran_at, active_feeds, due_feeds, checked_feeds, new_items,
+           failed_feeds, started_at, completed_at, trigger_reason, status)
+         VALUES (?, ?, 2, 2, 2, 2, 0, ?, ?, 'scheduled', 'completed')`,
+      ).bind("workflow-cycle", now, now - 5_000, now),
+      env.DB.prepare(
+        `INSERT INTO cycle_runs
+          (id, ran_at, active_feeds, due_feeds, checked_feeds, new_items,
+           failed_feeds)
+         VALUES (?, ?, 1, 1, 1, 1, 0)`,
+      ).bind("legacy-cycle", now - 1),
+    ]);
+
+    const transport: FeedTransport = {
+      async get(url) {
+        const visible = url.includes("visible.example");
+        const title = visible
+          ? "Visible attributed Item"
+          : "Other User private Item";
+        const itemUrl = visible
+          ? "https://visible.example/attributed"
+          : "https://other.example/private";
+        return new Response(`<?xml version="1.0"?><rss version="2.0"><channel>
+          <title>Test Feed</title><link>${url}</link><item>
+          <title>${title}</title><link>${itemUrl}</link><guid>${itemUrl}</guid>
+          <pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+          </item></channel></rss>`);
+      },
+    };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      { publish() {} },
+      () => now,
+    );
+    const [visibleFeed, otherFeed] = await Promise.all([
+      db.select().from(feeds).where(eq(feeds.id, visibleFeedId)).get(),
+      db.select().from(feeds).where(eq(feeds.id, otherFeedId)).get(),
+    ]);
+    expect(visibleFeed).toBeDefined();
+    expect(otherFeed).toBeDefined();
+
+    await poller.poll(visibleFeed as FeedToCheck, {
+      cycleRunId: "workflow-cycle",
+      attemptId: "visible-attempt",
+    });
+    await poller.poll(otherFeed as FeedToCheck, {
+      cycleRunId: "workflow-cycle",
+      attemptId: "other-attempt",
+    });
+
+    await db.insert(items).values({
+      id: await deriveItemId("https://visible.example/legacy"),
+      feedId: visibleFeedId,
+      title: "Legacy timestamp match",
+      url: "https://visible.example/legacy",
+      fetchedAt: now,
+      publishedAt: now,
+    });
+
+    const res = await fetch("/app/timeline");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Visible attributed Item");
+    expect(html).toContain("scheduled");
+    expect(html).toContain("workflow-cycle");
+    expect(html).toContain("+2 articles");
+    expect(html).toContain("Historical Items remain unattributed.");
+    expect(html).not.toContain("Legacy timestamp match");
+    expect(html).not.toContain("Other User private Item");
   });
 });
 

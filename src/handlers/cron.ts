@@ -2,6 +2,7 @@ import { lte } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { apiTokens } from "../db/schema";
+import type { PollTriggerReason } from "../feed/poll";
 
 export type { FeedPollResult as FeedResult } from "../feed/poll";
 
@@ -28,10 +29,23 @@ export async function scheduled(
 // Trigger the FeedPollingWorkflow — replaces the old inline fetchFeeds loop
 // ---------------------------------------------------------------------------
 
-export async function triggerFeedPollingWorkflow(env: Env, force = false): Promise<void> {
-  const logger = createLogger({ cron: force ? "triggerForcePollingWorkflow" : "triggerFeedPollingWorkflow" });
-  const instance = await env.FEED_POLLING_WORKFLOW.create({ params: { force } });
-  logger.info("feed polling workflow started", { instanceId: instance.id, force });
+export async function triggerFeedPollingWorkflow(
+  env: Env,
+  triggerReason: PollTriggerReason = "scheduled",
+): Promise<void> {
+  const logger = createLogger({
+    cron:
+      triggerReason === "forced"
+        ? "triggerForcePollingWorkflow"
+        : "triggerFeedPollingWorkflow",
+  });
+  const instance = await env.FEED_POLLING_WORKFLOW.create({
+    params: { triggerReason },
+  });
+  logger.info("feed polling workflow started", {
+    instanceId: instance.id,
+    triggerReason,
+  });
 }
 
 // ---------------------------------------------------------------------------

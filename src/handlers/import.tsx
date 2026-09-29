@@ -81,7 +81,7 @@ handler.post("/import", async (c) => {
 
   // Immediately fetch each newly added feed using workflow
   if (newFeeds > 0) {
-    c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env));
+    c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env, "manual"));
   }
 
   // Re-query the updated subscription list for OOB swap

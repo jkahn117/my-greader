@@ -204,6 +204,13 @@ export async function seedLegacyData(db: D1Database): Promise<void> {
       ),
     db
       .prepare(
+        `INSERT INTO cycle_runs
+          (id, ran_at, active_feeds, due_feeds, checked_feeds, new_items, failed_feeds)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind("1700000300000", 1_700_000_300_000, 2, 1, 1, 1, 0),
+    db
+      .prepare(
         `INSERT INTO api_tokens
           (id, user_id, name, token_hash, created_at, last_used_at, revoked_at)
          VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`,

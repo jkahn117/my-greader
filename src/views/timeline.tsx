@@ -9,17 +9,21 @@ export interface TimelineItem {
   itemUrl: string | null;
   publishedAt: number | null;
   feedTitle: string;
+  attemptId: string;
 }
 
-export interface CycleTimelineWindow {
+export interface CycleTimeline {
   cycleId: string;
   ranAt: number;
   checkedFeeds: number;
   newItems: number;
+  triggerReason: "scheduled" | "manual" | "forced" | null;
+  status: "running" | "completed" | null;
+  attributed: boolean;
   items: TimelineItem[];
 }
 
-function CycleCard({ cycle }: { cycle: CycleTimelineWindow }) {
+function CycleCard({ cycle }: { cycle: CycleTimeline }) {
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-4 py-3 flex items-center justify-between gap-3">
@@ -28,11 +32,24 @@ function CycleCard({ cycle }: { cycle: CycleTimelineWindow }) {
             Cycle at {relativeTime(cycle.ranAt)}
           </h3>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            {cycle.checkedFeeds} feed{cycle.checkedFeeds !== 1 ? "s" : ""} checked
+            {cycle.checkedFeeds} feed{cycle.checkedFeeds !== 1 ? "s" : ""}{" "}
+            checked
             {cycle.newItems > 0 && (
-              <span class="ml-1 text-primary font-medium">· +{cycle.newItems} article{cycle.newItems !== 1 ? "s" : ""}</span>
+              <span class="ml-1 text-primary font-medium">
+                · +{cycle.newItems} article{cycle.newItems !== 1 ? "s" : ""}
+              </span>
             )}
           </p>
+          {cycle.attributed ? (
+            <p class="mt-1 text-xs text-muted-foreground">
+              {cycle.triggerReason ?? "unknown trigger"} ·{" "}
+              {cycle.status ?? "unknown status"} · {cycle.cycleId}
+            </p>
+          ) : (
+            <p class="mt-1 text-xs text-muted-foreground">
+              Legacy cycle · exact Item attribution unavailable
+            </p>
+          )}
         </div>
       </div>
 
@@ -50,28 +67,36 @@ function CycleCard({ cycle }: { cycle: CycleTimelineWindow }) {
                   {item.itemTitle ?? "Untitled"}
                 </p>
                 <p class="mt-0.5 text-xs text-muted-foreground truncate">
-                  {item.feedTitle}
+                  {item.feedTitle} · attempt {item.attemptId}
                 </p>
               </div>
               <span class="shrink-0 text-xs text-muted-foreground pt-0.5">
-                {item.publishedAt != null ? relativeTime(item.publishedAt) : "—"}
+                {item.publishedAt != null
+                  ? relativeTime(item.publishedAt)
+                  : "—"}
               </span>
             </a>
           ))}
         </div>
       ) : (
-        <p class="px-4 py-3 text-sm text-muted-foreground">No new articles this cycle.</p>
+        <p class="px-4 py-3 text-sm text-muted-foreground">
+          {cycle.attributed
+            ? "No attributed Items in this cycle."
+            : "Historical Items remain unattributed."}
+        </p>
       )}
     </div>
   );
 }
 
-export function TimelineTab({ cycles }: { cycles: CycleTimelineWindow[] }) {
+export function TimelineTab({ cycles }: { cycles: CycleTimeline[] }) {
   if (cycles.length === 0) {
     return (
       <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
         <p class="text-sm font-medium text-foreground">No cycles yet</p>
-        <p class="mt-1 text-sm text-muted-foreground">Timeline appears after the first polling cycle runs.</p>
+        <p class="mt-1 text-sm text-muted-foreground">
+          Timeline appears after the first polling cycle runs.
+        </p>
       </div>
     );
   }

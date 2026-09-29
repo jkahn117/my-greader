@@ -7,12 +7,15 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFeedPoller,
+  type FeedPoller,
+  type FeedToCheck,
   type FeedTransport,
+  type PollAttemptContext,
   type PollObserver,
 } from "../src/feed/poll";
 import { purgeOldItems } from "../src/handlers/cron";
 import { getDb } from "../src/lib/db";
-import { feeds, items, itemState, users } from "../src/db/schema";
+import { cycleRuns, feeds, items, itemState, users } from "../src/db/schema";
 import { deriveItemId } from "../src/lib/crypto";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +85,26 @@ function noopObserver(): PollObserver {
   return { publish: vi.fn() };
 }
 
+let attemptNumber = 0;
+
+/** Supplies a distinct logical attempt for existing FeedPoller behavior tests. */
+function attemptContext(): PollAttemptContext {
+  attemptNumber += 1;
+  return {
+    cycleRunId: "test-cycle",
+    attemptId: `test-attempt-${attemptNumber}`,
+  };
+}
+
+/** Keeps each test call on the public FeedPoller interface with execution context. */
+function pollWithAttempt(
+  poller: FeedPoller,
+  feed: FeedToCheck,
+  attempt = attemptContext(),
+) {
+  return poller.poll(feed, attempt);
+}
+
 async function seedFeed(feedUrl: string, title = "Test Feed") {
   const db = getDb(env.DB);
   const feedId = crypto.randomUUID();
@@ -106,8 +129,15 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM item_state");
   await env.DB.exec("DELETE FROM subscriptions");
   await env.DB.exec("DELETE FROM items");
+  await env.DB.exec("DELETE FROM feed_poll_attempts");
   await env.DB.exec("DELETE FROM feeds");
+  await env.DB.exec("DELETE FROM cycle_runs");
   await env.DB.exec("DELETE FROM users");
+  await getDb(env.DB).insert(cycleRuns).values({
+    id: "test-cycle",
+    ranAt: Date.now(),
+  });
+  attemptNumber = 0;
   vi.restoreAllMocks();
 });
 
@@ -137,7 +167,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await poller.poll(feedRow({ id: feedId }));
+    await pollWithAttempt(poller, feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const stored = await db.select().from(items).all();
@@ -147,6 +177,86 @@ describe("FeedPoller", () => {
     expect(stored.map((i) => i.title)).toContain("Article Two");
   });
 
+  it("attributes new items to the first successful logical attempt", async () => {
+    const now = 1_735_732_800_000;
+    const transport: FeedTransport = {
+      get: vi
+        .fn()
+        .mockImplementation(
+          async () => new Response(RSS_FEED, { status: 200 }),
+        ),
+    };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      noopObserver(),
+      () => now,
+    );
+    const feedId = await seedFeed("https://example.com/feed.xml");
+    const db = getDb(env.DB);
+
+    await db.insert(cycleRuns).values([
+      {
+        id: "cycle-first",
+        ranAt: now,
+        activeFeeds: 1,
+        dueFeeds: 1,
+        startedAt: now - 1,
+        triggerReason: "scheduled",
+        status: "running",
+      },
+      {
+        id: "cycle-rediscovery",
+        ranAt: now + 1,
+        activeFeeds: 1,
+        dueFeeds: 1,
+        startedAt: now,
+        triggerReason: "manual",
+        status: "running",
+      },
+    ]);
+
+    await pollWithAttempt(poller, feedRow({ id: feedId }), {
+      cycleRunId: "cycle-first",
+      attemptId: "attempt-first",
+    });
+    await pollWithAttempt(poller, feedRow({ id: feedId }), {
+      cycleRunId: "cycle-rediscovery",
+      attemptId: "attempt-rediscovery",
+    });
+
+    const attributedItems = await env.DB.prepare(
+      "SELECT first_ingestion_attempt_id FROM items ORDER BY id",
+    ).all();
+    const attempts = await env.DB.prepare(
+      `SELECT id, cycle_run_id, started_at, completed_at, outcome, new_items
+       FROM feed_poll_attempts ORDER BY id`,
+    ).all();
+
+    expect(attributedItems.results).toEqual([
+      { first_ingestion_attempt_id: "attempt-first" },
+      { first_ingestion_attempt_id: "attempt-first" },
+    ]);
+    expect(attempts.results).toEqual([
+      {
+        id: "attempt-first",
+        cycle_run_id: "cycle-first",
+        started_at: now,
+        completed_at: now,
+        outcome: "new_items",
+        new_items: 2,
+      },
+      {
+        id: "attempt-rediscovery",
+        cycle_run_id: "cycle-rediscovery",
+        started_at: now,
+        completed_at: now,
+        outcome: "unchanged",
+        new_items: 0,
+      },
+    ]);
+  });
+
   it("parses Atom feeds", async () => {
     const transport = mockTransport(ATOM_FEED);
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
@@ -154,7 +264,8 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://atom.example.com/feed.xml");
 
-    await poller.poll(
+    await pollWithAttempt(
+      poller,
       feedRow({ id: feedId, feedUrl: "https://atom.example.com/feed.xml" }),
     );
 
@@ -172,7 +283,7 @@ describe("FeedPoller", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const before = Date.now();
-    await poller.poll(feedRow({ id: feedId, etag: "abc123" }));
+    await pollWithAttempt(poller, feedRow({ id: feedId, etag: "abc123" }));
 
     const db = getDb(env.DB);
     const row = await db
@@ -196,7 +307,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await poller.poll(feedRow({ id: feedId, etag: 'W/"abc123"' }));
+    await pollWithAttempt(poller, feedRow({ id: feedId, etag: 'W/"abc123"' }));
 
     expect(getFn).toHaveBeenCalledWith(
       "https://example.com/feed.xml",
@@ -214,7 +325,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await poller.poll(feedRow({ id: feedId }));
+    await pollWithAttempt(poller, feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const row = await db
@@ -239,8 +350,8 @@ describe("FeedPoller", () => {
     const feedId = await seedFeed("https://example.com/feed.xml");
     const row = feedRow({ id: feedId });
 
-    await poller.poll(row);
-    await poller.poll(row);
+    await pollWithAttempt(poller, row);
+    await pollWithAttempt(poller, row);
 
     const db = getDb(env.DB);
     const stored = await db.select().from(items).all();
@@ -265,7 +376,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await poller.poll(feedRow({ id: feedId }));
+    await pollWithAttempt(poller, feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
     const stored = await db
@@ -283,7 +394,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    const result = await poller.poll(feedRow({ id: feedId }));
+    const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
     expect(result.status).toBe("error");
 
     const db = getDb(env.DB);
@@ -309,7 +420,8 @@ describe("FeedPoller", () => {
       Date.now(),
     );
 
-    const result = await poller.poll(
+    const result = await pollWithAttempt(
+      poller,
       feedRow({
         id: feedId,
         feedUrl: "https://example.com/old-feed.xml",
@@ -340,7 +452,7 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    const result = await poller.poll(feedRow({ id: feedId }));
+    const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
     expect(result.status).toBe("error");
 
     const db = getDb(env.DB);
@@ -367,7 +479,10 @@ describe("FeedPoller", () => {
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
 
-    await poller.poll(feedRow({ id: feedId, checkIntervalMinutes: 120 }));
+    await pollWithAttempt(
+      poller,
+      feedRow({ id: feedId, checkIntervalMinutes: 120 }),
+    );
 
     const db = getDb(env.DB);
     const row = await db
@@ -409,7 +524,8 @@ describe("FeedPoller error handling", () => {
       "Bad Feed",
     );
 
-    const result = await poller.poll(
+    const result = await pollWithAttempt(
+      poller,
       feedRow({ id: feedId, feedUrl: "https://bad.example.com/feed.xml" }),
     );
     expect(result.status).toBe("error");
@@ -422,7 +538,8 @@ describe("FeedPoller error handling", () => {
     );
     const feedId = await seedFeed("https://bad.example.com/feed.xml");
 
-    const result = await poller.poll(
+    const result = await pollWithAttempt(
+      poller,
       feedRow({
         id: feedId,
         feedUrl: "https://bad.example.com/feed.xml",
@@ -452,7 +569,8 @@ describe("FeedPoller error handling", () => {
     );
     const feedId = await seedFeed("https://gone.example.com/feed.xml");
 
-    const result = await poller.poll(
+    const result = await pollWithAttempt(
+      poller,
       feedRow({
         id: feedId,
         feedUrl: "https://gone.example.com/feed.xml",

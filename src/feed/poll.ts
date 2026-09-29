@@ -11,12 +11,12 @@
  * Workflow's `PollObserver` adapter — no Powertools imports here.
  */
 import Parser from "rss-parser";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
-import { feeds, items } from "../db/schema";
+import { feedPollAttempts, feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
 const TRANSIENT_ERROR_THRESHOLD = 5;
@@ -75,8 +75,15 @@ export interface PollObserver {
   publish(event: PollEvent): void;
 }
 
+export type PollTriggerReason = "scheduled" | "manual" | "forced";
+
+export type PollAttemptContext = {
+  cycleRunId: string;
+  attemptId: string;
+};
+
 export interface FeedPoller {
-  poll(feed: FeedToCheck): Promise<FeedPollResult>;
+  poll(feed: FeedToCheck, attempt: PollAttemptContext): Promise<FeedPollResult>;
 }
 
 // Returns a poller that fetches and stores one feed at a time.
@@ -93,7 +100,10 @@ export function createFeedPoller(
 
   return { poll };
 
-  async function poll(feed: FeedToCheck): Promise<FeedPollResult> {
+  async function poll(
+    feed: FeedToCheck,
+    attempt: PollAttemptContext,
+  ): Promise<FeedPollResult> {
     const start = now();
     const feedTitle = feed.title ?? feed.feedUrl;
 
@@ -270,6 +280,7 @@ export function createFeedPoller(
             author: item.creator ?? item.author ?? null,
             publishedAt: item.isoDate ? new Date(item.isoDate).getTime() : time,
             fetchedAt: time,
+            firstIngestionAttemptId: attempt.attemptId,
           };
         }),
       )
@@ -286,14 +297,25 @@ export function createFeedPoller(
           )
         : itemRows;
 
-    let newItems = 0;
-    if (toInsert.length > 0) {
-      const stmts = toInsert.map((row) =>
-        d.insert(items).values(row).onConflictDoNothing(),
-      );
-      const batchResults = await d.batch(stmts as unknown as [any, ...any[]]);
-      newItems = batchResults.reduce((sum, r) => sum + r.meta.changes, 0);
-    }
+    const attemptInsert = d
+      .insert(feedPollAttempts)
+      .values({
+        id: attempt.attemptId,
+        cycleRunId: attempt.cycleRunId,
+        feedId: feed.id,
+        startedAt: start,
+      })
+      .onConflictDoNothing();
+    const itemInserts = toInsert.map((row) =>
+      d.insert(items).values(row).onConflictDoNothing(),
+    );
+    const batchResults = await d.batch([
+      attemptInsert,
+      ...itemInserts,
+    ] as unknown as [any, ...any[]]);
+    const newItems = batchResults
+      .slice(1)
+      .reduce((sum, result) => sum + result.meta.changes, 0);
 
     const feedTtlMinutes = parsed.ttl
       ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
@@ -307,20 +329,40 @@ export function createFeedPoller(
           );
     const newInterval = Math.max(backoffInterval, feedTtlMinutes);
 
-    await d
-      .update(feeds)
-      .set({
-        lastFetchedAt: time,
-        consecutiveErrors: 0,
-        lastError: null,
-        checkIntervalMinutes: newInterval,
-        lastNewItemAt: newItems > 0 ? time : (feed.lastNewItemAt ?? time),
-        ...(feed.title == null && parsed.title != null ? { title: parsed.title } : {}),
-        ...(feed.htmlUrl == null && parsed.link != null ? { htmlUrl: parsed.link } : {}),
-        ...(newEtag != null ? { etag: newEtag } : {}),
-        ...(newLastModified != null ? { lastModified: newLastModified } : {}),
-      })
-      .where(eq(feeds.id, feed.id));
+    const outcome = newItems > 0 ? "new_items" : "unchanged";
+    await d.batch([
+      d
+        .update(feedPollAttempts)
+        .set({
+          completedAt: now(),
+          outcome,
+          newItems,
+        })
+        .where(
+          and(
+            eq(feedPollAttempts.id, attempt.attemptId),
+            isNull(feedPollAttempts.outcome),
+          ),
+        ),
+      d
+        .update(feeds)
+        .set({
+          lastFetchedAt: time,
+          consecutiveErrors: 0,
+          lastError: null,
+          checkIntervalMinutes: newInterval,
+          lastNewItemAt: newItems > 0 ? time : (feed.lastNewItemAt ?? time),
+          ...(feed.title == null && parsed.title != null
+            ? { title: parsed.title }
+            : {}),
+          ...(feed.htmlUrl == null && parsed.link != null
+            ? { htmlUrl: parsed.link }
+            : {}),
+          ...(newEtag != null ? { etag: newEtag } : {}),
+          ...(newLastModified != null ? { lastModified: newLastModified } : {}),
+        })
+        .where(eq(feeds.id, feed.id)),
+    ]);
 
     observe.publish({
       kind: "feedPolled",

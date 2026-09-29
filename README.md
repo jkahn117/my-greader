@@ -23,7 +23,9 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
   RSS / Atom feeds        │    step: fetch-batch-N   ──► fetch(feedUrl)         │
   (internet)       ◄─────┤      parse XML           ──► D1 items (upsert)      │
                          │      update intervals     ──► D1 feeds               │
-                         │    step: record-cycle     ──► D1 cycle_runs          │
+                         │    stable Workflow ID    ──► D1 cycle_runs          │
+                         │    per-Feed attempt       ──► D1 feed_poll_attempts  │
+                         │    first ingestion       ──► D1 Item attribution    │
                          │                           ──► Pipeline (metrics)     │
                          │                                                       │
                          │  Cron  0 3 * * 1  ──► purgeOldItems                 │
@@ -39,6 +41,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                                     │  items             │    │  Queryable via         │
                                     │  item_state        │    │  R2 SQL API            │
                                     │  cycle_runs        │    │                        │
+                                    │  feed_poll_attempts│    │                        │
                                     │  api_tokens        │    │  Metrics:              │
                                     └────────┬───────────┘    │  feed_parse_duration   │
                                              │                │  feed_new_articles     │
@@ -92,8 +95,9 @@ Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each
 
 1. Queries all feeds whose `check_interval_minutes` has elapsed (stale-first ordering)
 2. Processes them in sequential batches of 20, fetching each batch concurrently
-3. Writes a `cycle_runs` row to D1 for the Metrics dashboard
-4. Emits batched metric events to a Cloudflare Pipeline for long-term analytics
+3. Creates a `cycle_runs` row keyed by the stable Workflow instance ID
+4. Records successful logical Feed attempts and first-ingestion Item attribution
+5. Completes the Cycle Run summary and emits batched metrics
 
 **Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each feed fetch costs ~2 (1 HTTP GET + 1 D1 batch write). Sequential Workflow steps each run in a fresh invocation with a fresh budget, so there is no cap on total feed count.
 
@@ -213,7 +217,7 @@ For CSS hot-reload during UI development, run `pnpm dev:css` in a separate termi
 
 ## Deployment
 
-Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema.
+Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. For `0006_poll_traceability.sql`, apply the migration before deploying the matching Worker. The previous Worker can read the additive schema during rollback.
 
 ```bash
 pnpm deploy     # compile CSS + wrangler deploy

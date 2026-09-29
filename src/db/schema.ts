@@ -47,7 +47,41 @@ export const subscriptions = sqliteTable(
   (t) => [unique().on(t.userId, t.feedId)],
 );
 
-// Fetched articles — shared, not per-user
+// Per-cycle polling run summary. New rows use the Workflow instance ID while
+// legacy rows retain their timestamp IDs and nullable lifecycle fields.
+export const cycleRuns = sqliteTable("cycle_runs", {
+  id: text("id").primaryKey(),
+  ranAt: integer("ran_at").notNull(),
+  activeFeeds: integer("active_feeds").notNull().default(0),
+  dueFeeds: integer("due_feeds").notNull().default(0),
+  checkedFeeds: integer("checked_feeds").notNull().default(0),
+  newItems: integer("new_items").notNull().default(0),
+  failedFeeds: integer("failed_feeds").notNull().default(0),
+  startedAt: integer("started_at"),
+  completedAt: integer("completed_at"),
+  triggerReason: text("trigger_reason", {
+    enum: ["scheduled", "manual", "forced"],
+  }),
+  status: text("status", { enum: ["running", "completed"] }),
+});
+
+// One logical Feed poll within a Cycle Run. Runtime retries reuse the same ID.
+export const feedPollAttempts = sqliteTable("feed_poll_attempts", {
+  id: text("id").primaryKey(),
+  cycleRunId: text("cycle_run_id")
+    .notNull()
+    .references(() => cycleRuns.id),
+  feedId: text("feed_id")
+    .notNull()
+    .references(() => feeds.id),
+  startedAt: integer("started_at").notNull(),
+  completedAt: integer("completed_at"),
+  outcome: text("outcome", { enum: ["new_items", "unchanged"] }),
+  newItems: integer("new_items").notNull().default(0),
+});
+
+// Fetched Items are shared, not per-User. The nullable attempt reference preserves explicit
+// uncertainty for Items created before durable polling history existed.
 export const items = sqliteTable("items", {
   id: text("id").primaryKey(), // SHA-256 hex of guid ?? url
   feedId: text("feed_id")
@@ -59,6 +93,9 @@ export const items = sqliteTable("items", {
   author: text("author"),
   publishedAt: integer("published_at"),
   fetchedAt: integer("fetched_at"),
+  firstIngestionAttemptId: text("first_ingestion_attempt_id").references(
+    () => feedPollAttempts.id,
+  ),
 });
 
 // Per-user read and starred state
@@ -75,18 +112,6 @@ export const itemState = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.itemId, t.userId] })],
 );
-
-// Per-cycle polling run summary — written by FeedPollingWorkflow for the dashboard.
-// Replaces the Analytics Engine cycle event for in-app querying.
-export const cycleRuns = sqliteTable("cycle_runs", {
-  id: text("id").primaryKey(), // epoch ms as string, unique per run
-  ranAt: integer("ran_at").notNull(), // epoch ms
-  activeFeeds: integer("active_feeds").notNull().default(0),
-  dueFeeds: integer("due_feeds").notNull().default(0),
-  checkedFeeds: integer("checked_feeds").notNull().default(0),
-  newItems: integer("new_items").notNull().default(0),
-  failedFeeds: integer("failed_feeds").notNull().default(0),
-});
 
 // API tokens used by GReader clients (e.g. Current).
 // Raw token is shown once at generation — only the SHA-256 hash is stored.

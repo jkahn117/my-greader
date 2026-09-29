@@ -47,7 +47,7 @@ handler.post("/feeds/sync", async (c) => {
     userId: c.get("userId"),
   });
   logger.info("manual sync triggered");
-  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env));
+  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env, "manual"));
   return c.html(
     <p class="text-sm text-muted-foreground">
       Sync started — refresh the page in a moment to see updated fetch times.
@@ -65,7 +65,7 @@ handler.post("/feeds/sync/force", async (c) => {
     userId: c.get("userId"),
   });
   logger.info("force sync triggered");
-  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env, true));
+  c.executionCtx.waitUntil(triggerFeedPollingWorkflow(c.env, "forced"));
   return c.html(
     <p class="text-sm text-muted-foreground">
       Force sync started — refresh the page in a moment to see updated fetch

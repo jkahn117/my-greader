@@ -53,3 +53,13 @@ If a check fails before new code receives traffic, stop the deployment and keep 
 If the migration changed data, do not import the backup over an active database. Disable writers, preserve the failed database for diagnosis, and either restore the export into a replacement D1 database or deploy a tested forward repair. Repeat the fixture, row-count, foreign-key, and Current checks before switching traffic.
 
 A Worker rollback is safe only while the old version ignores all new nullable or defaulted fields. Once new writes no longer fit the old model, recovery requires a forward fix or a restored database plus the matching Worker version.
+
+## Poll traceability rollout
+
+Migration `0006_poll_traceability.sql` is additive. Apply it before deploying the Worker version that passes Cycle Run and attempt identities into `FeedPoller`.
+
+The migration adds nullable lifecycle fields to `cycle_runs`, creates `feed_poll_attempts`, and adds nullable `items.first_ingestion_attempt_id`. It does not update existing rows. Legacy Items and Cycle Runs therefore remain explicitly unattributed.
+
+The previous Worker version remains readable after the migration because it ignores the new table and columns. A code rollback may leave new attempt rows and Item references in place. The previous version can still read and insert Items because the attribution column is nullable. Items ingested during the rollback will be unattributed. Do not remove the new schema as part of rollback.
+
+Before deployment, run the migration and GReader compatibility tests, export D1, apply the migration, and verify row counts plus `PRAGMA foreign_key_check`. Then deploy the Worker. If verification fails before traffic reaches the new code, roll back the Worker and retain the additive schema. If new writes have started, prefer a forward fix; restoring the export requires stopping all writers first.

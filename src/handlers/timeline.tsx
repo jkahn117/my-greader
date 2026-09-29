@@ -1,14 +1,22 @@
 import { Hono } from "hono";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { feeds, items, subscriptions, cycleRuns } from "../db/schema";
+import {
+  cycleRuns,
+  feedPollAttempts,
+  feeds,
+  items,
+  subscriptions,
+} from "../db/schema";
 import { App } from "../views/app";
-import { TimelineTab, type CycleTimelineWindow, type TimelineItem } from "../views/timeline";
+import {
+  TimelineTab,
+  type CycleTimeline,
+  type TimelineItem,
+} from "../views/timeline";
 
 import type { Variables } from "../types/context";
-
-const CYCLE_MARGIN_MS = 8 * 60 * 60 * 1000;
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -22,7 +30,9 @@ handler.get("/app/timeline", async (c) => {
     return c.html(
       <App email={email} active="timeline">
         <div class="rounded-lg border border-destructive bg-card px-6 py-10 text-center shadow-sm">
-          <p class="text-sm font-medium text-destructive">Database unavailable</p>
+          <p class="text-sm font-medium text-destructive">
+            Database unavailable
+          </p>
         </div>
       </App>,
     );
@@ -43,40 +53,45 @@ handler.get("/app/timeline", async (c) => {
       );
     }
 
-    const oldestRanAt = cycles[cycles.length - 1].ranAt;
-    const fetchStart = oldestRanAt - CYCLE_MARGIN_MS;
-
+    // Follow committed foreign keys only. Timestamp proximity is not evidence
+    // that a historical Item belongs to a Cycle Run.
     const itemRows = await db
       .select({
         itemId: items.id,
         itemTitle: items.title,
         itemUrl: items.url,
         publishedAt: items.publishedAt,
-        fetchedAt: items.fetchedAt,
         feedTitle: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+        attemptId: feedPollAttempts.id,
+        cycleRunId: feedPollAttempts.cycleRunId,
       })
       .from(items)
+      .innerJoin(
+        feedPollAttempts,
+        eq(items.firstIngestionAttemptId, feedPollAttempts.id),
+      )
       .innerJoin(feeds, eq(items.feedId, feeds.id))
       .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
       .where(
         and(
           eq(subscriptions.userId, userId),
-          gte(items.fetchedAt, fetchStart),
+          inArray(
+            feedPollAttempts.cycleRunId,
+            cycles.map((cycle) => cycle.id),
+          ),
         ),
       )
-      .orderBy(desc(items.fetchedAt), desc(items.id));
+      .orderBy(desc(feedPollAttempts.completedAt), desc(items.id));
 
-    const cycleWindows: CycleTimelineWindow[] = cycles.map((cycle, i) => {
-      const windowStart = i < cycles.length - 1 ? cycles[i + 1].ranAt : 0;
-      const windowEnd = cycle.ranAt;
-
+    const cycleTimeline: CycleTimeline[] = cycles.map((cycle) => {
       const cycleItems: TimelineItem[] = itemRows
-        .filter((r) => r.fetchedAt != null && r.fetchedAt >= windowStart && r.fetchedAt <= windowEnd)
-        .map((r) => ({
-          itemTitle: r.itemTitle,
-          itemUrl: r.itemUrl,
-          publishedAt: r.publishedAt,
-          feedTitle: r.feedTitle,
+        .filter((row) => row.cycleRunId === cycle.id)
+        .map((row) => ({
+          itemTitle: row.itemTitle,
+          itemUrl: row.itemUrl,
+          publishedAt: row.publishedAt,
+          feedTitle: row.feedTitle,
+          attemptId: row.attemptId,
         }));
 
       return {
@@ -84,15 +99,21 @@ handler.get("/app/timeline", async (c) => {
         ranAt: cycle.ranAt,
         checkedFeeds: cycle.checkedFeeds,
         newItems: cycle.newItems,
+        triggerReason: cycle.triggerReason,
+        status: cycle.status,
+        attributed: cycle.startedAt != null,
         items: cycleItems,
       };
     });
 
-    logger.info("timeline loaded", { cycleCount: cycles.length, itemCount: itemRows.length });
+    logger.info("timeline loaded", {
+      cycleCount: cycles.length,
+      itemCount: itemRows.length,
+    });
 
     return c.html(
       <App email={email} active="timeline">
-        <TimelineTab cycles={cycleWindows} />
+        <TimelineTab cycles={cycleTimeline} />
       </App>,
     );
   } catch (err) {
@@ -103,7 +124,9 @@ handler.get("/app/timeline", async (c) => {
     return c.html(
       <App email={email} active="timeline">
         <div class="rounded-lg border border-destructive bg-card px-6 py-10 text-center shadow-sm">
-          <p class="text-sm font-medium text-destructive">Failed to load timeline</p>
+          <p class="text-sm font-medium text-destructive">
+            Failed to load timeline
+          </p>
           <p class="mt-1 text-sm text-muted-foreground">{String(err)}</p>
         </div>
       </App>,

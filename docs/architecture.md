@@ -33,7 +33,9 @@ the concrete logger and metrics implementations.
 
 - **Shared:** `feeds` (canonical), `items` (article content, trimmed to 50KB)
 - **Per-user:** `subscriptions`, `item_state` (read/starred), `api_tokens`
-- **Operational:** `cycle_runs` (polling cycle summary)
+- **Operational:** `cycle_runs` (stable Workflow identity, trigger, lifecycle, and counts), `feed_poll_attempts` (logical per-Feed attempt timing, outcome, and committed Item count)
+
+New Items store a nullable `first_ingestion_attempt_id`. The polling insert sets it once, and conflict handling never replaces it when a later attempt sees the same Item. Items that predate migration `0006_poll_traceability.sql` retain `NULL`; the application does not infer attribution from `fetched_at`.
 
 See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 
@@ -59,6 +61,8 @@ Retry-After), two-tier error deactivation (2 strikes for permanent errors
 like 404/410, 5 for transient), lenient fallback parsing, and adaptive
 interval backoff (30 → 240 minutes).
 
+The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID, so a retried Workflow step addresses the same record. For a run with selected Feeds, the Workflow creates the Cycle Run before Feed processing and completes it after its Feed batches finish. `FeedPoller` records successful parsed attempts and writes each new Item's first-attempt reference. Later migration stages add retry fencing and the remaining terminal attempt outcomes.
+
 ## Metrics
 
 **Writes:** `createMetrics()` in `src/lib/metrics.ts` uses
@@ -71,7 +75,7 @@ aggregate queries in parallel, and returns typed domain projections.
 The dashboard handler never sees raw AE rows.
 
 **Real-time dashboard cards** (cycle timeline, feed health, reads per day)
-query D1 directly and work without analytics.
+query D1 directly and work without analytics. The Timeline follows Item-to-attempt-to-Cycle-Run foreign keys and filters Items through the authenticated User's Subscriptions. Legacy Cycle Runs and Items are marked as unattributed; timestamp windows are not used.
 
 ## Auth
 

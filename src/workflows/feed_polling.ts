@@ -13,9 +13,10 @@ import {
   type FeedPollResult,
   type FeedTransport,
   type PollObserver,
+  type PollTriggerReason,
 } from "../feed/poll";
 
-type Params = { force?: boolean };
+type Params = { force?: boolean; triggerReason?: PollTriggerReason };
 
 // Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
 // Sequential steps each get their own fresh subrequest budget (free plan: 50).
@@ -97,8 +98,12 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     try {
-      const force = event.payload.force === true;
-      await this.#poll(step, force);
+      // `force` remains a read-only compatibility field for Workflows started
+      // before triggerReason became the single source of selection policy.
+      const triggerReason =
+        event.payload.triggerReason ??
+        (event.payload.force === true ? "forced" : "scheduled");
+      await this.#poll(step, triggerReason, event.instanceId);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -125,82 +130,101 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(step: WorkflowStep, force: boolean): Promise<void> {
+  async #poll(
+    step: WorkflowStep,
+    triggerReason: PollTriggerReason,
+    cycleRunId: string,
+  ): Promise<void> {
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check (or all active feeds when forced)
     // ------------------------------------------------------------------
 
+    const force = triggerReason === "forced";
     const stepName = force ? "get-all-active-feeds" : "get-due-feeds";
 
-    const { dueFeeds, totalActiveFeeds } = await step.do(
-      stepName,
-      async () => {
-        try {
-          using d1 = asDisposable(this.env.DB);
-          const db = getDb(d1);
-          const now = Date.now();
+    const { dueFeeds, totalActiveFeeds } = await step.do(stepName, async () => {
+      try {
+        using d1 = asDisposable(this.env.DB);
+        const db = getDb(d1);
+        const now = Date.now();
 
-          const dueQuery = db
-            .selectDistinct({
-              id: feeds.id,
-              feedUrl: feeds.feedUrl,
-              title: feeds.title,
-              htmlUrl: feeds.htmlUrl,
-              etag: feeds.etag,
-              lastModified: feeds.lastModified,
-              lastFetchedAt: feeds.lastFetchedAt,
-              consecutiveErrors: feeds.consecutiveErrors,
-              checkIntervalMinutes: feeds.checkIntervalMinutes,
-              lastNewItemAt: feeds.lastNewItemAt,
-            })
-            .from(feeds)
-            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-            .where(
-              force
-                ? isNull(feeds.deactivatedAt)
-                : and(
-                    isNull(feeds.deactivatedAt),
-                    or(
-                      isNull(feeds.lastFetchedAt),
-                      lte(
-                        sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                        now,
-                      ),
+        const dueQuery = db
+          .selectDistinct({
+            id: feeds.id,
+            feedUrl: feeds.feedUrl,
+            title: feeds.title,
+            htmlUrl: feeds.htmlUrl,
+            etag: feeds.etag,
+            lastModified: feeds.lastModified,
+            lastFetchedAt: feeds.lastFetchedAt,
+            consecutiveErrors: feeds.consecutiveErrors,
+            checkIntervalMinutes: feeds.checkIntervalMinutes,
+            lastNewItemAt: feeds.lastNewItemAt,
+          })
+          .from(feeds)
+          .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+          .where(
+            force
+              ? isNull(feeds.deactivatedAt)
+              : and(
+                  isNull(feeds.deactivatedAt),
+                  or(
+                    isNull(feeds.lastFetchedAt),
+                    lte(
+                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
+                      now,
                     ),
                   ),
-            )
-            .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
+                ),
+          )
+          .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
 
-          const [due, activeCount] = await db.batch([
-            dueQuery,
-            db
-              .select({ count: sql<number>`count(*)` })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(isNull(feeds.deactivatedAt)),
-          ]);
+        const [due, activeCount] = await db.batch([
+          dueQuery,
+          db
+            .select({ count: sql<number>`count(*)` })
+            .from(feeds)
+            .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+            .where(isNull(feeds.deactivatedAt)),
+        ]);
 
-          return {
-            dueFeeds: due,
-            totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
-          };
-        } catch (err) {
-          logger.error("get-due-feeds step failed", {
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
-          throw err;
+        const totalActiveFeeds = Number(activeCount[0]?.count ?? 0);
+        if (due.length > 0) {
+          await db
+            .insert(cycleRuns)
+            .values({
+              id: cycleRunId,
+              ranAt: now,
+              startedAt: now,
+              triggerReason,
+              status: "running",
+              activeFeeds: totalActiveFeeds,
+              dueFeeds: due.length,
+            })
+            .onConflictDoNothing();
         }
-      },
-    );
+
+        return {
+          dueFeeds: due,
+          totalActiveFeeds,
+        };
+      } catch (err) {
+        logger.error("get-due-feeds step failed", {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        throw err;
+      }
+    });
 
     logger.info("feed polling cycle starting", {
+      cycleRunId,
       totalActiveFeeds,
       dueFeeds: dueFeeds.length,
     });
 
     if (dueFeeds.length === 0) {
-      logger.info("no feeds due, skipping cycle");
+      logger.info("no feeds due, skipping cycle", { cycleRunId });
       return;
     }
 
@@ -241,6 +265,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                 switch (event.kind) {
                   case "feedPolled":
                     logger.info("feed polled", {
+                      cycleRunId,
+                      attemptId: attemptIdFor(cycleRunId, event.feedId),
                       feedId: event.feedId,
                       newItems: event.newItems,
                       durationMs: event.durationMs,
@@ -260,6 +286,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                     break;
                   case "feedRateLimited":
                     logger.warn("feed rate limited", {
+                      cycleRunId,
+                      attemptId: attemptIdFor(cycleRunId, event.feedId),
                       feedId: event.feedId,
                       backoffMinutes: event.backoffMinutes,
                     });
@@ -270,6 +298,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                     break;
                   case "feedFetchFailed":
                     logger.warn("feed fetch failed", {
+                      cycleRunId,
+                      attemptId: attemptIdFor(cycleRunId, event.feedId),
                       feedId: event.feedId,
                       status: event.status,
                       error: event.error,
@@ -283,6 +313,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                     break;
                   case "feedParseFailed":
                     logger.warn("feed parse failed", {
+                      cycleRunId,
+                      attemptId: attemptIdFor(cycleRunId, event.feedId),
                       feedId: event.feedId,
                       error: event.error,
                     });
@@ -295,6 +327,8 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
                     break;
                   case "feedDeactivated":
                     logger.warn("feed deactivated after repeated errors", {
+                      cycleRunId,
+                      attemptId: attemptIdFor(cycleRunId, event.feedId),
                       feedId: event.feedId,
                       consecutiveErrors: event.consecutiveErrors,
                     });
@@ -308,7 +342,12 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             );
 
             const settled = await Promise.allSettled(
-              batch.map((feed) => poller.poll(feed)),
+              batch.map((feed) =>
+                poller.poll(feed, {
+                  cycleRunId,
+                  attemptId: attemptIdFor(cycleRunId, feed.id),
+                }),
+              ),
             );
 
             await metrics.flush();
@@ -373,20 +412,19 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         );
         const now = Date.now();
 
-        // Write per-cycle row to D1 so the metrics dashboard can query it
-        // without depending on Analytics Engine or an external API.
+        // Complete the stable Cycle Run created before Feed processing.
         await db
-          .insert(cycleRuns)
-          .values({
-            id: String(now),
-            ranAt: now,
+          .update(cycleRuns)
+          .set({
+            completedAt: now,
+            status: "completed",
             activeFeeds: totalActiveFeeds,
             dueFeeds: dueFeeds.length,
             checkedFeeds: allResults.length,
             newItems: newArticles,
             failedFeeds,
           })
-          .onConflictDoNothing(); // guard against duplicate step execution
+          .where(eq(cycleRuns.id, cycleRunId));
 
         // Pipeline write for long-term analytics — batched with flush
         metrics.recordCycle({
@@ -416,6 +454,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     logger.info("feed polling cycle complete", {
+      cycleRunId,
       totalActiveFeeds,
       dueFeeds: dueFeeds.length,
       checkedFeeds: allResults.length,
@@ -424,4 +463,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
       feeds: detail,
     });
   }
+}
+
+/** Builds the durable logical attempt ID reused by Workflow step retries. */
+function attemptIdFor(cycleRunId: string, feedId: string): string {
+  return `${cycleRunId}:${feedId}`;
 }

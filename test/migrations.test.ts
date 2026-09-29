@@ -16,6 +16,7 @@ async function rebuildLegacyDatabase(migrations: D1Migration[]) {
     DROP TABLE IF EXISTS api_tokens;
     DROP TABLE IF EXISTS subscriptions;
     DROP TABLE IF EXISTS items;
+    DROP TABLE IF EXISTS feed_poll_attempts;
     DROP TABLE IF EXISTS cycle_runs;
     DROP TABLE IF EXISTS feeds;
     DROP TABLE IF EXISTS users;
@@ -49,6 +50,33 @@ describe("legacy data migration", () => {
     await applyD1Migrations(env.DB, additiveMigrations, "additive_migrations");
 
     expect(await readLegacyState(env.DB)).toEqual(legacyExpectedState);
+
+    const legacyItems = await env.DB.prepare(
+      "SELECT first_ingestion_attempt_id FROM items ORDER BY id",
+    ).all();
+    expect(legacyItems.results).toEqual([
+      { first_ingestion_attempt_id: null },
+      { first_ingestion_attempt_id: null },
+    ]);
+
+    const legacyCycle = await env.DB.prepare(
+      `SELECT started_at, completed_at, trigger_reason, status
+       FROM cycle_runs WHERE id = ?`,
+    )
+      .bind("1700000300000")
+      .first();
+    expect(legacyCycle).toEqual({
+      started_at: null,
+      completed_at: null,
+      trigger_reason: null,
+      status: null,
+    });
+
+    const attempts = await env.DB.prepare(
+      "SELECT count(*) AS count FROM feed_poll_attempts",
+    ).first<{ count: number }>();
+    expect(attempts?.count).toBe(0);
+
     const foreignKeyViolations = await env.DB.prepare(
       "PRAGMA foreign_key_check",
     ).all();
