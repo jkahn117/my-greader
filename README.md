@@ -217,7 +217,7 @@ For CSS hot-reload during UI development, run `pnpm dev:css` in a separate termi
 
 ## Deployment
 
-Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. Apply `0006_poll_traceability.sql` and `0007_poll_outcomes.sql` before deploying the matching Worker. The previous Worker can read both additive migrations during rollback.
+Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. Apply migrations `0006` through `0008` before deploying the matching Worker. Before the `0008` deployment, pause polling entry points and drain or terminate Workflows started by the old Worker because those executions do not acquire Feed ownership. The detailed deployment and rollback order is in the migration guide.
 
 ```bash
 pnpm deploy     # compile CSS + wrangler deploy

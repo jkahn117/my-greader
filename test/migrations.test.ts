@@ -84,6 +84,18 @@ describe("legacy data migration", () => {
       outcome: null,
     });
 
+    const ownershipFields = await env.DB.prepare(
+      `SELECT poll_owner_attempt_id, poll_lease_expires_at, poll_fence
+         FROM feeds WHERE id = ?`,
+    )
+      .bind("legacy-feed-active")
+      .first();
+    expect(ownershipFields).toEqual({
+      poll_owner_attempt_id: null,
+      poll_lease_expires_at: null,
+      poll_fence: 0,
+    });
+
     const attempts = await env.DB.prepare(
       "SELECT count(*) AS count FROM feed_poll_attempts",
     ).first<{ count: number }>();

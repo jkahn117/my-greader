@@ -69,3 +69,20 @@ Before deployment, run the migration and GReader compatibility tests, export D1,
 Migration `0007_poll_outcomes.sql` is additive and must run after `0006`. It adds default-zero selected and skipped counts plus a nullable Cycle Run outcome. It also adds nullable classification, HTTP, parser, and bounded diagnostic fields to Feed attempts. Existing Cycle Runs keep unknown outcomes, and existing attempts keep unknown diagnostic fields. The migration does not reinterpret historical counts or statuses.
 
 Apply `0007` before deploying code that writes in-progress attempts prior to HTTP work. The previous Worker ignores every new column, so a Worker rollback remains readable. New attempt outcomes written before rollback remain in the existing `outcome` column, but the previous Worker does not display their added classification detail. Keep the additive schema in place during rollback. Use the same export, row-count, foreign-key, GReader, and Current checks described above.
+
+## Feed ownership rollout
+
+Migration `0008_feed_poll_ownership.sql` is additive and must run after `0007`. It adds a nullable owner and lease expiry plus a default-zero fencing number to each Feed. Feed attempts gain a nullable ownership fence. Existing rows start unowned and retain their outcomes.
+
+The code before this migration does not acquire ownership, so an old Workflow must not overlap a new one. Use this deployment order:
+
+1. Pause scheduled polling and avoid normal or forced manual syncs.
+2. Let every old Workflow instance finish. Terminate any instance that cannot drain, then verify that no old instance is running.
+3. Run the baseline checks, export D1, apply `0008`, and verify row counts plus `PRAGMA foreign_key_check`.
+4. Deploy the ownership-aware Worker.
+5. Run one forced sync as a canary. Verify its Cycle Run completes and any concurrent test request records the busy Feed as skipped.
+6. Restore scheduled and manual polling.
+
+Do not rely on a rolling code deployment to protect old instances. Their polling path predates the ownership check and can still write Feed state.
+
+The previous Worker can read the additive schema, but rollback has the same execution boundary. Pause all polling entry points and drain or terminate ownership-aware Workflows before deploying the old Worker. Leave `0008` in place. After ownership-aware writes begin, prefer a forward fix because the old Worker bypasses the ownership contract. A database restore requires stopping all writers first.

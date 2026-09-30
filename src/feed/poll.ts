@@ -18,7 +18,6 @@ import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import {
   feedPollAttempts,
-  feeds,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
 } from "../db/schema";
@@ -31,6 +30,7 @@ const MAX_INTERVAL_MINUTES = 240;
 const MAX_TTL_MINUTES = 1440;
 const BACKOFF_MULTIPLIER = 2;
 const MAX_D1_JSON_PARAMETER_BYTES = 1_500_000;
+const POLL_LEASE_MS = 5 * 60 * 1000;
 
 const PERMANENT_ERROR_STATUSES = new Set([401, 403, 404, 410]);
 
@@ -138,44 +138,179 @@ export function createFeedPoller(
   return { poll };
 
   async function poll(
-    feed: FeedToCheck,
+    selectedFeed: FeedToCheck,
     attempt: PollAttemptContext,
   ): Promise<FeedPollResult> {
     const start = now();
-    const feedTitle = feed.title ?? feed.feedUrl;
+    let feed = selectedFeed;
+    let feedTitle = feed.title ?? feed.feedUrl;
 
-    // Persist progress before external work. A Workflow retry returns a prior
-    // terminal result instead of fetching or mutating Feed policy again.
-    const [, attemptRows, currentFeeds] = await d.batch([
-      d
-        .insert(feedPollAttempts)
-        .values({
-          id: attempt.attemptId,
-          cycleRunId: attempt.cycleRunId,
-          feedId: feed.id,
-          startedAt: start,
-        })
-        .onConflictDoNothing(),
-      d
-        .select({
-          cycleRunId: feedPollAttempts.cycleRunId,
-          feedId: feedPollAttempts.feedId,
-          outcome: feedPollAttempts.outcome,
-          newItems: feedPollAttempts.newItems,
-          errorClass: feedPollAttempts.errorClass,
-          diagnostic: feedPollAttempts.diagnostic,
-        })
-        .from(feedPollAttempts)
-        .where(eq(feedPollAttempts.id, attempt.attemptId)),
-      d
-        .select({ deactivatedAt: feeds.deactivatedAt })
-        .from(feeds)
-        .where(eq(feeds.id, feed.id)),
+    // Persist progress and claim the Feed in one D1 transaction. The fence is
+    // stable for retries of this logical attempt and increases for a new owner.
+    const leaseExpiresAt = start + POLL_LEASE_MS;
+    const claimResults = await dbBinding.batch([
+      dbBinding
+        .prepare(
+          `INSERT INTO feed_poll_attempts
+            (id, cycle_run_id, feed_id, started_at, new_items)
+           VALUES (?, ?, ?, ?, 0)
+           ON CONFLICT(id) DO NOTHING`,
+        )
+        .bind(attempt.attemptId, attempt.cycleRunId, feed.id, start),
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET poll_owner_attempt_id = ?, poll_lease_expires_at = ?,
+                  poll_fence = poll_fence + 1
+            WHERE id = ? AND deactivated_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND cycle_run_id = ? AND feed_id = ?
+                   AND outcome IS NULL AND ownership_fence IS NULL
+              )
+              AND (
+                poll_owner_attempt_id IS NULL OR poll_lease_expires_at <= ?
+                OR EXISTS (
+                  SELECT 1 FROM feed_poll_attempts owner
+                   WHERE owner.id = poll_owner_attempt_id
+                     AND owner.outcome IS NOT NULL
+                )
+              )`,
+        )
+        .bind(
+          attempt.attemptId,
+          leaseExpiresAt,
+          feed.id,
+          attempt.attemptId,
+          attempt.cycleRunId,
+          feed.id,
+          start,
+        ),
+      dbBinding
+        .prepare(
+          `UPDATE feed_poll_attempts
+              SET ownership_fence = (
+                SELECT poll_fence FROM feeds WHERE id = feed_id
+              )
+            WHERE id = ?
+              AND EXISTS (
+                SELECT 1 FROM feeds
+                 WHERE id = feed_id AND poll_owner_attempt_id = ?
+              )`,
+        )
+        .bind(attempt.attemptId, attempt.attemptId),
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET poll_lease_expires_at = ?, poll_fence = poll_fence + 1
+            WHERE id = ? AND poll_owner_attempt_id = ?
+              AND poll_lease_expires_at <= ?
+              AND poll_fence = (
+                SELECT ownership_fence FROM feed_poll_attempts WHERE id = ?
+              )
+              AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND cycle_run_id = ? AND feed_id = ?
+                   AND outcome IS NULL
+              )`,
+        )
+        .bind(
+          leaseExpiresAt,
+          feed.id,
+          attempt.attemptId,
+          start,
+          attempt.attemptId,
+          attempt.attemptId,
+          attempt.cycleRunId,
+          feed.id,
+        ),
+      dbBinding
+        .prepare(
+          `UPDATE feed_poll_attempts
+              SET ownership_fence = (
+                SELECT poll_fence FROM feeds WHERE id = feed_id
+              )
+            WHERE id = ?
+              AND EXISTS (
+                SELECT 1 FROM feeds
+                 WHERE id = feed_id AND poll_owner_attempt_id = ?
+              )`,
+        )
+        .bind(attempt.attemptId, attempt.attemptId),
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET poll_owner_attempt_id = ?, poll_lease_expires_at = ?
+            WHERE id = ? AND deactivated_at IS NULL
+              AND poll_owner_attempt_id = ? AND poll_lease_expires_at > ?
+              AND poll_fence = (
+                SELECT ownership_fence FROM feed_poll_attempts WHERE id = ?
+              )
+              AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND cycle_run_id = ? AND feed_id = ?
+                   AND outcome IS NULL
+              )`,
+        )
+        .bind(
+          attempt.attemptId,
+          leaseExpiresAt,
+          feed.id,
+          attempt.attemptId,
+          start,
+          attempt.attemptId,
+          attempt.attemptId,
+          attempt.cycleRunId,
+          feed.id,
+        ),
+      dbBinding
+        .prepare(
+          `SELECT cycle_run_id, feed_id, outcome, new_items, error_class,
+                  diagnostic, ownership_fence
+             FROM feed_poll_attempts WHERE id = ?`,
+        )
+        .bind(attempt.attemptId),
+      dbBinding
+        .prepare(
+          `SELECT feed_url, title, html_url, etag, last_modified,
+                  last_fetched_at, consecutive_errors, check_interval_minutes,
+                  last_new_item_at, deactivated_at, poll_owner_attempt_id,
+                  poll_lease_expires_at, poll_fence
+             FROM feeds WHERE id = ?`,
+        )
+        .bind(feed.id),
     ]);
-    const durableAttempt = attemptRows[0];
+    const durableAttempt = claimResults[6].results[0] as
+      | {
+          cycle_run_id: string;
+          feed_id: string;
+          outcome: FeedAttemptOutcome | null;
+          new_items: number;
+          error_class: FeedAttemptErrorClass | null;
+          diagnostic: string | null;
+          ownership_fence: number | null;
+        }
+      | undefined;
+    const currentFeed = claimResults[7].results[0] as
+      | {
+          feed_url: string;
+          title: string | null;
+          html_url: string | null;
+          etag: string | null;
+          last_modified: string | null;
+          last_fetched_at: number | null;
+          consecutive_errors: number;
+          check_interval_minutes: number;
+          last_new_item_at: number | null;
+          deactivated_at: number | null;
+          poll_owner_attempt_id: string | null;
+          poll_lease_expires_at: number | null;
+          poll_fence: number;
+        }
+      | undefined;
     if (
-      durableAttempt?.cycleRunId !== attempt.cycleRunId ||
-      durableAttempt.feedId !== feed.id
+      durableAttempt?.cycle_run_id !== attempt.cycleRunId ||
+      durableAttempt.feed_id !== feed.id
     ) {
       throw new Error(
         `Logical attempt ${attempt.attemptId} has conflicting identity`,
@@ -183,24 +318,43 @@ export function createFeedPoller(
     }
     if (durableAttempt.outcome != null) {
       return resultFromAttempt(feed.id, feedTitle, {
-        ...durableAttempt,
         outcome: durableAttempt.outcome,
+        newItems: durableAttempt.new_items,
+        errorClass: durableAttempt.error_class,
+        diagnostic: durableAttempt.diagnostic,
       });
     }
 
-    if (currentFeeds[0]?.deactivatedAt != null) {
-      await dbBinding
-        .prepare(
-          `UPDATE feed_poll_attempts
-              SET completed_at = ?, outcome = 'skipped',
-                  parser_status = 'not_attempted',
-                  diagnostic = 'Feed became ineligible after selection'
-            WHERE id = ? AND outcome IS NULL`,
-        )
-        .bind(now(), attempt.attemptId)
-        .run();
+    const ownershipFence = durableAttempt.ownership_fence;
+    if (
+      ownershipFence == null ||
+      currentFeed?.poll_owner_attempt_id !== attempt.attemptId ||
+      currentFeed.poll_fence !== ownershipFence
+    ) {
+      await skipAttempt(
+        attempt.attemptId,
+        currentFeed?.deactivated_at != null
+          ? "Feed became ineligible after selection"
+          : "Feed is owned by another Cycle Run",
+      );
       return loadResult(attempt.attemptId, feed.id, feedTitle);
     }
+
+    // Selection can wait behind another Cycle Run. Once this attempt owns the
+    // Feed, policy calculations must use the latest committed Feed state.
+    feed = {
+      id: feed.id,
+      feedUrl: currentFeed.feed_url,
+      title: currentFeed.title,
+      htmlUrl: currentFeed.html_url,
+      etag: currentFeed.etag,
+      lastModified: currentFeed.last_modified,
+      lastFetchedAt: currentFeed.last_fetched_at,
+      consecutiveErrors: currentFeed.consecutive_errors,
+      checkIntervalMinutes: currentFeed.check_interval_minutes,
+      lastNewItemAt: currentFeed.last_new_item_at,
+    };
+    feedTitle = feed.title ?? feed.feedUrl;
 
     const headers: Record<string, string> = {
       "User-Agent": "my-greader/1.0 (+https://github.com)",
@@ -217,7 +371,7 @@ export function createFeedPoller(
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
-      const won = await commitFailure(feed, attempt.attemptId, {
+      const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: "transient",
         errorClass: "network",
@@ -246,17 +400,33 @@ export function createFeedPoller(
           .prepare(
             `UPDATE feeds
                 SET last_fetched_at = ?, check_interval_minutes = ?
-              WHERE id = ? AND EXISTS (
-                SELECT 1 FROM feed_poll_attempts
-                 WHERE id = ? AND outcome IS NULL
-              )`,
+              WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
+                AND poll_lease_expires_at > ?
+                AND EXISTS (
+                  SELECT 1 FROM feed_poll_attempts
+                   WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+                )`,
           )
-          .bind(completedAt, newInterval, feed.id, attempt.attemptId),
-        terminalAttemptStatement(attempt.attemptId, completedAt, {
-          outcome: "not_modified",
-          httpStatus: 304,
-          parserStatus: "not_attempted",
-        }),
+          .bind(
+            completedAt,
+            newInterval,
+            feed.id,
+            attempt.attemptId,
+            ownershipFence,
+            completedAt,
+            attempt.attemptId,
+            ownershipFence,
+          ),
+        terminalAttemptStatement(
+          attempt.attemptId,
+          ownershipFence,
+          completedAt,
+          {
+            outcome: "not_modified",
+            httpStatus: 304,
+            parserStatus: "not_attempted",
+          },
+        ),
       ]);
       const won = didCommitTerminalAttempt(commitResults);
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
@@ -297,10 +467,12 @@ export function createFeedPoller(
           .prepare(
             `UPDATE feeds
                 SET last_fetched_at = ?, check_interval_minutes = ?, last_error = ?
-              WHERE id = ? AND EXISTS (
-                SELECT 1 FROM feed_poll_attempts
-                 WHERE id = ? AND outcome IS NULL
-              )`,
+              WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
+                AND poll_lease_expires_at > ?
+                AND EXISTS (
+                  SELECT 1 FROM feed_poll_attempts
+                   WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+                )`,
           )
           .bind(
             completedAt,
@@ -308,13 +480,22 @@ export function createFeedPoller(
             errorMessage,
             feed.id,
             attempt.attemptId,
+            ownershipFence,
+            completedAt,
+            attempt.attemptId,
+            ownershipFence,
           ),
-        terminalAttemptStatement(attempt.attemptId, completedAt, {
-          outcome: "rate_limited",
-          httpStatus: 429,
-          parserStatus: "not_attempted",
-          diagnostic: errorMessage,
-        }),
+        terminalAttemptStatement(
+          attempt.attemptId,
+          ownershipFence,
+          completedAt,
+          {
+            outcome: "rate_limited",
+            httpStatus: 429,
+            parserStatus: "not_attempted",
+            diagnostic: errorMessage,
+          },
+        ),
       ]);
       const won = didCommitTerminalAttempt(commitResults);
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
@@ -332,7 +513,7 @@ export function createFeedPoller(
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
-      const won = await commitFailure(feed, attempt.attemptId, {
+      const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: errorClass,
         errorClass: "http",
@@ -358,7 +539,7 @@ export function createFeedPoller(
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
-      const won = await commitFailure(feed, attempt.attemptId, {
+      const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: "transient",
         errorClass: "network",
@@ -392,13 +573,18 @@ export function createFeedPoller(
         parsed = fallback;
         parseStatus = "fallback";
       } else {
-        const won = await commitFailure(feed, attempt.attemptId, {
-          diagnostic: parserError,
-          healthClass: "transient",
-          errorClass: "parse",
-          httpStatus: response.status,
-          parserStatus: "failure",
-        });
+        const won = await commitFailure(
+          feed,
+          attempt.attemptId,
+          ownershipFence,
+          {
+            diagnostic: parserError,
+            healthClass: "transient",
+            errorClass: "parse",
+            httpStatus: response.status,
+            parserStatus: "failure",
+          },
+        );
         const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
         if (won && result.outcome === "failed") {
           publish({
@@ -491,12 +677,25 @@ export function createFeedPoller(
                   ?
              FROM json_each(?)
             WHERE EXISTS (
-              SELECT 1 FROM feed_poll_attempts
-               WHERE id = ? AND outcome IS NULL
+              SELECT 1
+                FROM feed_poll_attempts owned_attempt
+                JOIN feeds owned_feed ON owned_feed.id = owned_attempt.feed_id
+               WHERE owned_attempt.id = ? AND owned_attempt.outcome IS NULL
+                 AND owned_attempt.ownership_fence = ?
+                 AND owned_feed.poll_owner_attempt_id = owned_attempt.id
+                 AND owned_feed.poll_fence = ?
+                 AND owned_feed.poll_lease_expires_at > ?
             )
            ON CONFLICT(id) DO NOTHING`,
         )
-        .bind(attempt.attemptId, itemJson, attempt.attemptId),
+        .bind(
+          attempt.attemptId,
+          itemJson,
+          attempt.attemptId,
+          ownershipFence,
+          ownershipFence,
+          completedAt,
+        ),
     );
     commitStatements.push(
       dbBinding
@@ -515,10 +714,12 @@ export function createFeedPoller(
                   html_url = coalesce(html_url, ?),
                   etag = coalesce(?, etag),
                   last_modified = coalesce(?, last_modified)
-            WHERE id = ? AND EXISTS (
-              SELECT 1 FROM feed_poll_attempts
-               WHERE id = ? AND outcome IS NULL
-            )`,
+            WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
+              AND poll_lease_expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+              )`,
         )
         .bind(
           time,
@@ -534,6 +735,10 @@ export function createFeedPoller(
           newLastModified,
           feed.id,
           attempt.attemptId,
+          ownershipFence,
+          completedAt,
+          attempt.attemptId,
+          ownershipFence,
         ),
       dbBinding
         .prepare(
@@ -547,7 +752,12 @@ export function createFeedPoller(
                      WHERE first_ingestion_attempt_id = ?
                   ),
                   http_status = ?, parser_status = ?
-            WHERE id = ? AND outcome IS NULL`,
+            WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+              AND EXISTS (
+                SELECT 1 FROM feeds
+                 WHERE id = feed_id AND poll_owner_attempt_id = ?
+                   AND poll_fence = ? AND poll_lease_expires_at > ?
+              )`,
         )
         .bind(
           completedAt,
@@ -556,6 +766,10 @@ export function createFeedPoller(
           response.status,
           parseStatus,
           attempt.attemptId,
+          ownershipFence,
+          attempt.attemptId,
+          ownershipFence,
+          completedAt,
         ),
     );
     const commitResults = await dbBinding.batch(commitStatements);
@@ -578,6 +792,26 @@ export function createFeedPoller(
     return result;
   }
 
+  /** Records a selected Feed that this attempt cannot poll. */
+  async function skipAttempt(
+    attemptId: string,
+    diagnostic: string,
+  ): Promise<void> {
+    await dbBinding
+      .prepare(
+        `UPDATE feed_poll_attempts
+            SET completed_at = ?, outcome = 'skipped',
+                parser_status = 'not_attempted', diagnostic = ?
+          WHERE id = ? AND outcome IS NULL AND ownership_fence IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM feeds
+               WHERE poll_owner_attempt_id = feed_poll_attempts.id
+            )`,
+      )
+      .bind(now(), diagnostic, attemptId)
+      .run();
+  }
+
   /** Reads the terminal result after a commit, including after an ambiguous response. */
   async function loadAttempt(attemptId: string): Promise<{
     outcome: FeedAttemptOutcome;
@@ -595,7 +829,9 @@ export function createFeedPoller(
       .from(feedPollAttempts)
       .where(eq(feedPollAttempts.id, attemptId));
     if (rows[0]?.outcome == null) {
-      throw new Error(`Logical attempt ${attemptId} did not complete`);
+      throw new Error(
+        `Logical attempt ${attemptId} did not complete because it lost ownership`,
+      );
     }
     return { ...rows[0], outcome: rows[0].outcome };
   }
@@ -613,6 +849,7 @@ export function createFeedPoller(
   async function commitFailure(
     feed: FeedToCheck,
     attemptId: string,
+    ownershipFence: number,
     failure: {
       diagnostic: string;
       healthClass: ErrorClass;
@@ -633,10 +870,12 @@ export function createFeedPoller(
           `UPDATE feeds
               SET consecutive_errors = ?, last_error = ?, last_fetched_at = ?,
                   deactivated_at = CASE WHEN ? >= ? THEN ? ELSE deactivated_at END
-            WHERE id = ? AND EXISTS (
-              SELECT 1 FROM feed_poll_attempts
-               WHERE id = ? AND outcome IS NULL
-            )`,
+            WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
+              AND poll_lease_expires_at > ?
+              AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+              )`,
         )
         .bind(
           nextErrorCount,
@@ -647,8 +886,12 @@ export function createFeedPoller(
           completedAt,
           feed.id,
           attemptId,
+          ownershipFence,
+          completedAt,
+          attemptId,
+          ownershipFence,
         ),
-      terminalAttemptStatement(attemptId, completedAt, {
+      terminalAttemptStatement(attemptId, ownershipFence, completedAt, {
         outcome: "failed",
         errorClass: failure.errorClass,
         httpStatus: failure.httpStatus,
@@ -670,6 +913,7 @@ export function createFeedPoller(
   /** Creates the guarded terminal write shared by non-ingestion outcomes. */
   function terminalAttemptStatement(
     attemptId: string,
+    ownershipFence: number,
     completedAt: number,
     values: {
       outcome: "not_modified" | "rate_limited" | "failed";
@@ -684,7 +928,12 @@ export function createFeedPoller(
         `UPDATE feed_poll_attempts
             SET completed_at = ?, outcome = ?, error_class = ?, http_status = ?,
                 parser_status = ?, diagnostic = ?
-          WHERE id = ? AND outcome IS NULL`,
+          WHERE id = ? AND outcome IS NULL AND ownership_fence = ?
+            AND EXISTS (
+              SELECT 1 FROM feeds
+               WHERE id = feed_id AND poll_owner_attempt_id = ?
+                 AND poll_fence = ? AND poll_lease_expires_at > ?
+            )`,
       )
       .bind(
         completedAt,
@@ -694,6 +943,10 @@ export function createFeedPoller(
         values.parserStatus,
         values.diagnostic ?? null,
         attemptId,
+        ownershipFence,
+        attemptId,
+        ownershipFence,
+        completedAt,
       );
   }
 

@@ -28,6 +28,9 @@ export const feeds = sqliteTable("feeds", {
   deactivatedAt: integer("deactivated_at"), // NULL = active; set after threshold
   checkIntervalMinutes: integer("check_interval_minutes").notNull().default(30), // adaptive polling backoff
   lastNewItemAt: integer("last_new_item_at"), // last time new articles were stored
+  pollOwnerAttemptId: text("poll_owner_attempt_id"),
+  pollLeaseExpiresAt: integer("poll_lease_expires_at"),
+  pollFence: integer("poll_fence").notNull().default(0),
 });
 
 // Per-user feed subscriptions
@@ -114,6 +117,7 @@ export const feedPollAttempts = sqliteTable("feed_poll_attempts", {
     enum: ["not_attempted", "success", "fallback", "failure"],
   }),
   diagnostic: text("diagnostic"),
+  ownershipFence: integer("ownership_fence"),
 });
 
 // Fetched Items are shared, not per-User. The nullable attempt reference preserves explicit

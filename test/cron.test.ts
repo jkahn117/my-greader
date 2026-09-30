@@ -306,6 +306,10 @@ describe("FeedPoller", () => {
       Date.now(),
     );
     const feedId = await seedFeed("https://example.com/feed.xml");
+    await getDb(env.DB)
+      .update(feeds)
+      .set({ etag: 'W/"abc123"' })
+      .where(eq(feeds.id, feedId));
 
     await pollWithAttempt(poller, feedRow({ id: feedId, etag: 'W/"abc123"' }));
 
@@ -537,6 +541,10 @@ describe("FeedPoller error handling", () => {
       Date.now(),
     );
     const feedId = await seedFeed("https://bad.example.com/feed.xml");
+    await getDb(env.DB)
+      .update(feeds)
+      .set({ consecutiveErrors: 4 })
+      .where(eq(feeds.id, feedId));
 
     const result = await pollWithAttempt(
       poller,
@@ -568,6 +576,10 @@ describe("FeedPoller error handling", () => {
       Date.now(),
     );
     const feedId = await seedFeed("https://gone.example.com/feed.xml");
+    await getDb(env.DB)
+      .update(feeds)
+      .set({ consecutiveErrors: 1 })
+      .where(eq(feeds.id, feedId));
 
     const result = await pollWithAttempt(
       poller,
