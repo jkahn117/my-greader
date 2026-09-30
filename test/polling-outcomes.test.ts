@@ -2,14 +2,7 @@ import { env, type WorkflowStep } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "../src/lib/db";
-import {
-  cycleRuns,
-  feedPollAttempts,
-  feeds,
-  items,
-  subscriptions,
-  users,
-} from "../src/db/schema";
+import { cycleRuns, feeds, subscriptions, users } from "../src/db/schema";
 import {
   createFeedPoller,
   type FeedToCheck,
@@ -27,6 +20,22 @@ const ONE_ITEM_RSS = `<?xml version="1.0"?><rss version="2.0"><channel>
     <guid>https://example.com/one</guid>
   </item>
 </channel></rss>`;
+
+/** Builds a large but ordinary RSS document without coupling the test to parser internals. */
+function rssWithItems(count: number): string {
+  const itemXml = Array.from(
+    { length: count },
+    (_, index) => `<item>
+      <title>Item ${index}</title>
+      <link>https://example.com/items/${index}</link>
+      <guid>large-item-${index}</guid>
+      <description>${"content ".repeat(900)}</description>
+    </item>`,
+  ).join("");
+  return `<?xml version="1.0"?><rss version="2.0"><channel>
+    <title>Large Feed</title><link>https://example.com</link>${itemXml}
+  </channel></rss>`;
+}
 
 /** Runs Workflow steps immediately while preserving their named execution boundary. */
 function immediateStep(): WorkflowStep {
@@ -319,39 +328,151 @@ describe("durable Feed attempt outcomes", () => {
     expect(retryObserver.publish).not.toHaveBeenCalled();
   });
 
-  it("reconciles Items inserted before attempt completion", async () => {
-    const feed = feedInput("reconcile");
-    await seedAttempt(feed, "cycle-reconcile");
-    const db = getDb(env.DB);
-    await db.insert(feedPollAttempts).values({
-      id: "attempt-reconcile",
-      cycleRunId: "cycle-reconcile",
-      feedId: feed.id,
-      startedAt: 1_735_732_799_000,
+  it("returns the committed winner when runtime retries repeat HTTP", async () => {
+    const feed = feedInput("overlap");
+    await seedAttempt(feed, "cycle-overlap");
+    let resolveSuccess: (response: Response) => void = () => {};
+    let resolveNotModified: (response: Response) => void = () => {};
+    const successResponse = new Promise<Response>((resolve) => {
+      resolveSuccess = resolve;
     });
-    await db.insert(items).values({
-      id: "item-before-interruption",
-      feedId: feed.id,
-      title: "Committed before interruption",
-      firstIngestionAttemptId: "attempt-reconcile",
+    const notModifiedResponse = new Promise<Response>((resolve) => {
+      resolveNotModified = resolve;
     });
+    const successTransport = { get: vi.fn(() => successResponse) };
+    const notModifiedTransport = { get: vi.fn(() => notModifiedResponse) };
+    const successObserver = { publish: vi.fn() };
+    const notModifiedObserver = { publish: vi.fn() };
+    const attempt = {
+      cycleRunId: "cycle-overlap",
+      attemptId: "attempt-overlap",
+    };
+    const successPoll = createFeedPoller(
+      env.DB,
+      successTransport,
+      successObserver,
+      () => 1_735_732_800_000,
+    ).poll(feed, attempt);
+    const notModifiedPoll = createFeedPoller(
+      env.DB,
+      notModifiedTransport,
+      notModifiedObserver,
+      () => 1_735_732_800_001,
+    ).poll(feed, attempt);
+    await vi.waitFor(() => {
+      expect(successTransport.get).toHaveBeenCalledOnce();
+      expect(notModifiedTransport.get).toHaveBeenCalledOnce();
+    });
+
+    resolveSuccess(new Response(ONE_ITEM_RSS));
+    await expect(successPoll).resolves.toMatchObject({
+      outcome: "new_items",
+      newItems: 1,
+    });
+    resolveNotModified(new Response(null, { status: 304 }));
+    await expect(notModifiedPoll).resolves.toMatchObject({
+      outcome: "new_items",
+      newItems: 1,
+    });
+
+    expect(await readAttempt(attempt.attemptId)).toMatchObject({
+      outcome: "new_items",
+      new_items: 1,
+    });
+    expect(successObserver.publish).toHaveBeenCalledOnce();
+    expect(notModifiedObserver.publish).not.toHaveBeenCalled();
+  });
+
+  it("rolls back Items, Feed health and completion when the database commit fails", async () => {
+    const feed = feedInput("atomic-failure", {
+      consecutiveErrors: 2,
+      checkIntervalMinutes: 60,
+    });
+    await seedAttempt(feed, "cycle-atomic-failure");
+    await env.DB.prepare(`CREATE TRIGGER fail_feed_completion
+      BEFORE UPDATE ON feeds
+      WHEN NEW.last_fetched_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'injected completion failure');
+      END`).run();
+    const transport = { get: vi.fn(async () => new Response(ONE_ITEM_RSS)) };
     const poller = createFeedPoller(
       env.DB,
-      { get: async () => new Response(EMPTY_RSS) },
+      transport,
+      { publish() {} },
+      () => 1_735_732_800_000,
+    );
+    const attempt = {
+      cycleRunId: "cycle-atomic-failure",
+      attemptId: "attempt-atomic-failure",
+    };
+
+    await expect(poller.poll(feed, attempt)).rejects.toThrow(
+      "injected completion failure",
+    );
+    await env.DB.exec("DROP TRIGGER fail_feed_completion");
+
+    const itemCount = await env.DB.prepare(
+      "SELECT count(*) AS count FROM items",
+    ).first<{ count: number }>();
+    const persistedFeed = await env.DB.prepare(
+      `SELECT last_fetched_at, consecutive_errors, check_interval_minutes
+         FROM feeds WHERE id = ?`,
+    )
+      .bind(feed.id)
+      .first();
+    expect(itemCount?.count).toBe(0);
+    expect(await readAttempt(attempt.attemptId)).toMatchObject({
+      outcome: null,
+      new_items: 0,
+      completed_at: null,
+    });
+    expect(persistedFeed).toEqual({
+      last_fetched_at: null,
+      consecutive_errors: 2,
+      check_interval_minutes: 60,
+    });
+
+    await expect(poller.poll(feed, attempt)).resolves.toMatchObject({
+      outcome: "new_items",
+      newItems: 1,
+    });
+    expect(transport.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("atomically completes a large Feed and replays its committed result", async () => {
+    const feed = feedInput("large");
+    await seedAttempt(feed, "cycle-large");
+    const transport = {
+      get: vi.fn(async () => new Response(rssWithItems(250))),
+    };
+    const attempt = {
+      cycleRunId: "cycle-large",
+      attemptId: "attempt-large",
+    };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
       { publish() {} },
       () => 1_735_732_800_000,
     );
 
-    await expect(
-      poller.poll(feed, {
-        cycleRunId: "cycle-reconcile",
-        attemptId: "attempt-reconcile",
-      }),
-    ).resolves.toMatchObject({ outcome: "new_items", newItems: 1 });
-    expect(await readAttempt("attempt-reconcile")).toMatchObject({
+    await expect(poller.poll(feed, attempt)).resolves.toMatchObject({
       outcome: "new_items",
-      new_items: 1,
+      newItems: 250,
     });
+    await expect(poller.poll(feed, attempt)).resolves.toMatchObject({
+      outcome: "new_items",
+      newItems: 250,
+    });
+
+    const stored = await env.DB.prepare(
+      `SELECT count(*) AS count,
+              count(DISTINCT first_ingestion_attempt_id) AS attempts
+         FROM items`,
+    ).first<{ count: number; attempts: number }>();
+    expect(stored).toEqual({ count: 250, attempts: 1 });
+    expect(transport.get).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -550,6 +671,91 @@ describe("Cycle Run outcomes", () => {
       outcome: "completed",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("recovers when Feed completion commits before the Workflow acknowledges it", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "retry-user",
+      email: "retry@example.com",
+      createdAt: now,
+    });
+    await db.insert(feeds).values({
+      id: "retry-feed",
+      feedUrl: "https://retry.example/feed.xml",
+      title: "Retry Feed",
+    });
+    await db.insert(subscriptions).values({
+      id: "retry-subscription",
+      userId: "retry-user",
+      feedId: "retry-feed",
+    });
+    const fetchMock = vi.fn(async () => new Response(ONE_ITEM_RSS));
+    vi.stubGlobal("fetch", fetchMock);
+    const completedSteps = new Map<string, unknown>();
+    let loseFetchAcknowledgment = true;
+    // Caches acknowledged Workflow steps while replaying the unacknowledged Feed step.
+    const retryingStep = {
+      do: async (
+        name: string,
+        configOrCallback: unknown,
+        maybeCallback?: unknown,
+      ) => {
+        if (completedSteps.has(name)) return completedSteps.get(name);
+        const callback =
+          typeof configOrCallback === "function"
+            ? configOrCallback
+            : maybeCallback;
+        const result = await (callback as () => Promise<unknown>)();
+        if (name.startsWith("fetch-batch-") && loseFetchAcknowledgment) {
+          loseFetchAcknowledgment = false;
+          throw new Error("acknowledgment lost after commit");
+        }
+        completedSteps.set(name, result);
+        return result;
+      },
+    } as WorkflowStep;
+    const event = {
+      instanceId: "retry-cycle",
+      timestamp: new Date(now),
+      payload: { triggerReason: "scheduled" as const },
+    };
+    const workflowEnv = {
+      ...env,
+      ANALYTICS_ENABLED: "false",
+    } as unknown as Env;
+
+    await expect(
+      runFeedPollingWorkflow(workflowEnv, event, retryingStep),
+    ).rejects.toThrow("acknowledgment lost after commit");
+    await expect(
+      runFeedPollingWorkflow(workflowEnv, event, retryingStep),
+    ).resolves.toBeUndefined();
+
+    const cycle = await env.DB.prepare(
+      `SELECT status, selected_feeds, checked_feeds, failed_feeds, new_items
+         FROM cycle_runs WHERE id = ?`,
+    )
+      .bind("retry-cycle")
+      .first();
+    const stored = await env.DB.prepare(
+      `SELECT count(*) AS count,
+              min(first_ingestion_attempt_id) AS attempt_id
+         FROM items`,
+    ).first();
+    expect(cycle).toEqual({
+      status: "completed",
+      selected_feeds: 1,
+      checked_feeds: 1,
+      failed_feeds: 0,
+      new_items: 1,
+    });
+    expect(stored).toEqual({
+      count: 1,
+      attempt_id: "retry-cycle:retry-feed",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("leaves interrupted work running instead of completing it as success", async () => {

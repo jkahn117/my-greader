@@ -52,10 +52,10 @@ See [`docs/greader-api.md`](greader-api.md) for endpoint details.
 ## Feed polling
 
 Triggered every 30 minutes.  The cron handler starts a `FeedPollingWorkflow`
-which queries due Feeds and processes them in batches of 8. Each Feed can use
-five HTTP or D1 subrequests because progress is checked before the network
-request, Item attribution is reconciled, and terminal state is written
-afterward. The smaller batch stays under the 50-subrequest invocation budget.
+which queries due Feeds and processes them in batches of 8. Each Feed uses a
+small fixed number of HTTP or D1 binding calls: progress check, HTTP, atomic
+completion, and committed-result read. The smaller batch stays under the
+50-subrequest invocation budget.
 
 Per-feed logic is owned by the `FeedPoller` module.  The Workflow provides
 a narrow `FeedTransport` (global `fetch` with 15s timeout) and a `PollObserver`
@@ -65,9 +65,11 @@ Retry-After), two-tier error deactivation (2 strikes for permanent errors
 like 404/410, 5 for transient), lenient fallback parsing, and adaptive
 interval backoff (30 → 240 minutes).
 
-The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID, so a retried Workflow step addresses the same record. The Workflow always creates a Cycle Run, including a completed `empty` run when no active subscribed Feed is eligible. `FeedPoller` creates an in-progress attempt before HTTP work and commits one of `new_items`, `unchanged`, `not_modified`, `rate_limited`, or `failed`. A retry returns an existing terminal attempt without repeating HTTP. If Item insertion completed before interruption, the retry reconstructs the committed count from first-ingestion attribution. Failed attempts use stable `network`, `http`, or `parse` classifications and store diagnostics redacted and capped at 500 characters. A null attempt outcome or a running Cycle Run means work did not complete.
+The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID. Runtime retries do not get new attempt IDs, so every retry addresses the same record. The Workflow always creates a Cycle Run, including a completed `empty` run when no active subscribed Feed is eligible. `FeedPoller` creates an in-progress attempt before HTTP work and commits one of `new_items`, `unchanged`, `not_modified`, `rate_limited`, or `failed`. A retry returns an existing terminal attempt without repeating HTTP. Failed attempts use stable `network`, `http`, or `parse` classifications and store diagnostics redacted and capped at 500 characters. A null attempt outcome or a running Cycle Run means work did not complete.
 
-Cycle Run summaries derive from durable attempts. `active_feeds` and `selected_feeds` count distinct Feeds, not Subscription rows. `checked_feeds` counts terminal attempts except `skipped`; `failed_feeds` counts the `failed` subset; `skipped_feeds` counts selected Feeds deliberately not checked; and `new_items` sums committed attempt counts. Forced runs bypass due time but still exclude deactivated and unsubscribed Feeds.
+D1 `batch()` is the attempt completion boundary. Item insertion, first-attempt attribution, Feed health and backoff changes, and the terminal attempt outcome commit in one transaction. D1 rolls back the whole batch if any statement fails. Successful ingestion uses SQLite JSON table expansion so many Items fit into a few statements instead of one query per Item. JSON parameters are chunked below 1.5 MB, under D1's 2 MB value limit; the behavior suite exercises a 250-Item Feed. Every mutation checks that the attempt is still running, and the terminal attempt update is last. A failure before commit leaves no successful effects. If D1 commits but the Worker loses the acknowledgment, the next retry reads the terminal outcome.
+
+Cycle Run summaries derive from durable attempts. `active_feeds` and `selected_feeds` count distinct Feeds, not Subscription rows. `checked_feeds` counts terminal attempts except `skipped`; `failed_feeds` counts the `failed` subset; `skipped_feeds` counts selected Feeds deliberately not checked; and `new_items` sums committed attempt counts. Completion only updates a running Cycle Run, so replay cannot rewrite its durable summary. Forced runs bypass due time but still exclude deactivated and unsubscribed Feeds.
 
 ## Metrics
 

@@ -11,7 +11,7 @@
  * Workflow's `PollObserver` adapter — no Powertools imports here.
  */
 import Parser from "rss-parser";
-import { and, count, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
@@ -19,7 +19,6 @@ import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import {
   feedPollAttempts,
   feeds,
-  items,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
 } from "../db/schema";
@@ -31,10 +30,23 @@ const MIN_INTERVAL_MINUTES = 30;
 const MAX_INTERVAL_MINUTES = 240;
 const MAX_TTL_MINUTES = 1440;
 const BACKOFF_MULTIPLIER = 2;
+const MAX_D1_JSON_PARAMETER_BYTES = 1_500_000;
 
 const PERMANENT_ERROR_STATUSES = new Set([401, 403, 404, 410]);
 
 type ErrorClass = "transient" | "permanent";
+
+type ItemCommitRow = {
+  id: string;
+  feedId: string;
+  title: string | null;
+  url: string | null;
+  content: string;
+  author: string | null;
+  publishedAt: number;
+  fetchedAt: number;
+  firstIngestionAttemptId: string;
+};
 
 export type FeedToCheck = {
   id: string;
@@ -146,6 +158,8 @@ export function createFeedPoller(
         .onConflictDoNothing(),
       d
         .select({
+          cycleRunId: feedPollAttempts.cycleRunId,
+          feedId: feedPollAttempts.feedId,
           outcome: feedPollAttempts.outcome,
           newItems: feedPollAttempts.newItems,
           errorClass: feedPollAttempts.errorClass,
@@ -159,7 +173,15 @@ export function createFeedPoller(
         .where(eq(feeds.id, feed.id)),
     ]);
     const durableAttempt = attemptRows[0];
-    if (durableAttempt?.outcome != null) {
+    if (
+      durableAttempt?.cycleRunId !== attempt.cycleRunId ||
+      durableAttempt.feedId !== feed.id
+    ) {
+      throw new Error(
+        `Logical attempt ${attempt.attemptId} has conflicting identity`,
+      );
+    }
+    if (durableAttempt.outcome != null) {
       return resultFromAttempt(feed.id, feedTitle, {
         ...durableAttempt,
         outcome: durableAttempt.outcome,
@@ -167,12 +189,17 @@ export function createFeedPoller(
     }
 
     if (currentFeeds[0]?.deactivatedAt != null) {
-      await completeAttempt(attempt.attemptId, {
-        outcome: "skipped",
-        parserStatus: "not_attempted",
-        diagnostic: "Feed became ineligible after selection",
-      });
-      return { feedId: feed.id, feedTitle, outcome: "skipped" };
+      await dbBinding
+        .prepare(
+          `UPDATE feed_poll_attempts
+              SET completed_at = ?, outcome = 'skipped',
+                  parser_status = 'not_attempted',
+                  diagnostic = 'Feed became ineligible after selection'
+            WHERE id = ? AND outcome IS NULL`,
+        )
+        .bind(now(), attempt.attemptId)
+        .run();
+      return loadResult(attempt.attemptId, feed.id, feedTitle);
     }
 
     const headers: Record<string, string> = {
@@ -190,25 +217,22 @@ export function createFeedPoller(
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
-      await recordError(feed, errorMessage, "transient");
-      await completeAttempt(attempt.attemptId, {
-        outcome: "failed",
-        errorClass: "network",
-        parserStatus: "not_attempted",
+      const won = await commitFailure(feed, attempt.attemptId, {
         diagnostic: errorMessage,
-      });
-      publish({
-        kind: "feedFetchFailed",
-        feedId: feed.id,
-        error: errorMessage,
-      });
-      return {
-        feedId: feed.id,
-        feedTitle,
-        outcome: "failed",
+        healthClass: "transient",
         errorClass: "network",
-        error: errorMessage,
-      };
+        httpStatus: null,
+        parserStatus: "not_attempted",
+      });
+      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      if (won && result.outcome === "failed") {
+        publish({
+          kind: "feedFetchFailed",
+          feedId: feed.id,
+          error: result.error,
+        });
+      }
+      return result;
     }
 
     if (response.status === 304) {
@@ -216,24 +240,34 @@ export function createFeedPoller(
         feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
         MAX_INTERVAL_MINUTES,
       );
-      await d
-        .update(feeds)
-        .set({
-          lastFetchedAt: now(),
-          checkIntervalMinutes: newInterval,
-        })
-        .where(eq(feeds.id, feed.id));
-      await completeAttempt(attempt.attemptId, {
-        outcome: "not_modified",
-        httpStatus: 304,
-        parserStatus: "not_attempted",
-      });
-      publish({
-        kind: "feedNotModified",
-        feedId: feed.id,
-        newInterval,
-      });
-      return { feedId: feed.id, feedTitle, outcome: "not_modified" };
+      const completedAt = now();
+      const commitResults = await dbBinding.batch([
+        dbBinding
+          .prepare(
+            `UPDATE feeds
+                SET last_fetched_at = ?, check_interval_minutes = ?
+              WHERE id = ? AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND outcome IS NULL
+              )`,
+          )
+          .bind(completedAt, newInterval, feed.id, attempt.attemptId),
+        terminalAttemptStatement(attempt.attemptId, completedAt, {
+          outcome: "not_modified",
+          httpStatus: 304,
+          parserStatus: "not_attempted",
+        }),
+      ]);
+      const won = didCommitTerminalAttempt(commitResults);
+      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      if (won && result.outcome === "not_modified") {
+        publish({
+          kind: "feedNotModified",
+          feedId: feed.id,
+          newInterval,
+        });
+      }
+      return result;
     }
 
     if (response.status === 429) {
@@ -257,57 +291,64 @@ export function createFeedPoller(
         }
       }
       const errorMessage = "HTTP 429 (rate limited)";
-      await d
-        .update(feeds)
-        .set({
-          lastFetchedAt: now(),
-          checkIntervalMinutes: backoffMinutes,
-          lastError: errorMessage,
-        })
-        .where(eq(feeds.id, feed.id));
-      await completeAttempt(attempt.attemptId, {
-        outcome: "rate_limited",
-        httpStatus: 429,
-        parserStatus: "not_attempted",
-        diagnostic: errorMessage,
-      });
-      publish({
-        kind: "feedRateLimited",
-        feedId: feed.id,
-        backoffMinutes,
-      });
-      return {
-        feedId: feed.id,
-        feedTitle,
-        outcome: "rate_limited",
-      };
+      const completedAt = now();
+      const commitResults = await dbBinding.batch([
+        dbBinding
+          .prepare(
+            `UPDATE feeds
+                SET last_fetched_at = ?, check_interval_minutes = ?, last_error = ?
+              WHERE id = ? AND EXISTS (
+                SELECT 1 FROM feed_poll_attempts
+                 WHERE id = ? AND outcome IS NULL
+              )`,
+          )
+          .bind(
+            completedAt,
+            backoffMinutes,
+            errorMessage,
+            feed.id,
+            attempt.attemptId,
+          ),
+        terminalAttemptStatement(attempt.attemptId, completedAt, {
+          outcome: "rate_limited",
+          httpStatus: 429,
+          parserStatus: "not_attempted",
+          diagnostic: errorMessage,
+        }),
+      ]);
+      const won = didCommitTerminalAttempt(commitResults);
+      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      if (won && result.outcome === "rate_limited") {
+        publish({
+          kind: "feedRateLimited",
+          feedId: feed.id,
+          backoffMinutes,
+        });
+      }
+      return result;
     }
 
     if (!response.ok) {
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
-      await recordError(feed, errorMessage, errorClass);
-      await completeAttempt(attempt.attemptId, {
-        outcome: "failed",
+      const won = await commitFailure(feed, attempt.attemptId, {
+        diagnostic: errorMessage,
+        healthClass: errorClass,
         errorClass: "http",
         httpStatus: response.status,
         parserStatus: "not_attempted",
-        diagnostic: errorMessage,
       });
-      publish({
-        kind: "feedFetchFailed",
-        feedId: feed.id,
-        status: response.status,
-        error: errorMessage,
-      });
-      return {
-        feedId: feed.id,
-        feedTitle,
-        outcome: "failed",
-        errorClass: "http",
-        error: errorMessage,
-      };
+      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      if (won && result.outcome === "failed") {
+        publish({
+          kind: "feedFetchFailed",
+          feedId: feed.id,
+          status: response.status,
+          error: result.error,
+        });
+      }
+      return result;
     }
 
     let xml: string;
@@ -317,27 +358,23 @@ export function createFeedPoller(
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
-      await recordError(feed, errorMessage, "transient");
-      await completeAttempt(attempt.attemptId, {
-        outcome: "failed",
+      const won = await commitFailure(feed, attempt.attemptId, {
+        diagnostic: errorMessage,
+        healthClass: "transient",
         errorClass: "network",
         httpStatus: response.status,
         parserStatus: "not_attempted",
-        diagnostic: errorMessage,
       });
-      publish({
-        kind: "feedFetchFailed",
-        feedId: feed.id,
-        status: response.status,
-        error: errorMessage,
-      });
-      return {
-        feedId: feed.id,
-        feedTitle,
-        outcome: "failed",
-        errorClass: "network",
-        error: errorMessage,
-      };
+      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      if (won && result.outcome === "failed") {
+        publish({
+          kind: "feedFetchFailed",
+          feedId: feed.id,
+          status: response.status,
+          error: result.error,
+        });
+      }
+      return result;
     }
     const parser = new Parser({
       customFields: { item: [["content:encoded", "contentEncoded"]] },
@@ -355,26 +392,22 @@ export function createFeedPoller(
         parsed = fallback;
         parseStatus = "fallback";
       } else {
-        await recordError(feed, parserError, "transient");
-        await completeAttempt(attempt.attemptId, {
-          outcome: "failed",
+        const won = await commitFailure(feed, attempt.attemptId, {
+          diagnostic: parserError,
+          healthClass: "transient",
           errorClass: "parse",
           httpStatus: response.status,
           parserStatus: "failure",
-          diagnostic: parserError,
         });
-        publish({
-          kind: "feedParseFailed",
-          feedId: feed.id,
-          error: parserError,
-        });
-        return {
-          feedId: feed.id,
-          feedTitle,
-          outcome: "failed",
-          errorClass: "parse",
-          error: parserError,
-        };
+        const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+        if (won && result.outcome === "failed") {
+          publish({
+            kind: "feedParseFailed",
+            feedId: feed.id,
+            error: result.error,
+          });
+        }
+        return result;
       }
     }
 
@@ -382,7 +415,7 @@ export function createFeedPoller(
     const newLastModified = response.headers.get("Last-Modified");
     const time = now();
 
-    const itemRows = (
+    const itemRows: ItemCommitRow[] = (
       await Promise.all(
         (parsed.items ?? []).map(async (item: any) => {
           const guid = item.guid ?? item.link;
@@ -428,102 +461,239 @@ export function createFeedPoller(
           )
         : itemRows;
 
-    const itemInserts = toInsert.map((row) =>
-      d.insert(items).values(row).onConflictDoNothing(),
-    );
-    if (itemInserts.length > 0) {
-      await d.batch(itemInserts as unknown as [any, ...any[]]);
-    }
-    // Count durable attribution rather than this execution's insert changes.
-    // A retry after Item insertion but before completion reconstructs the same count.
-    const attributed = await d
-      .select({ count: count(items.id) })
-      .from(items)
-      .where(eq(items.firstIngestionAttemptId, attempt.attemptId));
-    const newItems = Number(attributed[0]?.count ?? 0);
-
     const feedTtlMinutes = parsed.ttl
       ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
       : 0;
-    const backoffInterval =
-      newItems > 0
-        ? MIN_INTERVAL_MINUTES
-        : Math.min(
-            feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
-            MAX_INTERVAL_MINUTES,
-          );
-    const newInterval = Math.max(backoffInterval, feedTtlMinutes);
-
-    const outcome = newItems > 0 ? "new_items" : "unchanged";
-    await d.batch([
-      d
-        .update(feedPollAttempts)
-        .set({
-          completedAt: now(),
-          outcome,
-          newItems,
-          httpStatus: response.status,
-          parserStatus: parseStatus,
-        })
-        .where(
-          and(
-            eq(feedPollAttempts.id, attempt.attemptId),
-            isNull(feedPollAttempts.outcome),
-          ),
+    const newItemsInterval = Math.max(MIN_INTERVAL_MINUTES, feedTtlMinutes);
+    const unchangedInterval = Math.max(
+      Math.min(
+        feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
+        MAX_INTERVAL_MINUTES,
+      ),
+      feedTtlMinutes,
+    );
+    const completedAt = now();
+    const itemJsonChunks = chunkItemRows(toInsert);
+    const commitStatements = itemJsonChunks.map((itemJson) =>
+      dbBinding
+        .prepare(
+          `INSERT INTO items
+            (id, feed_id, title, url, content, author, published_at, fetched_at,
+             first_ingestion_attempt_id)
+           SELECT json_extract(value, '$.id'),
+                  json_extract(value, '$.feedId'),
+                  json_extract(value, '$.title'),
+                  json_extract(value, '$.url'),
+                  json_extract(value, '$.content'),
+                  json_extract(value, '$.author'),
+                  json_extract(value, '$.publishedAt'),
+                  json_extract(value, '$.fetchedAt'),
+                  ?
+             FROM json_each(?)
+            WHERE EXISTS (
+              SELECT 1 FROM feed_poll_attempts
+               WHERE id = ? AND outcome IS NULL
+            )
+           ON CONFLICT(id) DO NOTHING`,
+        )
+        .bind(attempt.attemptId, itemJson, attempt.attemptId),
+    );
+    commitStatements.push(
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET last_fetched_at = ?,
+                  consecutive_errors = 0,
+                  last_error = NULL,
+                  check_interval_minutes = CASE WHEN EXISTS (
+                    SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
+                  ) THEN ? ELSE ? END,
+                  last_new_item_at = CASE WHEN EXISTS (
+                    SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
+                  ) THEN ? ELSE coalesce(last_new_item_at, ?) END,
+                  title = coalesce(title, ?),
+                  html_url = coalesce(html_url, ?),
+                  etag = coalesce(?, etag),
+                  last_modified = coalesce(?, last_modified)
+            WHERE id = ? AND EXISTS (
+              SELECT 1 FROM feed_poll_attempts
+               WHERE id = ? AND outcome IS NULL
+            )`,
+        )
+        .bind(
+          time,
+          attempt.attemptId,
+          newItemsInterval,
+          unchangedInterval,
+          attempt.attemptId,
+          time,
+          time,
+          parsed.title ?? null,
+          parsed.link ?? null,
+          newEtag,
+          newLastModified,
+          feed.id,
+          attempt.attemptId,
         ),
-      d
-        .update(feeds)
-        .set({
-          lastFetchedAt: time,
-          consecutiveErrors: 0,
-          lastError: null,
-          checkIntervalMinutes: newInterval,
-          lastNewItemAt: newItems > 0 ? time : (feed.lastNewItemAt ?? time),
-          ...(feed.title == null && parsed.title != null
-            ? { title: parsed.title }
-            : {}),
-          ...(feed.htmlUrl == null && parsed.link != null
-            ? { htmlUrl: parsed.link }
-            : {}),
-          ...(newEtag != null ? { etag: newEtag } : {}),
-          ...(newLastModified != null ? { lastModified: newLastModified } : {}),
-        })
-        .where(eq(feeds.id, feed.id)),
-    ]);
+      dbBinding
+        .prepare(
+          `UPDATE feed_poll_attempts
+              SET completed_at = ?,
+                  outcome = CASE WHEN EXISTS (
+                    SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
+                  ) THEN 'new_items' ELSE 'unchanged' END,
+                  new_items = (
+                    SELECT count(*) FROM items
+                     WHERE first_ingestion_attempt_id = ?
+                  ),
+                  http_status = ?, parser_status = ?
+            WHERE id = ? AND outcome IS NULL`,
+        )
+        .bind(
+          completedAt,
+          attempt.attemptId,
+          attempt.attemptId,
+          response.status,
+          parseStatus,
+          attempt.attemptId,
+        ),
+    );
+    const commitResults = await dbBinding.batch(commitStatements);
+    const won = didCommitTerminalAttempt(commitResults);
 
-    publish({
-      kind: "feedPolled",
-      feedId: feed.id,
-      newItems,
-      durationMs: now() - start,
-      parseStatus,
-    });
-
-    return { feedId: feed.id, feedTitle, outcome, newItems };
+    const committed = await loadAttempt(attempt.attemptId);
+    const result = resultFromAttempt(feed.id, feedTitle, committed);
+    if (
+      won &&
+      (result.outcome === "new_items" || result.outcome === "unchanged")
+    ) {
+      publish({
+        kind: "feedPolled",
+        feedId: feed.id,
+        newItems: result.newItems,
+        durationMs: now() - start,
+        parseStatus,
+      });
+    }
+    return result;
   }
 
-  /** Records one terminal attempt without overwriting an earlier completion. */
-  async function completeAttempt(
+  /** Reads the terminal result after a commit, including after an ambiguous response. */
+  async function loadAttempt(attemptId: string): Promise<{
+    outcome: FeedAttemptOutcome;
+    newItems: number;
+    errorClass: FeedAttemptErrorClass | null;
+    diagnostic: string | null;
+  }> {
+    const rows = await d
+      .select({
+        outcome: feedPollAttempts.outcome,
+        newItems: feedPollAttempts.newItems,
+        errorClass: feedPollAttempts.errorClass,
+        diagnostic: feedPollAttempts.diagnostic,
+      })
+      .from(feedPollAttempts)
+      .where(eq(feedPollAttempts.id, attemptId));
+    if (rows[0]?.outcome == null) {
+      throw new Error(`Logical attempt ${attemptId} did not complete`);
+    }
+    return { ...rows[0], outcome: rows[0].outcome };
+  }
+
+  /** Returns the winner when overlapping runtime retries race to completion. */
+  async function loadResult(
     attemptId: string,
+    feedId: string,
+    feedTitle: string,
+  ): Promise<FeedPollResult> {
+    return resultFromAttempt(feedId, feedTitle, await loadAttempt(attemptId));
+  }
+
+  /** Commits Feed error health and its failed attempt in one D1 transaction. */
+  async function commitFailure(
+    feed: FeedToCheck,
+    attemptId: string,
+    failure: {
+      diagnostic: string;
+      healthClass: ErrorClass;
+      errorClass: FeedAttemptErrorClass;
+      httpStatus: number | null;
+      parserStatus: "not_attempted" | "failure";
+    },
+  ): Promise<boolean> {
+    const threshold =
+      failure.healthClass === "permanent"
+        ? PERMANENT_ERROR_THRESHOLD
+        : TRANSIENT_ERROR_THRESHOLD;
+    const nextErrorCount = feed.consecutiveErrors + 1;
+    const completedAt = now();
+    const commitResults = await dbBinding.batch([
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET consecutive_errors = ?, last_error = ?, last_fetched_at = ?,
+                  deactivated_at = CASE WHEN ? >= ? THEN ? ELSE deactivated_at END
+            WHERE id = ? AND EXISTS (
+              SELECT 1 FROM feed_poll_attempts
+               WHERE id = ? AND outcome IS NULL
+            )`,
+        )
+        .bind(
+          nextErrorCount,
+          failure.diagnostic,
+          completedAt,
+          nextErrorCount,
+          threshold,
+          completedAt,
+          feed.id,
+          attemptId,
+        ),
+      terminalAttemptStatement(attemptId, completedAt, {
+        outcome: "failed",
+        errorClass: failure.errorClass,
+        httpStatus: failure.httpStatus,
+        parserStatus: failure.parserStatus,
+        diagnostic: failure.diagnostic,
+      }),
+    ]);
+    const won = didCommitTerminalAttempt(commitResults);
+    if (won && nextErrorCount >= threshold) {
+      publish({
+        kind: "feedDeactivated",
+        feedId: feed.id,
+        consecutiveErrors: nextErrorCount,
+      });
+    }
+    return won;
+  }
+
+  /** Creates the guarded terminal write shared by non-ingestion outcomes. */
+  function terminalAttemptStatement(
+    attemptId: string,
+    completedAt: number,
     values: {
-      outcome: "not_modified" | "rate_limited" | "failed" | "skipped";
+      outcome: "not_modified" | "rate_limited" | "failed";
       errorClass?: FeedAttemptErrorClass;
-      httpStatus?: number;
+      httpStatus?: number | null;
       parserStatus: "not_attempted" | "failure";
       diagnostic?: string;
     },
-  ): Promise<void> {
-    await d
-      .update(feedPollAttempts)
-      .set({
-        ...values,
-        completedAt: now(),
-      })
-      .where(
-        and(
-          eq(feedPollAttempts.id, attemptId),
-          isNull(feedPollAttempts.outcome),
-        ),
+  ): D1PreparedStatement {
+    return dbBinding
+      .prepare(
+        `UPDATE feed_poll_attempts
+            SET completed_at = ?, outcome = ?, error_class = ?, http_status = ?,
+                parser_status = ?, diagnostic = ?
+          WHERE id = ? AND outcome IS NULL`,
+      )
+      .bind(
+        completedAt,
+        values.outcome,
+        values.errorClass ?? null,
+        values.httpStatus ?? null,
+        values.parserStatus,
+        values.diagnostic ?? null,
+        attemptId,
       );
   }
 
@@ -535,35 +705,39 @@ export function createFeedPoller(
       // Observers are best effort and cannot alter a committed domain outcome.
     }
   }
+}
 
-  async function recordError(
-    feed: FeedToCheck,
-    errorMessage: string,
-    errorClass: ErrorClass,
-  ): Promise<void> {
-    const threshold =
-      errorClass === "permanent"
-        ? PERMANENT_ERROR_THRESHOLD
-        : TRANSIENT_ERROR_THRESHOLD;
-    const next = feed.consecutiveErrors + 1;
-    const deactivate = next >= threshold;
-    await d
-      .update(feeds)
-      .set({
-        consecutiveErrors: next,
-        lastError: errorMessage,
-        lastFetchedAt: now(),
-        ...(deactivate ? { deactivatedAt: now() } : {}),
-      })
-      .where(eq(feeds.id, feed.id));
-    if (deactivate) {
-      publish({
-        kind: "feedDeactivated",
-        feedId: feed.id,
-        consecutiveErrors: next,
-      });
+/** Reports whether this runtime retry performed the terminal guarded write. */
+function didCommitTerminalAttempt(results: D1Result[]): boolean {
+  return (results[results.length - 1]?.meta.changes ?? 0) > 0;
+}
+
+/** Packs Item rows below D1's 2 MB bound-value limit for one atomic batch. */
+function chunkItemRows(rows: ItemCommitRow[]): string[] {
+  const encoder = new TextEncoder();
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentBytes = 2;
+
+  for (const row of rows) {
+    const serialized = JSON.stringify(row);
+    const rowBytes = encoder.encode(serialized).length;
+    const separatorBytes = current.length === 0 ? 0 : 1;
+    if (
+      current.length > 0 &&
+      currentBytes + separatorBytes + rowBytes > MAX_D1_JSON_PARAMETER_BYTES
+    ) {
+      chunks.push(`[${current.join(",")}]`);
+      current = [];
+      currentBytes = 2;
     }
+    current.push(serialized);
+    currentBytes += (current.length === 1 ? 0 : 1) + rowBytes;
   }
+  if (current.length > 0) {
+    chunks.push(`[${current.join(",")}]`);
+  }
+  return chunks;
 }
 
 /** Reconstructs a completed logical attempt for a Workflow step retry. */

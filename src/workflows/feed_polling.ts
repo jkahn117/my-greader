@@ -23,9 +23,9 @@ import {
 
 type Params = { force?: boolean; triggerReason?: PollTriggerReason };
 
-// Each Feed uses up to five subrequests: attempt start/replay check, HTTP,
-// Item insertion, attribution count, and completion. Eight concurrent Feeds
-// stay below the 50-subrequest budget with headroom for metrics delivery.
+// Each Feed uses up to four subrequests: attempt start/replay check, HTTP,
+// atomic D1 completion, and committed-result read. Eight concurrent Feeds stay
+// below the 50-subrequest budget with headroom for metrics delivery.
 const FEEDS_PER_STEP = 8;
 
 // ---------------------------------------------------------------------------
@@ -482,7 +482,9 @@ async function pollWorkflow(
           failedFeeds,
           skippedFeeds,
         })
-        .where(eq(cycleRuns.id, cycleRunId));
+        .where(
+          and(eq(cycleRuns.id, cycleRunId), eq(cycleRuns.status, "running")),
+        );
 
       metrics.recordCycle({
         totalActiveFeeds,
