@@ -34,7 +34,10 @@ any feed is currently erroring or deactivated. Each feed row shows:
 
 - A **status badge** (yellow = N errors, red = Deactivated)
 - The **last error message** inline under the feed title
-- The **poll interval** (backs off as errors accumulate)
+- The last successful check and last precise new-Item discovery
+- Whether initial backload completed
+- The **poll interval** and next eligibility time
+- The recorded Deactivation reason
 
 From here you can **Reactivate** a deactivated feed or **Deactivate** one manually.
 
@@ -81,7 +84,10 @@ wrangler tail | jq 'select(.httpStatus == 404)'
 Query the `feeds` table directly to find feeds with errors:
 
 ```sql
-SELECT title, feed_url, consecutive_errors, last_error, deactivated_at
+SELECT title, feed_url, last_successful_poll_at,
+       last_new_item_discovered_at, initial_backload_completed_at,
+       next_poll_at, consecutive_errors, last_error,
+       deactivated_at, deactivation_reason
 FROM feeds
 WHERE consecutive_errors > 0 OR deactivated_at IS NOT NULL
 ORDER BY consecutive_errors DESC;
@@ -135,8 +141,9 @@ The backoff is working as designed to avoid hammering low-volume feeds.
 ## Reset tools
 
 - **Reactivate a feed**: Feed tab → click "Reactivate" next to the deactivated feed.
-  This resets `consecutiveErrors`, `lastError`, `deactivatedAt`, and
-  `checkIntervalMinutes` to defaults. The feed will be fetched on the next cycle.
+  This resets `consecutiveErrors`, `lastError`, `deactivatedAt`,
+  `deactivationReason`, `checkIntervalMinutes`, and `nextPollAt`. The Feed will
+  be eligible on the next cycle.
 
 - **Sync now**: Feed tab → click "Sync now" to trigger an immediate polling
   cycle for all due feeds without waiting for the 30-minute cron.

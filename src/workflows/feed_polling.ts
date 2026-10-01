@@ -169,10 +169,12 @@ async function pollWorkflow(
           htmlUrl: feeds.htmlUrl,
           etag: feeds.etag,
           lastModified: feeds.lastModified,
-          lastFetchedAt: feeds.lastFetchedAt,
+          lastSuccessfulPollAt: feeds.lastSuccessfulPollAt,
+          lastNewItemDiscoveredAt: feeds.lastNewItemDiscoveredAt,
+          initialBackloadCompletedAt: feeds.initialBackloadCompletedAt,
+          nextPollAt: feeds.nextPollAt,
           consecutiveErrors: feeds.consecutiveErrors,
           checkIntervalMinutes: feeds.checkIntervalMinutes,
-          lastNewItemAt: feeds.lastNewItemAt,
         })
         .from(feeds)
         .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
@@ -181,16 +183,10 @@ async function pollWorkflow(
             ? isNull(feeds.deactivatedAt)
             : and(
                 isNull(feeds.deactivatedAt),
-                or(
-                  isNull(feeds.lastFetchedAt),
-                  lte(
-                    sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                    now,
-                  ),
-                ),
+                or(isNull(feeds.nextPollAt), lte(feeds.nextPollAt, now)),
               ),
         )
-        .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`));
+        .orderBy(asc(sql`coalesce(${feeds.nextPollAt}, 0)`));
 
       const [due, activeCount] = await db.batch([
         dueQuery,

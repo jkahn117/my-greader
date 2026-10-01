@@ -39,6 +39,8 @@ the concrete logger and metrics implementations.
 
 New Items store a nullable `first_ingestion_attempt_id`. The polling insert sets it once, and conflict handling never replaces it when a later attempt sees the same Item. Items that predate migration `0006_poll_traceability.sql` retain `NULL`; the application does not infer attribution from `fetched_at`.
 
+Feed polling state uses separate columns for `last_successful_poll_at`, `last_new_item_discovered_at`, `initial_backload_completed_at`, `next_poll_at`, and `deactivation_reason`. `poll_state_origin` distinguishes explicit state from inferred or uncertain legacy history. The old `last_fetched_at` and `last_new_item_at` columns remain only for rollback compatibility and receive no new reads or writes.
+
 See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 
 ## Request routing
@@ -63,7 +65,11 @@ that maps domain events to logger, metrics, and wide events.  The module
 handles conditional requests (ETag/Last-Modified), rate limiting (429 with
 Retry-After), two-tier error deactivation (2 strikes for permanent errors
 like 404/410, 5 for transient), lenient fallback parsing, and adaptive
-interval backoff (30 → 240 minutes).
+interval backoff (30 → 240 minutes). Eligibility queries use the persisted
+`next_poll_at`; forced runs bypass that timestamp but still honor Deactivation.
+A successful parse completes initial backload even when the Feed is empty.
+Later ingestion uses the last precise new-Item discovery, or initial completion
+when no Item has been found, as the 24-hour backload anchor.
 
 The Workflow instance ID is the Cycle Run ID. A logical attempt ID combines that stable instance ID with the Feed ID. Runtime retries do not get new attempt IDs, so every retry addresses the same record. The Workflow always creates a Cycle Run, including a completed `empty` run when no active subscribed Feed is eligible. `FeedPoller` creates an in-progress attempt before HTTP work and commits one of `new_items`, `unchanged`, `not_modified`, `rate_limited`, or `failed`. A retry returns an existing terminal attempt without repeating HTTP. Failed attempts use stable `network`, `http`, or `parse` classifications and store diagnostics redacted and capped at 500 characters. A null attempt outcome or a running Cycle Run means work did not complete.
 

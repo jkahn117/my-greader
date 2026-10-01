@@ -18,6 +18,7 @@ import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import {
   feedPollAttempts,
+  feeds,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
 } from "../db/schema";
@@ -35,6 +36,17 @@ const POLL_LEASE_MS = 5 * 60 * 1000;
 const PERMANENT_ERROR_STATUSES = new Set([401, 403, 404, 410]);
 
 type ErrorClass = "transient" | "permanent";
+
+export type FeedDeactivationReason =
+  | "manual"
+  | "automatic_transient"
+  | "automatic_permanent"
+  | "legacy_unknown";
+
+export type PollStateOrigin =
+  | "explicit"
+  | "legacy_inferred"
+  | "legacy_uncertain";
 
 type ItemCommitRow = {
   id: string;
@@ -55,10 +67,12 @@ export type FeedToCheck = {
   htmlUrl: string | null;
   etag: string | null;
   lastModified: string | null;
-  lastFetchedAt: number | null;
+  lastSuccessfulPollAt: number | null;
+  lastNewItemDiscoveredAt: number | null;
+  initialBackloadCompletedAt: number | null;
+  nextPollAt: number | null;
   consecutiveErrors: number;
   checkIntervalMinutes: number;
-  lastNewItemAt: number | null;
 };
 
 export type FeedPollResult =
@@ -121,6 +135,42 @@ export type PollAttemptContext = {
 
 export interface FeedPoller {
   poll(feed: FeedToCheck, attempt: PollAttemptContext): Promise<FeedPollResult>;
+}
+
+export interface FeedHealth {
+  deactivate(feedId: string): Promise<void>;
+  reactivate(feedId: string): Promise<void>;
+}
+
+/** Owns manual Feed health transitions after an adapter authorizes the User. */
+export function createFeedHealth(
+  dbBinding: D1Database,
+  now: () => number,
+): FeedHealth {
+  const d = getDb(dbBinding);
+
+  return { deactivate, reactivate };
+
+  async function deactivate(feedId: string): Promise<void> {
+    await d
+      .update(feeds)
+      .set({ deactivatedAt: now(), deactivationReason: "manual" })
+      .where(eq(feeds.id, feedId));
+  }
+
+  async function reactivate(feedId: string): Promise<void> {
+    await d
+      .update(feeds)
+      .set({
+        deactivatedAt: null,
+        deactivationReason: null,
+        consecutiveErrors: 0,
+        lastError: null,
+        checkIntervalMinutes: MIN_INTERVAL_MINUTES,
+        nextPollAt: null,
+      })
+      .where(eq(feeds.id, feedId));
+  }
 }
 
 // Returns a poller that fetches and stores one feed at a time.
@@ -273,8 +323,10 @@ export function createFeedPoller(
       dbBinding
         .prepare(
           `SELECT feed_url, title, html_url, etag, last_modified,
-                  last_fetched_at, consecutive_errors, check_interval_minutes,
-                  last_new_item_at, deactivated_at, poll_owner_attempt_id,
+                  last_successful_poll_at, last_new_item_discovered_at,
+                  initial_backload_completed_at, next_poll_at,
+                  consecutive_errors, check_interval_minutes,
+                  deactivated_at, poll_owner_attempt_id,
                   poll_lease_expires_at, poll_fence
              FROM feeds WHERE id = ?`,
         )
@@ -298,10 +350,12 @@ export function createFeedPoller(
           html_url: string | null;
           etag: string | null;
           last_modified: string | null;
-          last_fetched_at: number | null;
+          last_successful_poll_at: number | null;
+          last_new_item_discovered_at: number | null;
+          initial_backload_completed_at: number | null;
+          next_poll_at: number | null;
           consecutive_errors: number;
           check_interval_minutes: number;
-          last_new_item_at: number | null;
           deactivated_at: number | null;
           poll_owner_attempt_id: string | null;
           poll_lease_expires_at: number | null;
@@ -349,10 +403,12 @@ export function createFeedPoller(
       htmlUrl: currentFeed.html_url,
       etag: currentFeed.etag,
       lastModified: currentFeed.last_modified,
-      lastFetchedAt: currentFeed.last_fetched_at,
+      lastSuccessfulPollAt: currentFeed.last_successful_poll_at,
+      lastNewItemDiscoveredAt: currentFeed.last_new_item_discovered_at,
+      initialBackloadCompletedAt: currentFeed.initial_backload_completed_at,
+      nextPollAt: currentFeed.next_poll_at,
       consecutiveErrors: currentFeed.consecutive_errors,
       checkIntervalMinutes: currentFeed.check_interval_minutes,
-      lastNewItemAt: currentFeed.last_new_item_at,
     };
     feedTitle = feed.title ?? feed.feedUrl;
 
@@ -399,7 +455,8 @@ export function createFeedPoller(
         dbBinding
           .prepare(
             `UPDATE feeds
-                SET last_fetched_at = ?, check_interval_minutes = ?
+                SET last_successful_poll_at = ?, check_interval_minutes = ?,
+                    next_poll_at = ?
               WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
                 AND poll_lease_expires_at > ?
                 AND EXISTS (
@@ -410,6 +467,7 @@ export function createFeedPoller(
           .bind(
             completedAt,
             newInterval,
+            completedAt + newInterval * 60_000,
             feed.id,
             attempt.attemptId,
             ownershipFence,
@@ -466,7 +524,7 @@ export function createFeedPoller(
         dbBinding
           .prepare(
             `UPDATE feeds
-                SET last_fetched_at = ?, check_interval_minutes = ?, last_error = ?
+                SET check_interval_minutes = ?, last_error = ?, next_poll_at = ?
               WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
                 AND poll_lease_expires_at > ?
                 AND EXISTS (
@@ -475,9 +533,9 @@ export function createFeedPoller(
                 )`,
           )
           .bind(
-            completedAt,
             backoffMinutes,
             errorMessage,
+            completedAt + backoffMinutes * 60_000,
             feed.id,
             attempt.attemptId,
             ownershipFence,
@@ -636,14 +694,15 @@ export function createFeedPoller(
       )
     ).filter((r): r is NonNullable<typeof r> => r !== null);
 
-    // After the initial backload, only insert items published recently
-    // enough to prevent re-backloading purged items from long-tail feeds.
+    // A completed initial backload gates later inserts to a moving 24-hour
+    // window, even when the first successful parse contained no Items.
     const BACKLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
-    const lastNew = feed.lastNewItemAt;
+    const backloadAnchor =
+      feed.lastNewItemDiscoveredAt ?? feed.initialBackloadCompletedAt;
     const toInsert =
-      lastNew != null
+      feed.initialBackloadCompletedAt != null && backloadAnchor != null
         ? itemRows.filter(
-            (row) => row.publishedAt >= lastNew - BACKLOAD_WINDOW_MS,
+            (row) => row.publishedAt >= backloadAnchor - BACKLOAD_WINDOW_MS,
           )
         : itemRows;
 
@@ -701,15 +760,19 @@ export function createFeedPoller(
       dbBinding
         .prepare(
           `UPDATE feeds
-              SET last_fetched_at = ?,
+              SET last_successful_poll_at = ?,
+                  initial_backload_completed_at = coalesce(initial_backload_completed_at, ?),
                   consecutive_errors = 0,
                   last_error = NULL,
                   check_interval_minutes = CASE WHEN EXISTS (
                     SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
                   ) THEN ? ELSE ? END,
-                  last_new_item_at = CASE WHEN EXISTS (
+                  last_new_item_discovered_at = CASE WHEN EXISTS (
                     SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
-                  ) THEN ? ELSE coalesce(last_new_item_at, ?) END,
+                  ) THEN ? ELSE last_new_item_discovered_at END,
+                  next_poll_at = ? + 60000 * CASE WHEN EXISTS (
+                    SELECT 1 FROM items WHERE first_ingestion_attempt_id = ?
+                  ) THEN ? ELSE ? END,
                   title = coalesce(title, ?),
                   html_url = coalesce(html_url, ?),
                   etag = coalesce(?, etag),
@@ -722,13 +785,17 @@ export function createFeedPoller(
               )`,
         )
         .bind(
-          time,
+          completedAt,
+          completedAt,
           attempt.attemptId,
           newItemsInterval,
           unchangedInterval,
           attempt.attemptId,
-          time,
-          time,
+          completedAt,
+          completedAt,
+          attempt.attemptId,
+          newItemsInterval,
+          unchangedInterval,
           parsed.title ?? null,
           parsed.link ?? null,
           newEtag,
@@ -868,8 +935,9 @@ export function createFeedPoller(
       dbBinding
         .prepare(
           `UPDATE feeds
-              SET consecutive_errors = ?, last_error = ?, last_fetched_at = ?,
-                  deactivated_at = CASE WHEN ? >= ? THEN ? ELSE deactivated_at END
+              SET consecutive_errors = ?, last_error = ?, next_poll_at = ?,
+                  deactivated_at = CASE WHEN ? >= ? THEN ? ELSE deactivated_at END,
+                  deactivation_reason = CASE WHEN ? >= ? THEN ? ELSE deactivation_reason END
             WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
               AND poll_lease_expires_at > ?
               AND EXISTS (
@@ -880,10 +948,15 @@ export function createFeedPoller(
         .bind(
           nextErrorCount,
           failure.diagnostic,
-          completedAt,
+          completedAt + feed.checkIntervalMinutes * 60_000,
           nextErrorCount,
           threshold,
           completedAt,
+          nextErrorCount,
+          threshold,
+          failure.healthClass === "permanent"
+            ? "automatic_permanent"
+            : "automatic_transient",
           feed.id,
           attemptId,
           ownershipFence,

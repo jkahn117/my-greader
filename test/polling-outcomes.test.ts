@@ -62,10 +62,12 @@ function feedInput(
     htmlUrl: null,
     etag: null,
     lastModified: null,
-    lastFetchedAt: null,
+    lastSuccessfulPollAt: null,
+    lastNewItemDiscoveredAt: null,
+    initialBackloadCompletedAt: null,
+    nextPollAt: null,
     consecutiveErrors: 0,
     checkIntervalMinutes: 30,
-    lastNewItemAt: null,
     ...overrides,
   };
 }
@@ -80,10 +82,12 @@ async function seedAttempt(feed: FeedToCheck, cycleRunId: string) {
     htmlUrl: feed.htmlUrl,
     etag: feed.etag,
     lastModified: feed.lastModified,
-    lastFetchedAt: feed.lastFetchedAt,
+    lastSuccessfulPollAt: feed.lastSuccessfulPollAt,
+    lastNewItemDiscoveredAt: feed.lastNewItemDiscoveredAt,
+    initialBackloadCompletedAt: feed.initialBackloadCompletedAt,
+    nextPollAt: feed.nextPollAt,
     consecutiveErrors: feed.consecutiveErrors,
     checkIntervalMinutes: feed.checkIntervalMinutes,
-    lastNewItemAt: feed.lastNewItemAt,
   });
   await db.insert(cycleRuns).values({
     id: cycleRunId,
@@ -119,6 +123,39 @@ beforeEach(async () => {
 });
 
 describe("durable Feed attempt outcomes", () => {
+  it("completes an empty initial backload without claiming a new Item", async () => {
+    const checkedAt = 1_735_732_800_000;
+    const feed = feedInput("empty-initial");
+    await seedAttempt(feed, "cycle-empty-initial");
+    const poller = createFeedPoller(
+      env.DB,
+      { get: async () => new Response(EMPTY_RSS) },
+      { publish() {} },
+      () => checkedAt,
+    );
+
+    await expect(
+      poller.poll(feed, {
+        cycleRunId: "cycle-empty-initial",
+        attemptId: "attempt-empty-initial",
+      }),
+    ).resolves.toMatchObject({ outcome: "unchanged", newItems: 0 });
+
+    const stored = await env.DB.prepare(
+      `SELECT last_successful_poll_at, last_new_item_discovered_at,
+              initial_backload_completed_at, next_poll_at
+         FROM feeds WHERE id = ?`,
+    )
+      .bind(feed.id)
+      .first();
+    expect(stored).toEqual({
+      last_successful_poll_at: checkedAt,
+      last_new_item_discovered_at: null,
+      initial_backload_completed_at: checkedAt,
+      next_poll_at: checkedAt + 60 * 60 * 1000,
+    });
+  });
+
   it("commits no-new-Items separately from conditional not-modified", async () => {
     const unchanged = feedInput("unchanged");
     const notModified = feedInput("not-modified", { etag: 'W/"known"' });
@@ -673,7 +710,7 @@ describe("durable Feed attempt outcomes", () => {
     await seedAttempt(feed, "cycle-atomic-failure");
     await env.DB.prepare(`CREATE TRIGGER fail_feed_completion
       BEFORE UPDATE ON feeds
-      WHEN NEW.last_fetched_at IS NOT NULL
+      WHEN NEW.last_successful_poll_at IS NOT NULL
       BEGIN
         SELECT RAISE(ABORT, 'injected completion failure');
       END`).run();
@@ -698,7 +735,7 @@ describe("durable Feed attempt outcomes", () => {
       "SELECT count(*) AS count FROM items",
     ).first<{ count: number }>();
     const persistedFeed = await env.DB.prepare(
-      `SELECT last_fetched_at, consecutive_errors, check_interval_minutes
+      `SELECT last_successful_poll_at, consecutive_errors, check_interval_minutes
          FROM feeds WHERE id = ?`,
     )
       .bind(feed.id)
@@ -710,7 +747,7 @@ describe("durable Feed attempt outcomes", () => {
       completed_at: null,
     });
     expect(persistedFeed).toEqual({
-      last_fetched_at: null,
+      last_successful_poll_at: null,
       consecutive_errors: 2,
       check_interval_minutes: 60,
     });
@@ -720,6 +757,75 @@ describe("durable Feed attempt outcomes", () => {
       newItems: 1,
     });
     expect(transport.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses explicit backload completion to admit late Items and reject purged old Items", async () => {
+    const firstCheck = 1_735_732_800_000;
+    let currentTime = firstCheck;
+    const feed = feedInput("backload-policy");
+    await seedAttempt(feed, "cycle-empty-backload");
+    const transport = { get: vi.fn(async () => new Response(EMPTY_RSS)) };
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      { publish() {} },
+      () => currentTime,
+    );
+
+    await poller.poll(feed, {
+      cycleRunId: "cycle-empty-backload",
+      attemptId: "attempt-empty-backload",
+    });
+
+    currentTime += 2 * 60 * 60 * 1000;
+    await getDb(env.DB).insert(cycleRuns).values({
+      id: "cycle-late-items",
+      ranAt: currentTime,
+      startedAt: currentTime,
+      triggerReason: "forced",
+      status: "running",
+    });
+    transport.get.mockResolvedValueOnce(
+      new Response(`<?xml version="1.0"?><rss version="2.0"><channel>
+        <title>Late Feed</title><link>https://example.com</link>
+        <item><title>Late Item</title><link>https://example.com/late</link>
+          <guid>late-item</guid><pubDate>${new Date(firstCheck - 60 * 60 * 1000).toUTCString()}</pubDate></item>
+        <item><title>Purged Old Item</title><link>https://example.com/old</link>
+          <guid>purged-old-item</guid><pubDate>${new Date(firstCheck - 25 * 60 * 60 * 1000).toUTCString()}</pubDate></item>
+      </channel></rss>`),
+    );
+    const refreshedFeed = await getDb(env.DB)
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id))
+      .get();
+
+    await expect(
+      poller.poll(refreshedFeed as FeedToCheck, {
+        cycleRunId: "cycle-late-items",
+        attemptId: "attempt-late-items",
+      }),
+    ).resolves.toMatchObject({ outcome: "new_items", newItems: 1 });
+
+    const stored = await env.DB.prepare(
+      `SELECT title FROM items WHERE feed_id = ? ORDER BY title`,
+    )
+      .bind(feed.id)
+      .all();
+    expect(stored.results).toEqual([{ title: "Late Item" }]);
+    const state = await env.DB.prepare(
+      `SELECT last_successful_poll_at, last_new_item_discovered_at,
+              initial_backload_completed_at, next_poll_at
+         FROM feeds WHERE id = ?`,
+    )
+      .bind(feed.id)
+      .first();
+    expect(state).toEqual({
+      last_successful_poll_at: currentTime,
+      last_new_item_discovered_at: currentTime,
+      initial_backload_completed_at: firstCheck,
+      next_poll_at: currentTime + 30 * 60 * 1000,
+    });
   });
 
   it("atomically completes a large Feed and replays its committed result", async () => {
@@ -821,13 +927,13 @@ describe("Cycle Run outcomes", () => {
         id: "due-feed",
         feedUrl: "https://due.example/feed.xml",
         title: "Due Feed",
-        lastFetchedAt: null,
+        nextPollAt: null,
       },
       {
         id: "not-due-feed",
         feedUrl: "https://not-due.example/feed.xml",
         title: "Not Due Feed",
-        lastFetchedAt: now,
+        nextPollAt: now + 240 * 60_000,
         checkIntervalMinutes: 240,
       },
       {

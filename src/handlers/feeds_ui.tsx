@@ -1,12 +1,10 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { feeds } from "../db/schema";
 import {
   createSubscriptionLifecycle,
   type SubObserver,
 } from "../feed/subscriptions";
+import { createFeedHealth } from "../feed/poll";
 import { triggerFeedPollingWorkflow } from "./cron";
 import { App } from "../views/app";
 import { FeedRow, FeedTab } from "../views/feeds";
@@ -82,7 +80,6 @@ handler.post("/feeds/:id/reactivate", async (c) => {
   const { id } = c.req.param();
   const userId = c.get("userId");
   const logger = createLogger({ path: `/feeds/${id}/reactivate`, userId });
-  const db = getDb(c.env.DB);
 
   // Verify the feed belongs to one of this user's subscriptions
   const noop: SubObserver = { publish: () => {} };
@@ -90,15 +87,7 @@ handler.post("/feeds/:id/reactivate", async (c) => {
   const sub = await lifecycle.get(userId, id);
   if (!sub) return c.text("Not found", 404);
 
-  await db
-    .update(feeds)
-    .set({
-      deactivatedAt: null,
-      consecutiveErrors: 0,
-      lastError: null,
-      checkIntervalMinutes: 30,
-    })
-    .where(eq(feeds.id, id));
+  await createFeedHealth(c.env.DB, () => Date.now()).reactivate(id);
 
   logger.info("feed reactivated", { feedId: id });
 
@@ -116,17 +105,13 @@ handler.post("/feeds/:id/deactivate", async (c) => {
   const { id } = c.req.param();
   const userId = c.get("userId");
   const logger = createLogger({ path: `/feeds/${id}/deactivate`, userId });
-  const db = getDb(c.env.DB);
 
   const noop: SubObserver = { publish: () => {} };
   const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
   const sub = await lifecycle.get(userId, id);
   if (!sub) return c.text("Not found", 404);
 
-  await db
-    .update(feeds)
-    .set({ deactivatedAt: Date.now() })
-    .where(eq(feeds.id, id));
+  await createFeedHealth(c.env.DB, () => Date.now()).deactivate(id);
 
   logger.info("feed deactivated", { feedId: id });
 

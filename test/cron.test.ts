@@ -153,10 +153,12 @@ describe("FeedPoller", () => {
     htmlUrl: null,
     etag: null,
     lastModified: null,
-    lastFetchedAt: null,
+    lastSuccessfulPollAt: null,
+    lastNewItemDiscoveredAt: null,
+    initialBackloadCompletedAt: null,
+    nextPollAt: null,
     consecutiveErrors: 0,
     checkIntervalMinutes: 30,
-    lastNewItemAt: null,
     ...overrides,
   });
 
@@ -275,7 +277,7 @@ describe("FeedPoller", () => {
     expect(stored[0].title).toBe("Atom Article");
   });
 
-  it("skips parsing on 304 and updates lastFetchedAt", async () => {
+  it("skips parsing on 304 and records a successful check", async () => {
     const transport = mockTransport304();
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
@@ -287,14 +289,14 @@ describe("FeedPoller", () => {
 
     const db = getDb(env.DB);
     const row = await db
-      .select({ lastFetchedAt: feeds.lastFetchedAt })
+      .select({ lastSuccessfulPollAt: feeds.lastSuccessfulPollAt })
       .from(feeds)
       .get();
 
     const stored = await db.select().from(items).all();
     expect(stored).toHaveLength(0);
 
-    expect(row?.lastFetchedAt).toBeGreaterThanOrEqual(before);
+    expect(row?.lastSuccessfulPollAt).toBeGreaterThanOrEqual(before);
   });
 
   it("sends If-None-Match header when etag is stored", async () => {
@@ -412,10 +414,10 @@ describe("FeedPoller", () => {
     // Old feed that was first polled 31 days ago (beyond retention)
     const lastPoll = Date.now() - 31 * 24 * 60 * 60 * 1000;
     const feedId = await seedFeed("https://example.com/old-feed.xml");
-    // Set lastNewItemAt to simulate a prior poll that already backloaded
+    // Record a prior completed initial backload without inventing new-Item activity.
     await db
       .update(feeds)
-      .set({ lastNewItemAt: lastPoll })
+      .set({ initialBackloadCompletedAt: lastPoll })
       .where(eq(feeds.id, feedId));
 
     // Transport returns the standard feed (two items from Jan 2024)
@@ -429,11 +431,11 @@ describe("FeedPoller", () => {
       feedRow({
         id: feedId,
         feedUrl: "https://example.com/old-feed.xml",
-        lastNewItemAt: lastPoll,
+        initialBackloadCompletedAt: lastPoll,
       }),
     );
 
-    // The RSS items are from Jan 2024 — well before lastNewItemAt - window.
+    // The RSS items are from Jan 2024, before the backload window.
     // They should be filtered out by the backload gate.
     expect(result.outcome).toBe("unchanged");
     if (result.outcome === "unchanged") expect(result.newItems).toBe(0);
@@ -509,10 +511,12 @@ describe("FeedPoller error handling", () => {
     htmlUrl: null,
     etag: null,
     lastModified: null,
-    lastFetchedAt: null,
+    lastSuccessfulPollAt: null,
+    lastNewItemDiscoveredAt: null,
+    initialBackloadCompletedAt: null,
+    nextPollAt: null,
     consecutiveErrors: 0,
     checkIntervalMinutes: 30,
-    lastNewItemAt: null,
     ...overrides,
   });
 
@@ -561,6 +565,7 @@ describe("FeedPoller error handling", () => {
       .select({
         consecutiveErrors: feeds.consecutiveErrors,
         deactivatedAt: feeds.deactivatedAt,
+        deactivationReason: feeds.deactivationReason,
         lastError: feeds.lastError,
       })
       .from(feeds)
@@ -568,6 +573,7 @@ describe("FeedPoller error handling", () => {
     expect(row?.consecutiveErrors).toBe(5);
     expect(row?.deactivatedAt).not.toBeNull();
     expect(row?.lastError).toContain("HTTP 500");
+    expect(row?.deactivationReason).toBe("automatic_transient");
   });
 
   it("deactivates after 2 permanent errors", async () => {
@@ -596,6 +602,7 @@ describe("FeedPoller error handling", () => {
       .select({
         consecutiveErrors: feeds.consecutiveErrors,
         deactivatedAt: feeds.deactivatedAt,
+        deactivationReason: feeds.deactivationReason,
         lastError: feeds.lastError,
       })
       .from(feeds)
@@ -603,6 +610,7 @@ describe("FeedPoller error handling", () => {
     expect(row?.consecutiveErrors).toBe(2);
     expect(row?.deactivatedAt).not.toBeNull();
     expect(row?.lastError).toContain("permanent");
+    expect(row?.deactivationReason).toBe("automatic_permanent");
   });
 });
 

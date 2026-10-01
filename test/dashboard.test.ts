@@ -6,7 +6,7 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
@@ -69,6 +69,7 @@ async function seedFeedAndSub(opts: {
 }
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   await env.DB.exec("DELETE FROM item_state");
   await env.DB.exec("DELETE FROM api_tokens");
   await env.DB.exec("DELETE FROM subscriptions");
@@ -153,6 +154,7 @@ describe("feed deactivate / reactivate", () => {
     const db = getDb(env.DB);
     const row = await db.select().from(feeds).where(eq(feeds.id, feedId)).get();
     expect(row?.deactivatedAt).not.toBeNull();
+    expect(row?.deactivationReason).toBe("manual");
   });
 
   it("reactivates and clears error state", async () => {
@@ -169,9 +171,59 @@ describe("feed deactivate / reactivate", () => {
     const db = getDb(env.DB);
     const row = await db.select().from(feeds).where(eq(feeds.id, feedId)).get();
     expect(row?.deactivatedAt).toBeNull();
+    expect(row?.deactivationReason).toBeNull();
     expect(row?.consecutiveErrors).toBe(0);
     expect(row?.lastError).toBeNull();
     expect(row?.checkIntervalMinutes).toBe(30);
+  });
+
+  it("shows explicit and uncertain legacy Feed state without conflating events", async () => {
+    const now = 1_735_732_800_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const explicitFeedId = await seedFeedAndSub({
+      feedUrl: "https://state.example/feed.xml",
+      title: "Explicit State Feed",
+      deactivatedAt: now,
+    });
+    const legacyFeedId = await seedFeedAndSub({
+      feedUrl: "https://legacy-state.example/feed.xml",
+      title: "Uncertain Legacy Feed",
+      deactivatedAt: now - 10_000,
+    });
+    const db = getDb(env.DB);
+    await db
+      .update(feeds)
+      .set({
+        lastSuccessfulPollAt: now - 2 * 60_000,
+        lastNewItemDiscoveredAt: now - 60_000,
+        initialBackloadCompletedAt: now - 2 * 60_000,
+        nextPollAt: now + 60_000,
+        deactivationReason: "automatic_permanent",
+      })
+      .where(eq(feeds.id, explicitFeedId));
+    await db
+      .update(feeds)
+      .set({
+        pollStateOrigin: "legacy_uncertain",
+        lastSuccessfulPollAt: null,
+        lastNewItemDiscoveredAt: null,
+        initialBackloadCompletedAt: null,
+        deactivationReason: "legacy_unknown",
+      })
+      .where(eq(feeds.id, legacyFeedId));
+
+    const res = await fetch("/app/feeds");
+    const html = await res.text();
+
+    expect(html).toContain("Last successful check");
+    expect(html).toContain("1m ago");
+    expect(html).toContain("No new Items recorded");
+    expect(html).toContain("Initial backload complete");
+    expect(html).toContain("Initial backload unknown");
+    expect(html).not.toContain("Initial backload pending");
+    expect(html).toContain("Next eligible");
+    expect(html).toContain("Permanent polling errors");
+    expect(html).toContain("Legacy reason unknown");
   });
 
   it("returns 404 for a feed the user does not own", async () => {

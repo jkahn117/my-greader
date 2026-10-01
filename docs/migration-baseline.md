@@ -86,3 +86,19 @@ The code before this migration does not acquire ownership, so an old Workflow mu
 Do not rely on a rolling code deployment to protect old instances. Their polling path predates the ownership check and can still write Feed state.
 
 The previous Worker can read the additive schema, but rollback has the same execution boundary. Pause all polling entry points and drain or terminate ownership-aware Workflows before deploying the old Worker. Leave `0008` in place. After ownership-aware writes begin, prefer a forward fix because the old Worker bypasses the ownership contract. A database restore requires stopping all writers first.
+
+## Explicit Feed state rollout
+
+Migration `0009_explicit_feed_state.sql` is additive and must run after `0008`. It adds separate timestamps for successful checks, precise new-Item discovery, initial backload completion, and next eligibility, plus a Deactivation reason.
+
+The migration preserves uncertainty:
+
+- `last_successful_poll_at` and `last_new_item_discovered_at` remain `NULL` for every legacy Feed. The overloaded historical timestamps cannot prove either event.
+- A non-null legacy `last_new_item_at` proves that the old poller completed initial backload, including for an empty Feed, so it initializes `initial_backload_completed_at` and marks `poll_state_origin` as `legacy_inferred`.
+- Other legacy Feeds use `poll_state_origin = legacy_uncertain`; the dashboard does not call their unknown backload history pending or complete.
+- `next_poll_at` receives the old eligibility calculation, `last_fetched_at + check_interval_minutes * 60000`.
+- Existing deactivated Feeds receive `legacy_unknown`; the migration does not guess whether a User or an error threshold deactivated them.
+
+Apply the schema before deploying the new Worker. Pause polling and drain existing Workflow instances first because the previous code writes only the overloaded columns while the new code reads only the explicit columns. Run one scheduled and one forced canary after deployment. Verify successful-check and next-eligibility timestamps, an empty Feed's backload completion, and an automatic Deactivation reason.
+
+The `last_fetched_at` and `last_new_item_at` columns stay in place for schema-level rollback compatibility, but the new Worker does not read or write them. Do not deploy the old Worker after new polling writes begin: it cannot interpret explicit backload completion and may repeat an initial backload. Prefer a forward fix. If rollback is unavoidable, stop all writers and restore the pre-migration export with the matching old Worker. Remove the compatibility columns only after the final migration observation window closes and no rollback target reads them.

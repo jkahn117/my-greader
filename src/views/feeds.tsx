@@ -1,19 +1,8 @@
 import { relativeTime } from "../lib/dates";
+import type { SubRow as SubscriptionRow } from "../feed/subscriptions";
+import type { FeedDeactivationReason, PollStateOrigin } from "../feed/poll";
 
-export interface SubscriptionRow {
-  id: string;
-  feedId: string;
-  title: string | null;
-  feedUrl: string;
-  htmlUrl: string | null;
-  folder: string | null;
-  lastFetchedAt: number | null;
-  consecutiveErrors: number;
-  lastError: string | null;
-  deactivatedAt: number | null;
-  checkIntervalMinutes: number;
-  lastNewItemAt: number | null;
-}
+export type { SubscriptionRow };
 
 // Poll interval badge — colour reflects how backed-off the feed is
 function PollIntervalBadge({ minutes }: { minutes: number }) {
@@ -44,6 +33,39 @@ function PollIntervalBadge({ minutes }: { minutes: number }) {
       {label}
     </span>
   );
+}
+
+/** Gives the persisted Deactivation reason a concise dashboard label. */
+function deactivationReasonLabel(
+  reason: FeedDeactivationReason | null,
+): string {
+  switch (reason) {
+    case "manual":
+      return "Manually deactivated";
+    case "automatic_permanent":
+      return "Permanent polling errors";
+    case "automatic_transient":
+      return "Repeated transient polling errors";
+    case "legacy_unknown":
+      return "Legacy reason unknown";
+    case null:
+      return "Deactivated";
+  }
+}
+
+/** Preserves migration uncertainty when presenting initial backload state. */
+function backloadLabel(
+  completedAt: number | null,
+  origin: PollStateOrigin,
+): string {
+  if (completedAt != null) {
+    return origin === "legacy_inferred"
+      ? "Initial backload complete (legacy inference)"
+      : "Initial backload complete";
+  }
+  return origin === "legacy_uncertain"
+    ? "Initial backload unknown"
+    : "Initial backload pending";
 }
 
 // ---------------------------------------------------------------------------
@@ -97,10 +119,10 @@ function FeedIssuesCard({ subs }: { subs: SubscriptionRow[] }) {
                 Last error
               </th>
               <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                Last fetched
+                Last successful check
               </th>
               <th class="pb-2 pt-3 text-right text-xs font-medium text-muted-foreground">
-                Last new item
+                Last new Item
               </th>
             </tr>
           </thead>
@@ -116,7 +138,7 @@ function FeedIssuesCard({ subs }: { subs: SubscriptionRow[] }) {
                 <td class="py-3 pr-4 whitespace-nowrap">
                   {s.deactivatedAt ? (
                     <span class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-                      Deactivated
+                      {deactivationReasonLabel(s.deactivationReason)}
                     </span>
                   ) : (s.lastError ?? "").includes("rate limited") ? (
                     <span class="inline-flex items-center rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-700">
@@ -136,10 +158,12 @@ function FeedIssuesCard({ subs }: { subs: SubscriptionRow[] }) {
                   {s.lastError ?? "—"}
                 </td>
                 <td class="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
-                  {relativeTime(s.lastFetchedAt)}
+                  {relativeTime(s.lastSuccessfulPollAt)}
                 </td>
                 <td class="py-3 text-right text-muted-foreground whitespace-nowrap">
-                  {s.lastNewItemAt ? relativeTime(s.lastNewItemAt) : "—"}
+                  {s.lastNewItemDiscoveredAt
+                    ? relativeTime(s.lastNewItemDiscoveredAt)
+                    : "No new Items recorded"}
                 </td>
               </tr>
             ))}
@@ -156,9 +180,9 @@ function StatusBadge({ sub }: { sub: SubscriptionRow }) {
     return (
       <span
         class="inline-flex items-center rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
-        title={sub.lastError ?? "Deactivated"}
+        title={sub.lastError ?? deactivationReasonLabel(sub.deactivationReason)}
       >
-        Deactivated
+        {deactivationReasonLabel(sub.deactivationReason)}
       </span>
     );
   }
@@ -230,15 +254,20 @@ export function FeedRow({ sub }: { sub: SubscriptionRow }) {
         {sub.folder ?? <span class="italic">None</span>}
       </td>
       <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-        {relativeTime(sub.lastFetchedAt)}
+        {relativeTime(sub.lastSuccessfulPollAt)}
       </td>
       <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-        {relativeTime(sub.lastNewItemAt)}
+        {sub.lastNewItemDiscoveredAt
+          ? relativeTime(sub.lastNewItemDiscoveredAt)
+          : "No new Items recorded"}
       </td>
-      <td class="py-3 text-muted-foreground">
-        {!sub.deactivatedAt && (
-          <PollIntervalBadge minutes={sub.checkIntervalMinutes} />
-        )}
+      <td class="py-3 pr-4 text-muted-foreground whitespace-nowrap">
+        {backloadLabel(sub.initialBackloadCompletedAt, sub.pollStateOrigin)}
+      </td>
+      <td class="py-3 text-muted-foreground whitespace-nowrap">
+        <PollIntervalBadge minutes={sub.checkIntervalMinutes} />
+        <span class="ml-2">Next eligible {relativeTime(sub.nextPollAt)}</span>
+        {sub.deactivatedAt && <span class="ml-1">(paused)</span>}
       </td>
     </tr>
   );
@@ -280,13 +309,16 @@ export function SubscriptionListContent({
                 Folder
               </th>
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Last fetched
+                Last successful check
               </th>
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Last new item
+                Last new Item
               </th>
               <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
-                Poll
+                Backload
+              </th>
+              <th class="pb-2 pt-3 text-left text-xs font-medium text-muted-foreground">
+                Polling eligibility
               </th>
             </tr>
           </thead>
@@ -332,7 +364,15 @@ function ManageFeedsCard({ subs }: { subs: SubscriptionRow[] }) {
               class="rounded-r-md border-l border-primary-foreground/20 bg-primary px-2 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-80"
               onclick="this.nextElementSibling.classList.toggle('hidden'); this.blur()"
             >
-              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+              <svg
+                class="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
             </button>
             <div class="absolute right-0 top-full z-50 mt-1 w-44 rounded-md border border-border bg-card shadow-sm hidden">
               <button

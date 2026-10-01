@@ -12,6 +12,7 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { feeds, subscriptions } from "../db/schema";
+import type { FeedDeactivationReason, PollStateOrigin } from "./poll";
 
 export interface SubRow {
   id: string;
@@ -20,12 +21,16 @@ export interface SubRow {
   feedUrl: string;
   htmlUrl: string | null;
   folder: string | null;
-  lastFetchedAt: number | null;
+  lastSuccessfulPollAt: number | null;
+  lastNewItemDiscoveredAt: number | null;
+  initialBackloadCompletedAt: number | null;
+  pollStateOrigin: PollStateOrigin;
+  nextPollAt: number | null;
   consecutiveErrors: number;
   lastError: string | null;
   deactivatedAt: number | null;
+  deactivationReason: FeedDeactivationReason | null;
   checkIntervalMinutes: number;
-  lastNewItemAt: number | null;
 }
 
 export type SubEvent =
@@ -99,12 +104,16 @@ export function createSubscriptionLifecycle(
     feedUrl: feeds.feedUrl,
     htmlUrl: feeds.htmlUrl,
     folder: subscriptions.folder,
-    lastFetchedAt: feeds.lastFetchedAt,
+    lastSuccessfulPollAt: feeds.lastSuccessfulPollAt,
+    lastNewItemDiscoveredAt: feeds.lastNewItemDiscoveredAt,
+    initialBackloadCompletedAt: feeds.initialBackloadCompletedAt,
+    pollStateOrigin: feeds.pollStateOrigin,
+    nextPollAt: feeds.nextPollAt,
     consecutiveErrors: feeds.consecutiveErrors,
     lastError: feeds.lastError,
     deactivatedAt: feeds.deactivatedAt,
+    deactivationReason: feeds.deactivationReason,
     checkIntervalMinutes: feeds.checkIntervalMinutes,
-    lastNewItemAt: feeds.lastNewItemAt,
   };
 
   return { subscribe, unsubscribe, edit, list, get };

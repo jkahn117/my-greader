@@ -93,11 +93,12 @@ Current treats this Worker as a FreshRSS instance. It speaks the standard GReade
 
 Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each run:
 
-1. Queries all feeds whose `check_interval_minutes` has elapsed (stale-first ordering)
+1. Queries active subscribed Feeds whose explicit `next_poll_at` has elapsed (earliest eligible first)
 2. Processes them in sequential batches of 8, fetching each batch concurrently
 3. Creates a `cycle_runs` row keyed by the stable Workflow instance ID, even when no Feed is eligible
 4. Records in-progress logical Feed attempts before HTTP work, then commits distinct unchanged, not-modified, rate-limited, or classified failure outcomes
-5. Derives the Cycle Run summary from durable attempts and emits batched metrics
+5. Records successful checks, precise new-Item discovery, initial backload completion, next eligibility, and Deactivation reason separately
+6. Derives the Cycle Run summary from durable attempts and emits batched metrics
 
 **Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each Feed poll can use five subrequests for durable progress, HTTP, Item insertion, attribution reconciliation, and terminal outcome writes. Sequential Workflow steps each run in a fresh invocation with a fresh budget, so the total Feed count is not capped by one invocation.
 
@@ -109,7 +110,7 @@ Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each
 | No new content / HTTP 304 | Double, capped at 4 hours |
 | HTTP 429 rate limit | Double (or `Retry-After`), capped at 4 hours; no error count increment |
 | Any other HTTP error / parse error | No change to interval; consecutive error count incremented |
-| 5 consecutive errors | Feed deactivated — stops being polled |
+| 5 transient errors or 2 permanent errors | Feed deactivated with the reason recorded; stops being polled |
 
 **Article retention** — a weekly cron (Mondays 03:00 UTC) deletes articles older than `ITEM_RETENTION_DAYS` (default: 30 days).
 

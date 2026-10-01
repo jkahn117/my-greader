@@ -117,7 +117,7 @@ handler.get("/app/metrics", async (c) => {
         .select({
           feedId: subscriptions.feedId,
           title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
-          lastNewItemAt: feeds.lastNewItemAt,
+          lastNewItemAt: feeds.lastNewItemDiscoveredAt,
           count7d: sql<number>`count(${items.id})`,
         })
         .from(subscriptions)
@@ -135,7 +135,7 @@ handler.get("/app/metrics", async (c) => {
           subscriptions.title,
           feeds.title,
           feeds.feedUrl,
-          feeds.lastNewItemAt,
+          feeds.lastNewItemDiscoveredAt,
         )
         .orderBy(desc(sql<number>`count(${items.id})`))
         .limit(15),

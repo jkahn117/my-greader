@@ -20,14 +20,33 @@ export const feeds = sqliteTable("feeds", {
   feedUrl: text("feed_url").unique().notNull(),
   htmlUrl: text("html_url"),
   title: text("title"),
-  lastFetchedAt: integer("last_fetched_at"),
+  // Retained for rollback compatibility. New polling policy does not read or write it.
+  legacyLastFetchedAt: integer("last_fetched_at"),
+  lastSuccessfulPollAt: integer("last_successful_poll_at"),
+  lastNewItemDiscoveredAt: integer("last_new_item_discovered_at"),
+  initialBackloadCompletedAt: integer("initial_backload_completed_at"),
+  pollStateOrigin: text("poll_state_origin", {
+    enum: ["explicit", "legacy_inferred", "legacy_uncertain"],
+  })
+    .notNull()
+    .default("explicit"),
+  nextPollAt: integer("next_poll_at"),
   etag: text("etag"), // for conditional HTTP requests
   lastModified: text("last_modified"), // for conditional HTTP requests
   consecutiveErrors: integer("consecutive_errors").notNull().default(0),
   lastError: text("last_error"), // most recent error message
   deactivatedAt: integer("deactivated_at"), // NULL = active; set after threshold
+  deactivationReason: text("deactivation_reason", {
+    enum: [
+      "manual",
+      "automatic_transient",
+      "automatic_permanent",
+      "legacy_unknown",
+    ],
+  }),
   checkIntervalMinutes: integer("check_interval_minutes").notNull().default(30), // adaptive polling backoff
-  lastNewItemAt: integer("last_new_item_at"), // last time new articles were stored
+  // Retained for rollback compatibility. It mixed backload completion with new-Item activity.
+  legacyLastNewItemAt: integer("last_new_item_at"),
   pollOwnerAttemptId: text("poll_owner_attempt_id"),
   pollLeaseExpiresAt: integer("poll_lease_expires_at"),
   pollFence: integer("poll_fence").notNull().default(0),

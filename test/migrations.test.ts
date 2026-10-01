@@ -96,6 +96,33 @@ describe("legacy data migration", () => {
       poll_fence: 0,
     });
 
+    const explicitFeedState = await env.DB.prepare(
+      `SELECT id, last_successful_poll_at, last_new_item_discovered_at,
+              initial_backload_completed_at, poll_state_origin, next_poll_at,
+              deactivation_reason
+         FROM feeds ORDER BY id`,
+    ).all();
+    expect(explicitFeedState.results).toEqual([
+      {
+        id: "legacy-feed-active",
+        last_successful_poll_at: null,
+        last_new_item_discovered_at: null,
+        initial_backload_completed_at: 1_699_999_000_000,
+        poll_state_origin: "legacy_inferred",
+        next_poll_at: 1_700_007_200_000,
+        deactivation_reason: null,
+      },
+      {
+        id: "legacy-feed-deactivated",
+        last_successful_poll_at: null,
+        last_new_item_discovered_at: null,
+        initial_backload_completed_at: null,
+        poll_state_origin: "legacy_uncertain",
+        next_poll_at: 1_699_014_400_000,
+        deactivation_reason: "legacy_unknown",
+      },
+    ]);
+
     const attempts = await env.DB.prepare(
       "SELECT count(*) AS count FROM feed_poll_attempts",
     ).first<{ count: number }>();
