@@ -4,47 +4,13 @@
 
 import { relativeTime } from "../lib/dates";
 import type {
-  FeedAttemptErrorClass,
-  FeedAttemptOutcome,
-  FeedAttemptParserStatus,
-} from "../db/schema";
-
-export interface TimelineItem {
-  itemTitle: string | null;
-  itemUrl: string | null;
-  publishedAt: number | null;
-  feedTitle: string;
-  attemptId: string;
-}
-
-export interface TimelineAttempt {
-  id: string;
-  feedTitle: string;
-  outcome: FeedAttemptOutcome | null;
-  errorClass: FeedAttemptErrorClass | null;
-  httpStatus: number | null;
-  parserStatus: FeedAttemptParserStatus | null;
-  diagnostic: string | null;
-}
-
-export interface CycleTimeline {
-  cycleId: string;
-  ranAt: number;
-  selectedFeeds: number;
-  checkedFeeds: number;
-  failedFeeds: number;
-  skippedFeeds: number;
-  newItems: number;
-  triggerReason: "scheduled" | "manual" | "forced" | null;
-  status: "running" | "completed" | null;
-  outcome: "completed" | "empty" | null;
-  attributed: boolean;
-  attempts: TimelineAttempt[];
-  items: TimelineItem[];
-}
+  ActivityAttempt,
+  ActivityCycle,
+  ActivityTimeline,
+} from "../feed/activity";
 
 /** Formats stable attempt fields without interpreting diagnostic text. */
-function attemptLabel(attempt: TimelineAttempt): string {
+function attemptLabel(attempt: ActivityAttempt): string {
   switch (attempt.outcome) {
     case "new_items":
       return "New Items";
@@ -68,7 +34,7 @@ function attemptLabel(attempt: TimelineAttempt): string {
   }
 }
 
-function CycleCard({ cycle }: { cycle: CycleTimeline }) {
+function CycleCard({ cycle }: { cycle: ActivityCycle }) {
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-4 py-3 flex items-center justify-between gap-3">
@@ -78,19 +44,23 @@ function CycleCard({ cycle }: { cycle: CycleTimeline }) {
           </h3>
           <p class="mt-0.5 text-xs text-muted-foreground">
             {cycle.outcome === "empty" ? (
-              "No eligible Feeds"
+              "No eligible Feeds globally"
             ) : (
               <>
-                {cycle.selectedFeeds} selected · {cycle.checkedFeeds} checked
-                {cycle.failedFeeds > 0 && ` · ${cycle.failedFeeds} failed`}
-                {cycle.skippedFeeds > 0 && ` · ${cycle.skippedFeeds} skipped`}
-                {cycle.newItems > 0 && (
-                  <span class="ml-1 text-primary font-medium">
-                    · +{cycle.newItems} article{cycle.newItems !== 1 ? "s" : ""}
-                  </span>
-                )}
+                Global: {cycle.globalSelectedFeeds} selected ·{" "}
+                {cycle.globalCheckedFeeds} checked
+                {cycle.globalFailedFeeds > 0 &&
+                  ` · ${cycle.globalFailedFeeds} failed`}
+                {cycle.globalSkippedFeeds > 0 &&
+                  ` · ${cycle.globalSkippedFeeds} skipped`}
               </>
             )}
+          </p>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {cycle.globalNewItems} Item
+            {cycle.globalNewItems === 1 ? "" : "s"} globally ·{" "}
+            {cycle.subscribedItemCount} Item
+            {cycle.subscribedItemCount === 1 ? "" : "s"} in your Subscriptions
           </p>
           {cycle.attributed ? (
             <p class="mt-1 text-xs text-muted-foreground">
@@ -173,13 +143,21 @@ function CycleCard({ cycle }: { cycle: CycleTimeline }) {
   );
 }
 
-export function TimelineTab({ cycles }: { cycles: CycleTimeline[] }) {
-  if (cycles.length === 0) {
+export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
+  const unattributedMessage = `${timeline.unattributedItemCount} older Item${timeline.unattributedItemCount === 1 ? "" : "s"} in your Subscriptions ${timeline.unattributedItemCount === 1 ? "is" : "are"} unattributed`;
+
+  if (timeline.cycles.length === 0) {
     return (
       <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
-        <p class="text-sm font-medium text-foreground">No cycles yet</p>
+        <p class="text-sm font-medium text-foreground">
+          {timeline.historyStatus === "unavailable"
+            ? "Cycle Run history unavailable"
+            : "No Cycle Runs yet"}
+        </p>
         <p class="mt-1 text-sm text-muted-foreground">
-          Timeline appears after the first polling cycle runs.
+          {timeline.historyStatus === "unavailable"
+            ? `${unattributedMessage}. Exact Cycle Run membership cannot be recovered.`
+            : "Timeline appears after the first polling Cycle Run."}
         </p>
       </div>
     );
@@ -187,8 +165,13 @@ export function TimelineTab({ cycles }: { cycles: CycleTimeline[] }) {
 
   return (
     <div class="space-y-4">
-      {cycles.map((c) => (
-        <CycleCard cycle={c} />
+      {timeline.unattributedItemCount > 0 && (
+        <div class="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          {unattributedMessage}. They are not assigned to Cycle Runs.
+        </div>
+      )}
+      {timeline.cycles.map((cycle) => (
+        <CycleCard cycle={cycle} />
       ))}
     </div>
   );

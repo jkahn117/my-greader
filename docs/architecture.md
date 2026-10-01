@@ -21,6 +21,7 @@ the Workflow parse protocol concerns and delegate.
 | `src/feed/item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None, domain persistence module |
 | `src/feed/stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None, pure query module |
 | `src/feed/analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None, read adapter |
+| `src/feed/activity.ts` | Bounded Cycle Run history, User-visible attempt and Item projections, explicit unattributed history | None, read module |
 | `src/domain/tokens/` | Hash-only API Token generation, active lookup, usage recording, User-scoped revocation, listing, and revoked-token retention | None, domain persistence module |
 
 These modules accept D1 directly because there is one store implementation.
@@ -95,7 +96,13 @@ aggregate queries in parallel, and returns typed domain projections.
 The dashboard handler never sees raw AE rows.
 
 **Real-time dashboard cards** (cycle timeline, feed health, reads per day)
-query D1 directly and work without analytics. The Timeline follows Item-to-attempt-to-Cycle-Run foreign keys and filters Items through the authenticated User's Subscriptions. Legacy Cycle Runs and Items are marked as unattributed; timestamp windows are not used.
+query D1 directly and work without analytics. `createActivityReader()` owns the
+Timeline's 20-Cycle-Run D1 projection. It follows Item-to-attempt-to-Cycle-Run
+foreign keys and filters attempts and Items through the authenticated User's
+Subscriptions. Cycle Run summaries are labeled as global, while the attributed
+Item count is labeled for the User's Subscriptions. Older Items without durable
+attribution are counted separately, and a missing Cycle Run history is shown as
+unavailable rather than zero activity. Timestamp windows are not used.
 
 ## Auth
 

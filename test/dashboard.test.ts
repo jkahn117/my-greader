@@ -12,6 +12,7 @@ import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
   cycleRuns,
+  feedPollAttempts,
   feeds,
   items,
   itemState,
@@ -27,10 +28,15 @@ import {
 
 const BASE = "http://localhost";
 
-async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function fetch(
+  path: string,
+  init: RequestInit = {},
+  bindingOverrides: Record<string, unknown> = {},
+): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
   const ctx = createExecutionContext();
-  const res = await worker.fetch(req, env, ctx);
+  const bindings = { ...env, ...bindingOverrides } as unknown as Env;
+  const res = await worker.fetch(req, bindings, ctx);
   await waitOnExecutionContext(ctx);
   return res;
 }
@@ -421,6 +427,206 @@ describe("GET /app/timeline", () => {
     expect(html).toContain("1 selected");
   });
 
+  it("groups equal-time and adjacent Cycle Runs by durable attribution", async () => {
+    const visibleFeedId = await seedFeedAndSub({
+      feedUrl: "https://visible.example/feed.xml",
+      title: "Visible Feed",
+    });
+    await seedUser("other-user", "other@example.com");
+    const privateFeedId = await seedFeedAndSub({
+      userId: "other-user",
+      feedUrl: "https://private.example/feed.xml",
+      title: "Private Feed",
+    });
+    const db = getDb(env.DB);
+    const now = Date.now();
+
+    await db.insert(cycleRuns).values([
+      {
+        id: "cycle-a",
+        ranAt: now,
+        selectedFeeds: 2,
+        checkedFeeds: 2,
+        newItems: 2,
+        startedAt: now,
+        completedAt: now + 1,
+        triggerReason: "scheduled",
+        status: "completed",
+        outcome: "completed",
+      },
+      {
+        id: "cycle-b",
+        ranAt: now,
+        selectedFeeds: 1,
+        checkedFeeds: 1,
+        newItems: 1,
+        startedAt: now,
+        completedAt: now + 1,
+        triggerReason: "manual",
+        status: "completed",
+        outcome: "completed",
+      },
+      {
+        id: "empty-cycle",
+        ranAt: now - 1,
+        startedAt: now - 1,
+        completedAt: now - 1,
+        triggerReason: "scheduled",
+        status: "completed",
+        outcome: "empty",
+      },
+    ]);
+    await db.insert(feedPollAttempts).values([
+      {
+        id: "attempt-a",
+        cycleRunId: "cycle-a",
+        feedId: visibleFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "new_items",
+        newItems: 1,
+        parserStatus: "success",
+      },
+      {
+        id: "attempt-private",
+        cycleRunId: "cycle-a",
+        feedId: privateFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "new_items",
+        newItems: 1,
+        parserStatus: "success",
+      },
+      {
+        id: "attempt-b",
+        cycleRunId: "cycle-b",
+        feedId: visibleFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "new_items",
+        newItems: 1,
+        parserStatus: "success",
+      },
+    ]);
+    await db.insert(items).values([
+      {
+        id: await deriveItemId("https://visible.example/cycle-a"),
+        feedId: visibleFeedId,
+        title: "Cycle A Item",
+        url: "https://visible.example/cycle-a",
+        fetchedAt: now,
+        publishedAt: now,
+        firstIngestionAttemptId: "attempt-a",
+      },
+      {
+        id: await deriveItemId("https://visible.example/cycle-b"),
+        feedId: visibleFeedId,
+        title: "Cycle B Item",
+        url: "https://visible.example/cycle-b",
+        fetchedAt: now,
+        publishedAt: now,
+        firstIngestionAttemptId: "attempt-b",
+      },
+      {
+        id: await deriveItemId("https://private.example/item"),
+        feedId: privateFeedId,
+        title: "Private Item",
+        url: "https://private.example/item",
+        fetchedAt: now,
+        publishedAt: now,
+        firstIngestionAttemptId: "attempt-private",
+      },
+      {
+        id: await deriveItemId("https://visible.example/legacy"),
+        feedId: visibleFeedId,
+        title: "Old unattributed Item",
+        url: "https://visible.example/legacy",
+        fetchedAt: now,
+        publishedAt: now,
+      },
+    ]);
+
+    const res = await fetch(
+      "/app/timeline",
+      {},
+      { ANALYTICS_ENABLED: "false", ANALYTICS: undefined },
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html).toContain("2 Items globally");
+    expect(html).toContain("1 Item in your Subscriptions");
+    expect(html).toContain(
+      "1 older Item in your Subscriptions is unattributed",
+    );
+    expect(html).toContain("No eligible Feeds globally");
+    expect(html).not.toContain("Private Item");
+    expect(html).not.toContain("Old unattributed Item");
+
+    const cycleB = html.indexOf("cycle-b");
+    const itemB = html.indexOf("Cycle B Item");
+    const cycleA = html.indexOf("cycle-a");
+    const itemA = html.indexOf("Cycle A Item");
+    const empty = html.indexOf("empty-cycle");
+    expect(cycleB).toBeGreaterThan(-1);
+    expect(itemB).toBeGreaterThan(cycleB);
+    expect(itemB).toBeLessThan(cycleA);
+    expect(itemA).toBeGreaterThan(cycleA);
+    expect(itemA).toBeLessThan(empty);
+  });
+
+  it("bounds Timeline history to the 20 newest Cycle Runs", async () => {
+    const now = Date.now();
+    await env.DB.batch(
+      Array.from({ length: 21 }, (_, index) =>
+        env.DB.prepare(
+          `INSERT INTO cycle_runs
+            (id, ran_at, started_at, completed_at, trigger_reason, status, outcome)
+           VALUES (?, ?, ?, ?, 'scheduled', 'completed', 'completed')`,
+        ).bind(
+          index === 0 ? "oldest-cycle" : `cycle-${index}`,
+          now + index,
+          now + index,
+          now + index,
+        ),
+      ),
+    );
+
+    const res = await fetch("/app/timeline");
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toContain("cycle-20");
+    expect(html).not.toContain("oldest-cycle");
+  });
+
+  it("reports unavailable durable history instead of zero activity", async () => {
+    const feedId = await seedFeedAndSub({
+      feedUrl: "https://legacy.example/feed.xml",
+      title: "Legacy Feed",
+    });
+    await getDb(env.DB)
+      .insert(items)
+      .values({
+        id: await deriveItemId("https://legacy.example/item"),
+        feedId,
+        title: "Legacy Item",
+        url: "https://legacy.example/item",
+        fetchedAt: Date.now(),
+        publishedAt: Date.now(),
+      });
+
+    const res = await fetch("/app/timeline");
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toContain("Cycle Run history unavailable");
+    expect(html).toContain(
+      "1 older Item in your Subscriptions is unattributed",
+    );
+    expect(html).not.toContain("No cycles yet");
+  });
+
   it("links attributed Items through attempts while preserving User visibility", async () => {
     const visibleFeedId = await seedFeedAndSub({
       feedUrl: "https://visible.example/feed.xml",
@@ -503,7 +709,8 @@ describe("GET /app/timeline", () => {
     expect(html).toContain("Visible attributed Item");
     expect(html).toContain("scheduled");
     expect(html).toContain("workflow-cycle");
-    expect(html).toContain("+2 articles");
+    expect(html).toContain("2 Items globally");
+    expect(html).toContain("1 Item in your Subscriptions");
     expect(html).toContain("Historical Items remain unattributed.");
     expect(html).not.toContain("Legacy timestamp match");
     expect(html).not.toContain("Other User private Item");
