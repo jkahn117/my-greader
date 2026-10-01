@@ -81,16 +81,16 @@ handler.post("/feeds/:id/reactivate", async (c) => {
   const userId = c.get("userId");
   const logger = createLogger({ path: `/feeds/${id}/reactivate`, userId });
 
-  // Verify the feed belongs to one of this user's subscriptions
-  const noop: SubObserver = { publish: () => {} };
-  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
-  const sub = await lifecycle.get(userId, id);
-  if (!sub) return c.text("Not found", 404);
-
-  await createFeedHealth(c.env.DB, () => Date.now()).reactivate(id);
+  const changed = await createFeedHealth(c.env.DB, () => Date.now()).reactivate(
+    userId,
+    id,
+  );
+  if (!changed) return c.text("Not found", 404);
 
   logger.info("feed reactivated", { feedId: id });
 
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
   const updated = await lifecycle.get(userId, id);
   if (!updated) return c.text("Not found", 404);
 
@@ -106,15 +106,16 @@ handler.post("/feeds/:id/deactivate", async (c) => {
   const userId = c.get("userId");
   const logger = createLogger({ path: `/feeds/${id}/deactivate`, userId });
 
-  const noop: SubObserver = { publish: () => {} };
-  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
-  const sub = await lifecycle.get(userId, id);
-  if (!sub) return c.text("Not found", 404);
-
-  await createFeedHealth(c.env.DB, () => Date.now()).deactivate(id);
+  const changed = await createFeedHealth(c.env.DB, () => Date.now()).deactivate(
+    userId,
+    id,
+  );
+  if (!changed) return c.text("Not found", 404);
 
   logger.info("feed deactivated", { feedId: id });
 
+  const noop: SubObserver = { publish: () => {} };
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
   const updated = await lifecycle.get(userId, id);
   if (!updated) return c.text("Not found", 404);
 

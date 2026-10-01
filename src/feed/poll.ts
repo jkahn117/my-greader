@@ -18,7 +18,6 @@ import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import {
   feedPollAttempts,
-  feeds,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
 } from "../db/schema";
@@ -138,38 +137,92 @@ export interface FeedPoller {
 }
 
 export interface FeedHealth {
-  deactivate(feedId: string): Promise<void>;
-  reactivate(feedId: string): Promise<void>;
+  deactivate(userId: string, feedId: string): Promise<boolean>;
+  reactivate(userId: string, feedId: string): Promise<boolean>;
 }
 
-/** Owns manual Feed health transitions after an adapter authorizes the User. */
+/** Owns authorized manual Feed health transitions and polling cancellation. */
 export function createFeedHealth(
   dbBinding: D1Database,
   now: () => number,
 ): FeedHealth {
-  const d = getDb(dbBinding);
-
   return { deactivate, reactivate };
 
-  async function deactivate(feedId: string): Promise<void> {
-    await d
-      .update(feeds)
-      .set({ deactivatedAt: now(), deactivationReason: "manual" })
-      .where(eq(feeds.id, feedId));
+  /** Pauses a subscribed Feed and cancels work that could overwrite that decision. */
+  async function deactivate(userId: string, feedId: string): Promise<boolean> {
+    const changedAt = now();
+    const results = await dbBinding.batch([
+      cancelOwnedAttempt(
+        userId,
+        feedId,
+        changedAt,
+        "Feed manually deactivated",
+      ),
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET deactivated_at = ?, deactivation_reason = 'manual',
+                  poll_owner_attempt_id = NULL, poll_lease_expires_at = NULL,
+                  poll_fence = poll_fence + 1
+            WHERE id = ? AND EXISTS (
+              SELECT 1 FROM subscriptions
+               WHERE user_id = ? AND feed_id = feeds.id
+            )`,
+        )
+        .bind(changedAt, feedId, userId),
+    ]);
+    return (results[1].meta.changes ?? 0) > 0;
   }
 
-  async function reactivate(feedId: string): Promise<void> {
-    await d
-      .update(feeds)
-      .set({
-        deactivatedAt: null,
-        deactivationReason: null,
-        consecutiveErrors: 0,
-        lastError: null,
-        checkIntervalMinutes: MIN_INTERVAL_MINUTES,
-        nextPollAt: null,
-      })
-      .where(eq(feeds.id, feedId));
+  /** Restores a subscribed Feed to immediate eligibility and initial Backoff. */
+  async function reactivate(userId: string, feedId: string): Promise<boolean> {
+    const changedAt = now();
+    const results = await dbBinding.batch([
+      cancelOwnedAttempt(
+        userId,
+        feedId,
+        changedAt,
+        "Feed manually reactivated",
+      ),
+      dbBinding
+        .prepare(
+          `UPDATE feeds
+              SET deactivated_at = NULL, deactivation_reason = NULL,
+                  consecutive_errors = 0, last_error = NULL,
+                  check_interval_minutes = ?, next_poll_at = NULL,
+                  poll_owner_attempt_id = NULL, poll_lease_expires_at = NULL,
+                  poll_fence = poll_fence + 1
+            WHERE id = ? AND EXISTS (
+              SELECT 1 FROM subscriptions
+               WHERE user_id = ? AND feed_id = feeds.id
+            )`,
+        )
+        .bind(MIN_INTERVAL_MINUTES, feedId, userId),
+    ]);
+    return (results[1].meta.changes ?? 0) > 0;
+  }
+
+  /** Completes an authorized transition's in-flight attempt before revoking ownership. */
+  function cancelOwnedAttempt(
+    userId: string,
+    feedId: string,
+    completedAt: number,
+    diagnostic: string,
+  ): D1PreparedStatement {
+    return dbBinding
+      .prepare(
+        `UPDATE feed_poll_attempts
+            SET completed_at = ?, outcome = 'skipped',
+                parser_status = 'not_attempted', diagnostic = ?
+          WHERE id = (
+            SELECT poll_owner_attempt_id FROM feeds
+             WHERE id = ? AND EXISTS (
+               SELECT 1 FROM subscriptions
+                WHERE user_id = ? AND feed_id = feeds.id
+             )
+          ) AND outcome IS NULL`,
+      )
+      .bind(completedAt, diagnostic, feedId, userId);
   }
 }
 

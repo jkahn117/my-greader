@@ -79,6 +79,8 @@ D1 `batch()` is the attempt completion boundary. Item insertion, first-attempt a
 
 Cycle Run summaries derive from durable attempts. `active_feeds` and `selected_feeds` count distinct Feeds, not Subscription rows. `checked_feeds` counts terminal attempts except `skipped`; `failed_feeds` counts the `failed` subset; `skipped_feeds` counts selected Feeds deliberately not checked; and `new_items` sums committed attempt counts. Completion only updates a running Cycle Run, so replay cannot rewrite its durable summary. Forced runs bypass due time but still exclude deactivated and unsubscribed Feeds.
 
+Manual Feed health changes use the same Polling module as automatic failure transitions. The module checks the requesting User's Subscription inside the D1 mutation before changing shared Feed state. Deactivation and reactivation also fence any in-flight poll and complete its attempt as skipped, so a stale response cannot overwrite the manual decision. Reactivation clears error diagnostics and restores the 30-minute Backoff interval with immediate eligibility.
+
 ## Metrics
 
 **Writes:** `createMetrics()` in `src/lib/metrics.ts` uses

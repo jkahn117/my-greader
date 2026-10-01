@@ -157,24 +157,40 @@ describe("feed deactivate / reactivate", () => {
     expect(row?.deactivationReason).toBe("manual");
   });
 
-  it("reactivates and clears error state", async () => {
+  it("reactivates and restores the initial Backoff policy", async () => {
     const feedId = await seedFeedAndSub({
       feedUrl: "https://example.com/feed.xml",
       title: "Example",
       deactivatedAt: Date.now(),
       consecutiveErrors: 5,
     });
+    const db = getDb(env.DB);
+    await db
+      .update(feeds)
+      .set({
+        deactivationReason: "automatic_transient",
+        nextPollAt: Date.now() + 240 * 60_000,
+        pollOwnerAttemptId: "stale-attempt",
+        pollLeaseExpiresAt: Date.now() + 60_000,
+        pollFence: 3,
+      })
+      .where(eq(feeds.id, feedId));
 
     const res = await fetch(`/feeds/${feedId}/reactivate`, { method: "POST" });
     expect(res.status).toBe(200);
 
-    const db = getDb(env.DB);
     const row = await db.select().from(feeds).where(eq(feeds.id, feedId)).get();
-    expect(row?.deactivatedAt).toBeNull();
-    expect(row?.deactivationReason).toBeNull();
-    expect(row?.consecutiveErrors).toBe(0);
-    expect(row?.lastError).toBeNull();
-    expect(row?.checkIntervalMinutes).toBe(30);
+    expect(row).toMatchObject({
+      deactivatedAt: null,
+      deactivationReason: null,
+      consecutiveErrors: 0,
+      lastError: null,
+      checkIntervalMinutes: 30,
+      nextPollAt: null,
+      pollOwnerAttemptId: null,
+      pollLeaseExpiresAt: null,
+      pollFence: 4,
+    });
   });
 
   it("shows explicit and uncertain legacy Feed state without conflating events", async () => {
@@ -226,16 +242,134 @@ describe("feed deactivate / reactivate", () => {
     expect(html).toContain("Legacy reason unknown");
   });
 
-  it("returns 404 for a feed the user does not own", async () => {
-    await seedUser("other-user", "other@example.com");
-    const feedId = await seedFeedAndSub({
-      userId: "other-user",
-      feedUrl: "https://other.example.com/feed.xml",
-      title: "Other",
+  it("shows manual and automatic Deactivation reasons", async () => {
+    const manualFeedId = await seedFeedAndSub({
+      feedUrl: "https://manual.example.com/feed.xml",
+      title: "Manual Feed",
     });
+    const automaticFeedId = await seedFeedAndSub({
+      feedUrl: "https://automatic.example.com/feed.xml",
+      title: "Automatic Feed",
+      deactivatedAt: Date.now(),
+      consecutiveErrors: 5,
+    });
+    const db = getDb(env.DB);
+    await db
+      .update(feeds)
+      .set({ deactivationReason: "automatic_transient" })
+      .where(eq(feeds.id, automaticFeedId));
+    await fetch(`/feeds/${manualFeedId}/deactivate`, { method: "POST" });
+
+    const res = await fetch("/app/feeds");
+    const html = await res.text();
+
+    expect(html).toContain("Manually deactivated");
+    expect(html).toContain("Repeated transient polling errors");
+  });
+
+  it.each(["deactivate", "reactivate"])(
+    "returns 404 and preserves Feed health when the User cannot %s it",
+    async (action) => {
+      await seedUser("other-user", "other@example.com");
+      const deactivatedAt = Date.now();
+      const feedId = await seedFeedAndSub({
+        userId: "other-user",
+        feedUrl: "https://other.example.com/feed.xml",
+        title: "Other",
+        deactivatedAt,
+        consecutiveErrors: 5,
+      });
+      const db = getDb(env.DB);
+      await db
+        .update(feeds)
+        .set({
+          deactivationReason: "automatic_transient",
+          nextPollAt: deactivatedAt + 240 * 60_000,
+        })
+        .where(eq(feeds.id, feedId));
+
+      const before = await db
+        .select()
+        .from(feeds)
+        .where(eq(feeds.id, feedId))
+        .get();
+      const res = await fetch(`/feeds/${feedId}/${action}`, { method: "POST" });
+      const after = await db
+        .select()
+        .from(feeds)
+        .where(eq(feeds.id, feedId))
+        .get();
+
+      expect(res.status).toBe(404);
+      expect(after).toEqual(before);
+    },
+  );
+
+  it("fences an in-flight poll when a subscribed User deactivates the Feed", async () => {
+    const feedId = await seedFeedAndSub({
+      feedUrl: "https://in-flight.example.com/feed.xml",
+      title: "In-flight Feed",
+    });
+    const now = Date.now();
+    const db = getDb(env.DB);
+    await db.insert(cycleRuns).values({
+      id: "manual-health-cycle",
+      ranAt: now,
+      startedAt: now,
+      triggerReason: "scheduled",
+      status: "running",
+    });
+    const feed = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feedId))
+      .get();
+    expect(feed).toBeDefined();
+
+    let releasePoll: (response: Response) => void = () => {};
+    const pendingResponse = new Promise<Response>((resolve) => {
+      releasePoll = resolve;
+    });
+    const transport = { get: vi.fn(() => pendingResponse) };
+    const poll = createFeedPoller(
+      env.DB,
+      transport,
+      { publish() {} },
+      () => now,
+    ).poll(feed as FeedToCheck, {
+      cycleRunId: "manual-health-cycle",
+      attemptId: "manual-health-attempt",
+    });
+    await vi.waitFor(() => expect(transport.get).toHaveBeenCalledOnce());
 
     const res = await fetch(`/feeds/${feedId}/deactivate`, { method: "POST" });
-    expect(res.status).toBe(404);
+    releasePoll(
+      new Response(`<?xml version="1.0"?><rss version="2.0"><channel>
+        <title>In-flight Feed</title><link>https://in-flight.example.com</link>
+      </channel></rss>`),
+    );
+
+    expect(res.status).toBe(200);
+    await expect(poll).resolves.toMatchObject({ outcome: "skipped" });
+    const attempt = await env.DB.prepare(
+      "SELECT outcome, diagnostic FROM feed_poll_attempts WHERE id = ?",
+    )
+      .bind("manual-health-attempt")
+      .first();
+    expect(attempt).toEqual({
+      outcome: "skipped",
+      diagnostic: "Feed manually deactivated",
+    });
+    const stored = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feedId))
+      .get();
+    expect(stored).toMatchObject({
+      deactivationReason: "manual",
+      pollOwnerAttemptId: null,
+      pollLeaseExpiresAt: null,
+    });
   });
 });
 
