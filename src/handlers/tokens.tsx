@@ -1,10 +1,7 @@
 import { Hono } from "hono";
-import { and, desc, eq, isNull } from "drizzle-orm";
 import * as v from "valibot";
-import { getDb } from "../lib/db";
+import { createApiTokenLifecycle } from "../domain/tokens";
 import { createLogger } from "../lib/logger";
-import { sha256 } from "../lib/crypto";
-import { apiTokens } from "../db/schema";
 import { App } from "../views/app";
 import { AccessTab, TokenList, TokenReveal } from "../views/access";
 
@@ -19,14 +16,10 @@ const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 handler.get("/app/access", async (c) => {
   const userId = c.get("userId");
   const email = c.get("email");
-  const db = getDb(c.env.DB);
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
   const logger = createLogger({ path: "/app/access", userId });
 
-  const tokens = await db
-    .select()
-    .from(apiTokens)
-    .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
-    .orderBy(desc(apiTokens.createdAt));
+  const tokens = await tokenLifecycle.listActive(userId);
 
   logger.info("access tab loaded", { tokenCount: tokens.length });
 
@@ -60,36 +53,21 @@ handler.post("/tokens/generate", async (c) => {
     );
   }
 
-  // Generate a 32-byte random token encoded as 64-char hex
-  const rawBytes = crypto.getRandomValues(new Uint8Array(32));
-  const rawToken = Array.from(rawBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const hash = await sha256(rawToken);
-  const id = crypto.randomUUID();
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
+  const generated = await tokenLifecycle.generate(userId, parsed.output.name);
 
-  const db = getDb(c.env.DB);
-  await db.insert(apiTokens).values({
-    id,
-    userId,
+  logger.info("token generated", {
+    tokenId: generated.id,
     name: parsed.output.name,
-    tokenHash: hash,
-    createdAt: Date.now(),
   });
 
-  logger.info("token generated", { tokenId: id, name: parsed.output.name });
-
   // Re-fetch the updated list for OOB swap
-  const updatedTokens = await db
-    .select()
-    .from(apiTokens)
-    .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
-    .orderBy(desc(apiTokens.createdAt));
+  const updatedTokens = await tokenLifecycle.listActive(userId);
 
   // Return: token reveal (goes into #generate-result) + OOB update of token list tbody
   return c.html(
     <>
-      <TokenReveal rawToken={rawToken} />
+      <TokenReveal rawToken={generated.rawToken} />
       <TokenList tokens={updatedTokens} oob />
     </>,
   );
@@ -103,20 +81,11 @@ handler.delete("/tokens/:id", async (c) => {
   const { id } = c.req.param();
   const userId = c.get("userId");
   const logger = createLogger({ path: `/tokens/${id}`, userId });
-  const db = getDb(c.env.DB);
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
 
-  await db
-    .update(apiTokens)
-    .set({ revokedAt: Date.now() })
-    .where(
-      and(
-        eq(apiTokens.id, id),
-        eq(apiTokens.userId, userId),
-        isNull(apiTokens.revokedAt),
-      ),
-    );
+  const revoked = await tokenLifecycle.revoke(userId, id);
 
-  logger.info("token revoked", { tokenId: id });
+  logger.info("token revoke requested", { tokenId: id, revoked });
 
   // Empty response — htmx outerHTML swap removes the <tr>
   return new Response("", { status: 200 });

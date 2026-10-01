@@ -9,23 +9,25 @@ Analytics Engine for metrics.  Feed polling runs inside a Cloudflare Workflow
 to stay within the free-tier subrequest budget.  The management UI uses htmx
 for interactivity without a client bundle.
 
-## Deep modules (`src/feed/`)
+## Deep modules
 
-Feed-level business logic lives in five modules, each behind a small factory
-interface. Handlers and the Workflow are thin adapters that parse protocol
-concerns and delegate.
+Business logic sits behind small factory interfaces. Handlers, middleware, and
+the Workflow parse protocol concerns and delegate.
 
 | Module | Responsibility | Observer? |
 |--------|---------------|-----------|
-| `poll.ts` | Fetch, parse, store items; interval backoff; error tracking and deactivation | `PollObserver` — Powertools stays in the Workflow |
-| `subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver` — Powertools stays in handlers |
-| `item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None — domain persistence module |
-| `stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None — pure query module |
-| `analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None — read adapter |
+| `src/feed/poll.ts` | Fetch, parse, store items; interval backoff; error tracking and deactivation | `PollObserver`, Powertools stays in the Workflow |
+| `src/feed/subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver`, Powertools stays in handlers |
+| `src/feed/item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None, domain persistence module |
+| `src/feed/stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None, pure query module |
+| `src/feed/analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None, read adapter |
+| `src/domain/tokens/` | Hash-only API Token generation, active lookup, usage recording, User-scoped revocation, listing, and revoked-token retention | None, domain persistence module |
 
 These modules accept D1 directly because there is one store implementation.
 `item-state.ts` and `stream.ts` share a small Stream scope value, while the
-GReader adapter owns parsing protocol Stream IDs into that value.
+GReader adapter owns parsing protocol Stream IDs into that value. The API Token
+module never parses headers or formats ClientLogin responses. Cloudflare Access
+verification also remains outside it.
 
 Observability tools (`@workers-powertools`) never cross the module seams.
 Observer interfaces carry domain event payloads; the caller wires them to
@@ -96,6 +98,11 @@ The dashboard handler never sees raw AE rows.
 query D1 directly and work without analytics. The Timeline follows Item-to-attempt-to-Cycle-Run foreign keys and filters Items through the authenticated User's Subscriptions. Legacy Cycle Runs and Items are marked as unattributed; timestamp windows are not used.
 
 ## Auth
+
+`createApiTokenLifecycle()` is the sole owner of API Token persistence and
+policy. Dashboard handlers delegate generation, listing, and revocation. The
+GReader adapters delegate active-token lookup and hourly usage recording. The
+weekly cron delegates seven-day revoked-token cleanup.
 
 See [`docs/auth-flow.md`](auth-flow.md).
 

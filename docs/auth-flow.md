@@ -64,10 +64,10 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
 
 1. Authenticated user visits `/app` (Access-protected)
 2. Enters a token name (e.g. "Current on iPhone") and clicks Generate
-3. `POST /tokens/generate`:
-   - Worker generates 32 cryptographically random bytes encoded as a 64-char hex string
-   - SHA-256 hashes it and stores the hash in `api_tokens`
-   - Returns the **raw token once** in the htmx response fragment — never stored
+3. `POST /tokens/generate` delegates to `createApiTokenLifecycle()`:
+   - The module generates 32 cryptographically random bytes encoded as a 64-char hex string
+   - It SHA-256 hashes the token and stores only the hash in `api_tokens`
+   - The handler returns the raw token once in the htmx response fragment; it is never stored
 4. User copies raw token into Current's password field
 
 ### Usage (GReader ClientLogin)
@@ -81,16 +81,21 @@ Body: Email=user@example.com&Passwd=<raw-token>
 3. On match: returns Auth=<raw-token> (echoed back)
 4. All subsequent GReader requests use:
    Authorization: GoogleLogin auth=<raw-token>
-5. Each request: hash lookup + last_used_at update
+5. Each request delegates active lookup and usage recording to the API Token module. The module updates `last_used_at` at most once per hour.
 ```
 
 ### Revocation
 
 1. User visits `/app`, sees active tokens with name + last used date
 2. Clicks Revoke
-3. `DELETE /tokens/:id` sets `revoked_at = Date.now()` — ownership verified against `userId`
+3. `DELETE /tokens/:id` asks the API Token module to set `revoked_at`. The module verifies ownership against `userId`.
 4. htmx removes the row from the UI via `outerHTML` swap
 5. Any subsequent GReader request with that token receives `401 Unauthorized`
+6. Weekly cleanup removes tokens that have been revoked for at least seven days, using the same module policy.
+
+The API Token module owns generation, hashing, lookup, usage recording, listing,
+revocation, and retention. HTTP adapters still own Cloudflare Access checks,
+header and form parsing, rate limiting, logging, and wire responses.
 
 ---
 

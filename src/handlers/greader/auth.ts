@@ -1,10 +1,7 @@
 import { Hono } from "hono";
-import { and, eq, isNull } from "drizzle-orm";
 import * as v from "valibot";
-import { getDb } from "../../lib/db";
+import { createApiTokenLifecycle } from "../../domain/tokens";
 import { createLogger } from "../../lib/logger";
-import { sha256 } from "../../lib/crypto";
-import { apiTokens } from "../../db/schema";
 import type { Variables } from "./helpers";
 
 const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -45,15 +42,10 @@ auth.post("/accounts/ClientLogin", async (c) => {
 
   const { Passwd } = parsed.output;
 
-  const db = getDb(c.env.DB);
-  const hash = await sha256(Passwd);
-  const row = await db
-    .select({ id: apiTokens.id })
-    .from(apiTokens)
-    .where(and(eq(apiTokens.tokenHash, hash), isNull(apiTokens.revokedAt)))
-    .get();
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
+  const token = await tokenLifecycle.findActive(Passwd);
 
-  if (!row) {
+  if (!token) {
     logger.warn("ClientLogin failed — token not found or revoked");
     return c.text("BadAuthentication", 403);
   }

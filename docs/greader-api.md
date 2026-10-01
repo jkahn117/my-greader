@@ -31,7 +31,7 @@ Authorization: GoogleLogin auth=<raw-api-token>
 
 Current sends this header automatically after a successful ClientLogin.
 
-The Worker validates by SHA-256 hashing the token and looking it up in `api_tokens WHERE revoked_at IS NULL`. On success, `last_used_at` is updated and the resolved `user_id` is attached to the request context for all downstream handlers.
+The API Token lifecycle module hashes the token and resolves an active token from D1. On success, it records usage at most once per hour. The middleware attaches the resolved `user_id` to the request context for downstream handlers.
 
 ---
 
@@ -276,30 +276,12 @@ Legacy single-timestamp tokens (from older deployments) are decoded as a fallbac
 ### Token validation middleware
 
 All routes under `/reader/` share a Hono middleware that:
-1. Extracts the token from `Authorization: GoogleLogin auth=<token>`
-2. SHA-256 hashes it
-3. Looks up in D1 `api_tokens WHERE token_hash = ? AND revoked_at IS NULL`
-4. Sets `c.set('userId', row.user_id)` for downstream handlers
-5. Returns `401` if not found or revoked
 
-```typescript
-app.use('/reader/*', async (c, next) => {
-  const auth = c.req.header('Authorization');
-  const token = auth?.replace('GoogleLogin auth=', '');
-  if (!token) return c.text('Unauthorized', 401);
+1. Extracts the token from `Authorization: GoogleLogin auth=<token>`.
+2. Delegates active-token lookup and usage recording to `createApiTokenLifecycle()`.
+3. Sets the resolved User ID and email on the Hono context.
+4. Returns `401` if the header is missing, the token is unknown, or the token is revoked.
 
-  const hash = await sha256(token);
-  const row = await c.env.DB.prepare(
-    'SELECT user_id FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL'
-  ).bind(hash).first();
-
-  if (!row) return c.text('Unauthorized', 401);
-
-  await c.env.DB.prepare(
-    'UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?'
-  ).bind(Date.now(), hash).run();
-
-  c.set('userId', row.user_id);
-  await next();
-});
-```
+The middleware does not contain token hashing, lookup, or usage-write policy.
+ClientLogin uses the same active-token lookup, but keeps form validation, rate
+limiting, logging, and its plain-text response in the HTTP adapter.

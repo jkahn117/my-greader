@@ -1,7 +1,5 @@
-import { lte } from "drizzle-orm";
-import { getDb } from "../lib/db";
+import { createApiTokenLifecycle } from "../domain/tokens";
 import { createLogger } from "../lib/logger";
-import { apiTokens } from "../db/schema";
 import type { PollTriggerReason } from "../feed/poll";
 
 export type { FeedPollResult as FeedResult } from "../feed/poll";
@@ -83,19 +81,10 @@ export async function purgeOldItems(env: Env): Promise<void> {
 // Revoked token cleanup — runs as part of the weekly cron
 // ---------------------------------------------------------------------------
 
-const TOKEN_RETENTION_DAYS = 7; // keep revoked tokens for 7 days before deleting
-
 async function purgeRevokedTokens(env: Env): Promise<void> {
   const logger = createLogger({ cron: "purgeRevokedTokens" });
-  const db = getDb(env.DB);
-  const cutoffMs = Date.now() - TOKEN_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const tokenLifecycle = createApiTokenLifecycle(env.DB);
+  const deleted = await tokenLifecycle.purgeRevoked();
 
-  const result = await db
-    .delete(apiTokens)
-    .where(lte(apiTokens.revokedAt, cutoffMs));
-
-  logger.info("purged revoked tokens", {
-    cutoff: new Date(cutoffMs).toISOString(),
-    deleted: result.meta.changes,
-  });
+  logger.info("purged revoked tokens", { deleted });
 }

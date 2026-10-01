@@ -102,7 +102,8 @@ describe("POST /tokens/generate", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     // The reveal fragment should contain a 64-char hex token
-    expect(html).toMatch(/[0-9a-f]{64}/);
+    const rawToken = html.match(/[0-9a-f]{64}/)?.[0];
+    expect(rawToken).toBeTruthy();
 
     // Verify token was stored in DB
     const db = getDb(env.DB);
@@ -113,7 +114,12 @@ describe("POST /tokens/generate", () => {
       .all();
     expect(tokens).toHaveLength(1);
     expect(tokens[0].name).toBe("Current on iPhone");
+    expect(tokens[0].tokenHash).toBe(await sha256(rawToken!));
+    expect(tokens[0].tokenHash).not.toBe(rawToken);
     expect(tokens[0].revokedAt).toBeNull();
+
+    const accessPage = await fetch("/app/access");
+    expect(await accessPage.text()).not.toContain(rawToken!);
   });
 
   it("rejects empty name", async () => {
@@ -187,6 +193,106 @@ describe("DELETE /tokens/:id", () => {
       .where(eq(apiTokens.id, "other-tok"))
       .get();
     expect(row!.revokedAt).toBeNull();
+  });
+});
+
+describe("token usage", () => {
+  it("records usage for an active token when its timestamp is stale", async () => {
+    const db = getDb(env.DB);
+    const staleUsage = Date.now() - 2 * 60 * 60 * 1000;
+    await db.insert(apiTokens).values({
+      id: "stale-token",
+      userId: "dev-user-id",
+      name: "Stale token",
+      tokenHash: await sha256("stale-raw-token"),
+      createdAt: Date.now(),
+      lastUsedAt: staleUsage,
+    });
+
+    const beforeRequest = Date.now();
+    const response = await fetch("/reader/api/0/user-info", {
+      headers: { Authorization: "GoogleLogin auth=stale-raw-token" },
+    });
+    const afterRequest = Date.now();
+
+    expect(response.status).toBe(200);
+    const row = await db
+      .select({ lastUsedAt: apiTokens.lastUsedAt })
+      .from(apiTokens)
+      .where(eq(apiTokens.id, "stale-token"))
+      .get();
+    expect(row?.lastUsedAt).toBeGreaterThanOrEqual(beforeRequest);
+    expect(row?.lastUsedAt).toBeLessThanOrEqual(afterRequest);
+  });
+
+  it("does not rewrite a recent usage timestamp under concurrent requests", async () => {
+    const db = getDb(env.DB);
+    const recentUsage = Date.now();
+    await db.insert(apiTokens).values({
+      id: "recent-token",
+      userId: "dev-user-id",
+      name: "Recent token",
+      tokenHash: await sha256("recent-raw-token"),
+      createdAt: Date.now(),
+      lastUsedAt: recentUsage,
+    });
+
+    const responses = await Promise.all([
+      fetch("/reader/api/0/user-info", {
+        headers: { Authorization: "GoogleLogin auth=recent-raw-token" },
+      }),
+      fetch("/reader/api/0/user-info", {
+        headers: { Authorization: "GoogleLogin auth=recent-raw-token" },
+      }),
+    ]);
+
+    expect(responses.map(({ status }) => status)).toEqual([200, 200]);
+    const row = await db
+      .select({ lastUsedAt: apiTokens.lastUsedAt })
+      .from(apiTokens)
+      .where(eq(apiTokens.id, "recent-token"))
+      .get();
+    expect(row?.lastUsedAt).toBe(recentUsage);
+  });
+});
+
+describe("token cleanup", () => {
+  it("deletes tokens revoked more than seven days ago", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(apiTokens).values([
+      {
+        id: "expired-revoked-token",
+        userId: "dev-user-id",
+        name: "Expired revoked token",
+        tokenHash: await sha256("expired-revoked"),
+        createdAt: now - 10 * 24 * 60 * 60 * 1000,
+        revokedAt: now - 8 * 24 * 60 * 60 * 1000,
+      },
+      {
+        id: "retained-revoked-token",
+        userId: "dev-user-id",
+        name: "Retained revoked token",
+        tokenHash: await sha256("retained-revoked"),
+        createdAt: now - 10 * 24 * 60 * 60 * 1000,
+        revokedAt: now - 6 * 24 * 60 * 60 * 1000,
+      },
+      {
+        id: "active-old-token",
+        userId: "dev-user-id",
+        name: "Active old token",
+        tokenHash: await sha256("active-old"),
+        createdAt: now - 30 * 24 * 60 * 60 * 1000,
+      },
+    ]);
+
+    await worker.scheduled({ cron: "0 3 * * 1" } as ScheduledEvent, env);
+
+    const rows = await db.select({ id: apiTokens.id }).from(apiTokens).all();
+    expect(rows.map(({ id }) => id).sort()).toEqual([
+      "active-old-token",
+      "retained-revoked-token",
+    ]);
   });
 });
 

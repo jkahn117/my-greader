@@ -1,15 +1,12 @@
-import type { InferSelectModel } from "drizzle-orm";
-import type { apiTokens } from "../db/schema";
+import type { ApiTokenSummary } from "../domain/tokens";
 import { relativeTime } from "../lib/dates";
-
-type ApiToken = InferSelectModel<typeof apiTokens>;
 
 // ---------------------------------------------------------------------------
 // Token list — rendered server-side; updated via htmx OOB swap on generate
 // ---------------------------------------------------------------------------
 
 interface TokenRowProps {
-  token: ApiToken;
+  token: ApiTokenSummary;
 }
 
 /** Single row — has its own ID so htmx can target it for revoke */
@@ -43,7 +40,7 @@ export function TokenList({
   tokens,
   oob,
 }: {
-  tokens: ApiToken[];
+  tokens: ApiTokenSummary[];
   oob?: boolean;
 }) {
   return (
@@ -87,7 +84,7 @@ export function TokenReveal({ rawToken }: { rawToken: string }) {
 // ---------------------------------------------------------------------------
 
 interface AccessTabProps {
-  tokens: ApiToken[];
+  tokens: ApiTokenSummary[];
 }
 
 export function AccessTab({ tokens }: AccessTabProps) {
