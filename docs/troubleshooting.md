@@ -10,7 +10,7 @@ logic:
 
 | Error type | Examples | Deactivation threshold | Behaviour |
 |---|---|---|---|
-| **Transient** | Network timeouts, DNS failures, HTTP 5xx, XML parse errors ("Unclosed root tag") | 5 consecutive | Adaptive polling backoff; retried every cycle until deactivated |
+| **Transient** | Network timeouts, DNS failures, HTTP 5xx, XML parse errors ("Unclosed root tag") | 5 consecutive | Retried at the Feed's current interval until deactivated |
 | **Permanent** | HTTP 401, 403, 404, 410 | 2 consecutive | Fast deactivation — these rarely self-resolve. The feed stays deactivated until manually reactivated from the Feed tab |
 
 Rate limits (HTTP 429) do not count toward any deactivation threshold (they are
@@ -18,12 +18,11 @@ transient by nature but the server explicitly tells us to wait).
 
 ### Parse fallback
 
-When `rss-parser` (xml2js) rejects a feed with an XML-level error (e.g. "Unclosed
+When `rss-parser` (xml2js) rejects a Feed with an XML-level error (e.g. "Unclosed
 root tag"), the parser falls back to a lenient HTML-based extractor that uses
-[linkedom](https://github.com/WebReflection/linkedom). If the fallback succeeds,
-the feed is marked `parseStatus=fallback` in structured logs and Analytics Engine
-metrics. The fallback success is logged at `warn` level so it is visible in
-Observability but does not raise an alert.
+[linkedom](https://github.com/WebReflection/linkedom). A successful fallback is
+stored as `parser_status = 'fallback'` on the durable Feed attempt, shown on the
+Timeline, and emitted as an Analytics Engine parse-status dimension.
 
 ## Finding problem feeds
 
@@ -41,47 +40,60 @@ any feed is currently erroring or deactivated. Each feed row shows:
 
 From here you can **Reactivate** a deactivated feed or **Deactivate** one manually.
 
-### 2. Dashboard — Metrics tab
+### 2. Dashboard — Timeline tab
+
+The **Timeline tab** (`/app/timeline`) is the durable source for recent polling
+outcomes. Expand a Cycle Run to see each subscribed Feed attempt, its outcome,
+HTTP or parse diagnostic, fallback-parser badge, stable attempt ID, and newly
+attributed Items. Use the attempt ID to correlate the row with structured logs.
+
+### 3. Dashboard — Metrics tab
 
 Use the **Fetch errors by status** card (Analytics Engine, requires API token) to
-see aggregate HTTP error rates over 7 days — broken down by status code and
-number of affected feeds.
+see aggregate HTTP error rates over 7 days, broken down by status code and
+number of affected Feeds. Network and parse failures are not HTTP-status metrics;
+use the Timeline or D1 for those.
 
-### 3. Structured logs (Workers Observability)
+### 4. Structured logs (Workers Observability)
 
-Workers Observability is enabled (`observability.enabled: true` in wrangler.jsonc).
-Use the **Observability → Investigate → Query Builder** in the Cloudflare
-dashboard:
+Workers Observability is enabled (`observability.enabled: true` in
+`wrangler.jsonc`). The Workflow emits one `feed polling attempt completed` log
+per terminal attempt. In **Observability → Investigate → Query Builder**, filter
+on fields that are present on those logs:
 
 ```
--- Feeds that fell back to the lenient parser
-parseStatus = "fallback"
+-- Failed Feed attempts
+outcome = "failed"
 
--- Permanent HTTP errors (401/403/404/410)
-httpStatus IN ("401", "403", "404", "410")
+-- Network, HTTP, or parse failures
+errorClass = "network"
+errorClass = "http"
+errorClass = "parse"
 
--- Hard parse failures (both parsers failed)
-parseStatus = "failure"
+-- Rate-limited or skipped attempts
+outcome = "rate_limited"
+outcome = "skipped"
 
--- Rate-limited feeds
-httpStatus = "429"
-
--- Feeds serving text/html at their feed URL
-contentType CONTAINS "text/html"
+-- One durable attempt or Feed
+attemptId = "<cycle-run-id>:<feed-id>"
+feedId = "<feed-id>"
 ```
 
-### 4. `wrangler tail`
+HTTP status and parser status are durable D1 fields shown by the Timeline; they
+are not attached to every terminal structured log.
 
-Real-time structured log stream. Pipe through `jq` to filter:
+### 5. `wrangler tail`
+
+Stream the same terminal logs in real time and filter their structured fields:
 
 ```bash
-wrangler tail | jq 'select(.logs[].message | contains("rss-parser failed"))'
-wrangler tail | jq 'select(.httpStatus == 404)'
+pnpm wrangler tail --format json | jq 'select(any(.logs[]?; .message | contains("feed polling attempt completed")))'
+pnpm wrangler tail --format json | rg 'errorClass.*parse'
 ```
 
-### 5. D1 queries
+### 6. D1 queries
 
-Query the `feeds` table directly to find feeds with errors:
+Query current Feed health:
 
 ```sql
 SELECT title, feed_url, last_successful_poll_at,
@@ -91,6 +103,18 @@ SELECT title, feed_url, last_successful_poll_at,
 FROM feeds
 WHERE consecutive_errors > 0 OR deactivated_at IS NOT NULL
 ORDER BY consecutive_errors DESC;
+```
+
+Query recent durable attempt detail, including fields not present on every log:
+
+```sql
+SELECT id, cycle_run_id, feed_id, outcome, error_class,
+       http_status, parser_status, diagnostic, started_at, completed_at
+FROM feed_poll_attempts
+WHERE outcome IN ('failed', 'rate_limited')
+   OR parser_status IN ('fallback', 'failure')
+ORDER BY started_at DESC
+LIMIT 100;
 ```
 
 ## Common scenarios
@@ -119,15 +143,9 @@ The feed's XML is truncated or malformed. The lenient fallback parser will
 attempt to recover items. If the fallback also fails, the feed will accumulate
 errors and eventually deactivate.
 
-Check the structured log for the `parserError` field to see the exact xml2js
-error message. If the fallback succeeded, the log will show "rss-parser failed,
-parsed via lenient fallback" with the item count.
-
-### Feed returning text/html Content-Type
-
-Some servers misconfigure their feed endpoint to return `Content-Type: text/html`
-instead of an XML type. A warning is logged when this is detected. The lenient
-fallback parser (which is an HTML parser) handles these cases better than xml2js.
+Check the Timeline or `feed_poll_attempts.diagnostic` for the bounded parser
+message. A successful fallback has `parser_status = 'fallback'`; a hard failure
+has `parser_status = 'failure'` and `error_class = 'parse'`.
 
 ### Feed polling too slowly (long poll interval)
 
@@ -135,8 +153,9 @@ Poll intervals increase via adaptive backoff when a feed has no new items. Check
 the **Poll interval distribution** card on the Metrics tab to see how many feeds
 are at each backoff tier. Intervals reset to 30 minutes when new items appear.
 
-If a feed is consistently at 4h+ intervals but has no errors, it is simply quiet.
-The backoff is working as designed to avoid hammering low-volume feeds.
+If a Feed is consistently at the four-hour interval with no errors, it is
+simply quiet. An interval above four hours comes from a longer Feed `<ttl>` (up
+to 24 hours) or a server `Retry-After` value after HTTP 429.
 
 ## Reset tools
 

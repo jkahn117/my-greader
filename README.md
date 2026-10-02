@@ -15,7 +15,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                          │                                                       │
   Browser (you)    ──────┤  /app/*   Management UI (Hono + htmx + Tailwind)    │
                          │   auth: Cloudflare Access JWT                        │
-  Cloudflare Access      │   /app/tokens  — generate / revoke API tokens       │
+  Cloudflare Access      │   /app/access  — generate / revoke API tokens       │
   (SSO / email OTP) ─────┤   /app/metrics — dashboard (see below)              │
                          │                                                       │
                          │  Cron  */30 * * * *  ──► FeedPollingWorkflow        │
@@ -36,7 +36,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                                     │   Cloudflare D1    │    │  Analytics Engine      │
                                     │   (SQLite)         │    │  optional trends       │
                                     │                    │    │                        │
-                                    │  feeds             │    │  feed_parse_duration   │
+                                    │  feeds             │    │  feed_parse_duration_ms│
                                     │  subscriptions     │    │  feed_new_articles     │
                                     │  items             │    │  feed_fetch_error      │
                                     │  item_state        │    │  article_read          │
@@ -70,7 +70,7 @@ In Current: **Settings → Sync → FreshRSS**
 ```
 Server URL:  https://<your-worker-domain>
 Username:    <your email>
-Password:    <API token generated from /app/tokens>
+Password:    <API token generated from /app/access>
 ```
 
 Current treats this Worker as a FreshRSS instance. It speaks the standard GReader protocol — no FreshRSS installation required.
@@ -86,15 +86,16 @@ Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each
 5. Records successful checks, precise new-Item discovery, initial backload completion, next eligibility, and Deactivation reason separately
 6. Derives the Cycle Run summary from durable attempts and emits batched metrics
 
-**Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each Feed poll can use five subrequests for durable progress, HTTP, Item insertion, attribution reconciliation, and terminal outcome writes. Sequential Workflow steps each run in a fresh invocation with a fresh budget, so the total Feed count is not capped by one invocation.
+**Why Workflows instead of a plain cron handler?** The free plan limits each Worker invocation to 50 subrequests. Each Feed uses a small fixed number of HTTP or D1 binding calls for durable progress, fetching, atomic completion, and committed-result reads. Sequential Workflow steps each run in a fresh invocation with a fresh budget, so the total Feed count is not capped by one invocation.
 
 **Adaptive backoff** — `check_interval_minutes` per feed, default 30 min:
 
 | Event | Interval change |
 |---|---|
 | New articles found | Reset to 30 min (or feed's `<ttl>` if longer, up to 24 h) |
-| No new content / HTTP 304 | Double, capped at 4 hours |
-| HTTP 429 rate limit | Double (or `Retry-After`), capped at 4 hours; no error count increment |
+| No new content | Double, capped at 4 hours, or honor a longer Feed `<ttl>` up to 24 hours |
+| HTTP 304 | Double, capped at 4 hours |
+| HTTP 429 rate limit | At least double, while honoring a longer `Retry-After`; no error count increment |
 | Any other HTTP error / parse error | No change to interval; consecutive error count incremented |
 | 5 transient errors or 2 permanent errors | Feed deactivated with the reason recorded; stops being polled |
 
@@ -106,9 +107,8 @@ The dashboard has two data layers:
 
 **D1-backed (always available, near-real-time):**
 - KPI cards: total articles, new this week, reads (7d), last cycle
-- Polling cycle timeline — bar chart of last 48 runs (~24 h at 30-min intervals)
+- Polling cycle timeline — bar chart of the last 48 scheduled or manual runs
 - Feed activity — top publishers by new articles in the last 7 days
-- Feed health — erroring / rate-limited / deactivated feeds with last error and timestamps
 - Poll interval distribution — how backed-off the fleet currently is
 - Reads by day — 7-day bar chart from `item_state.read_at`
 
@@ -133,7 +133,7 @@ pnpm wrangler d1 migrations apply rss-reader --remote  # production
 # 3. Set required secrets
 #    To find CF_ACCESS_AUD: Zero Trust → Access → Applications → your management UI app
 #    → Settings → scroll to "Application Audience (AUD) Tag" — a 64-char hex string
-wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verification)
+pnpm wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verification)
 
 # 4. Set the optional Analytics Engine read credential used by the dashboard.
 #    The token needs Account Analytics Read permission. Metric writes use the
@@ -141,11 +141,11 @@ wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verifi
 pnpm wrangler secret put CF_API_TOKEN
 ```
 
-Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the reads-per-day chart groups by the correct local day.
+Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) for dashboard timestamp display. D1's reads-per-day aggregation uses UTC day boundaries.
 
 **Cloudflare Access setup:**
 
-Access must protect the management UI while allowing GReader clients to reach the API without a browser session. Use two overlapping Access applications on the same subdomain — Access evaluates the most-specific path first.
+Access must protect the management UI while allowing GReader clients to reach the API without a browser session. Use two overlapping Access applications on the same subdomain — Access evaluates the most-specific path first. The configuration below covers Current's `/api/greader.php/*` requests. If another client uses the supported bare routes, add equivalent bypass applications for `/reader/*` and `/accounts/ClientLogin`.
 
 **App 1 — GReader API bypass** (create this first)
 
@@ -159,7 +159,7 @@ Access must protect the management UI while allowing GReader clients to reach th
 1. Add another Self-hosted application
 2. Domain: `myreader.example.com` (no path — catches everything else)
 3. Policy: **Action = Allow**, Include = **Emails** → your email address
-4. Copy the **Audience Tag** → `wrangler secret put CF_ACCESS_AUD`
+4. Copy the **Audience Tag** → `pnpm wrangler secret put CF_ACCESS_AUD`
 
 Also add a custom domain to the Worker in the Cloudflare dashboard and point both Access applications at it.
 
@@ -208,9 +208,10 @@ pnpm deploy     # compile CSS + wrangler deploy
 | `CF_ACCESS_AUD` | secret | Cloudflare Access audience tag for JWT verification |
 | `CF_API_TOKEN` | secret | Cloudflare API token with Account Analytics Read for optional Analytics Engine dashboard queries |
 | `CF_ACCOUNT_ID` | var | Cloudflare account ID used by Analytics Engine SQL queries |
-| `DISPLAY_TIMEZONE` | var | IANA timezone for dashboard date grouping (default: UTC) |
+| `DISPLAY_TIMEZONE` | var | IANA timezone for dashboard timestamp display (default: UTC); reads-per-day uses UTC boundaries |
 | `ITEM_RETENTION_DAYS` | var | Days to retain articles before weekly cleanup (default: 30) |
 | `ANALYTICS_ENABLED` | var | Set to `"false"` to disable Analytics Engine writes and queries |
+| `DEV_MODE` | local only | Set to `"true"` in `.dev.vars` to use the local development identity; never set in production |
 
 ## Docs
 

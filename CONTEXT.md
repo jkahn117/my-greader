@@ -30,7 +30,7 @@ A personal RSS aggregator that exposes a Google Reader-compatible API so native 
 
 **Polling**: The scheduled act of fetching a Feed via HTTP, parsing the XML response, and storing new Items. Uses conditional requests (ETag / Last-Modified) to avoid redundant downloads. _Avoid_: Fetching, crawling, scraping
 
-**Cycle Run**: A summary record of one polling cycle. Records counts of active feeds, feeds checked, new items stored, and failed feeds. Stored in `cycle_runs` for the dashboard timeline. _Avoid_: Batch run, cron run, cycle
+**Cycle Run**: The durable record of one polling cycle, keyed by the Workflow instance ID. Records its trigger, lifecycle, outcome, and counts of active, selected, checked, skipped, and failed Feeds plus new Items. Stored in `cycle_runs` for the Metrics and Timeline tabs. _Avoid_: Batch run, cron run, cycle
 
 **Deactivation**: Automatic disabling of a Feed when consecutive errors cross a threshold (2 permanent errors like 404/410, or 5 transient errors). A deactivated feed is skipped in future polling cycles until manually re-activated. _Avoid_: Disablement, suspension, banning
 

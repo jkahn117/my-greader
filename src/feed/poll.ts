@@ -5,8 +5,8 @@
  * owns Feed selection, Cycle Run reconciliation, HTTP outcomes, parsing,
  * Item storage, Backoff, error tracking, ownership, and health transitions.
  *
- * Observability tools (logger, metrics, wide events) stay in the
- * Workflow's `PollObserver` adapter — no Powertools imports here.
+ * Observability tools stay in the Workflow adapter. This module publishes
+ * domain events through `PollObserver` and has no Powertools imports.
  */
 import Parser from "rss-parser";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";

@@ -10,7 +10,7 @@ Access-protected web UI and can be revoked at any time.
 
 ## Web UI Auth — Cloudflare Access
 
-Routes under `/app/*`, `/tokens/*`, and `/import` are protected by `accessMiddleware`
+Routes under `/app/*`, `/tokens/*`, `/feeds/*`, and `/import` are protected by `accessMiddleware`
 (`src/middleware/access.ts`). Cloudflare Access sits in front of the Worker and handles
 login entirely — the Worker never sees credentials.
 
@@ -62,7 +62,7 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
 
 ### Generation
 
-1. Authenticated user visits `/app` (Access-protected)
+1. Authenticated user visits `/app/access` (Access-protected)
 2. Enters a token name (e.g. "Current on iPhone") and clicks Generate
 3. `POST /tokens/generate` delegates to `createApiTokenLifecycle()`:
    - The module generates 32 cryptographically random bytes encoded as a 64-char hex string
@@ -86,7 +86,7 @@ Body: Email=user@example.com&Passwd=<raw-token>
 
 ### Revocation
 
-1. User visits `/app`, sees active tokens with name + last used date
+1. User visits `/app/access`, sees active tokens with name + last used date
 2. Clicks Revoke
 3. `DELETE /tokens/:id` asks the API Token module to set `revoked_at`. The module verifies ownership against `userId`.
 4. htmx removes the row from the UI via `outerHTML` swap
@@ -103,11 +103,18 @@ header and form parsing, rate limiting, logging, and wire responses.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | `/app` | Cloudflare Access | Token management UI (Access tab) |
-| GET | `/app/feeds` | Cloudflare Access | Feed management UI (Feed tab) |
+| GET | `/app` | Cloudflare Access | Redirect to the Metrics tab |
+| GET | `/app/metrics` | Cloudflare Access | D1 and Analytics Engine metrics |
+| GET | `/app/timeline` | Cloudflare Access | Durable Cycle Run and Feed-attempt history |
+| GET | `/app/feeds` | Cloudflare Access | Subscription and Feed management (Feed tab) |
+| GET | `/app/access` | Cloudflare Access | API Token management (Access tab) |
 | POST | `/tokens/generate` | Cloudflare Access | Generate new API token |
 | DELETE | `/tokens/:id` | Cloudflare Access | Revoke token |
-| POST | `/import` | Cloudflare Access | OPML feed import |
+| POST | `/import` | Cloudflare Access | OPML Feed import |
+| POST | `/feeds/sync` | Cloudflare Access | Start a normal manual Cycle Run for eligible Feeds |
+| POST | `/feeds/sync/force` | Cloudflare Access | Start a forced Cycle Run for all active subscribed Feeds |
+| POST | `/feeds/:id/deactivate` | Cloudflare Access | Manually deactivate a subscribed Feed |
+| POST | `/feeds/:id/reactivate` | Cloudflare Access | Manually reactivate a subscribed Feed |
 | GET | `/auth/logout` | None | Redirect to Access logout URL |
 | POST | `/accounts/ClientLogin` | None (validates token) | GReader auth entry point |
 | GET/POST | `/reader/*` | API token header | All GReader API endpoints |

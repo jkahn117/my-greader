@@ -8,7 +8,7 @@ Current connects to this backend using its **FreshRSS** sync option. In the app:
 Settings → Sync → FreshRSS
 Server URL: https://reader.yourdomain.com
 Username:   user@example.com
-Password:   <API token generated from /tokens UI>
+Password:   <API token generated from /app/access>
 ```
 
 Current does not know or care that FreshRSS is not actually running. It sends standard GReader API requests to the provided URL and this Worker responds with the expected shapes.
@@ -255,7 +255,7 @@ GReader uses the format `tag:google.com,2005:reader/item/<hex-id>` in full, but 
 
 Generate item IDs from a hash of the article GUID or URL:
 ```typescript
-const itemId = await hashId(item.guid ?? item.url);
+const itemId = await deriveItemId(item.guid ?? item.url);
 // store as hex string in D1
 ```
 

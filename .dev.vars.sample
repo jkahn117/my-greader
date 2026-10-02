@@ -1,6 +1,6 @@
 # Copy this file to .dev.vars and fill in values for local development.
 # .dev.vars is gitignored — never commit real secrets.
-# Run `wrangler types` after editing .dev.vars to regenerate TypeScript types.
+# Run `pnpm cf-typegen` after editing .dev.vars to regenerate TypeScript types.
 
 # Cloudflare Access audience tag — get from Access app settings.
 # Not required locally; leave as placeholder if testing without Access.
@@ -10,5 +10,5 @@ CF_ACCESS_AUD=placeholder
 # Never set in production.
 DEV_MODE=true
 
-# Cloudflare API token with Analytics Engine Read permission (status dashboard)
+# Optional Cloudflare API token with Account Analytics Read permission (Metrics tab)
 CF_API_TOKEN=placeholder

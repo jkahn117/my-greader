@@ -21,7 +21,7 @@ the Workflow parse protocol concerns and delegate.
 | `src/feed/item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None, domain persistence module |
 | `src/feed/stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None, pure query module |
 | `src/feed/analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None, read adapter |
-| `src/feed/activity.ts` | Bounded Cycle Run history, User-visible attempt and Item projections, explicit unattributed history | None, read module |
+| `src/feed/activity.ts` | D1 dashboard metrics, bounded Cycle Run history, User-visible attempt and Item projections, explicit unattributed history | None, read module |
 | `src/feed/retention.ts` | Bounded Item and operational-history cleanup, starred Item and Item State preservation, safe attribution expiry | None, domain persistence module |
 | `src/domain/tokens/` | Hash-only API Token generation, active lookup, usage recording, User-scoped revocation, listing, and revoked-token retention | None, domain persistence module |
 
@@ -50,7 +50,7 @@ See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 ## Request routing
 
 - `/reader/*` and `/accounts/ClientLogin` — GReader-compatible API, token auth
-- `/app/*`, `/tokens/*`, `/import` — Management UI, Cloudflare Access JWT auth
+- `/app/*`, `/tokens/*`, `/feeds/*`, `/import` — Management UI, Cloudflare Access JWT auth
 
 The GReader API follows the FreshRSS dialect of the Google Reader protocol.
 See [`docs/greader-api.md`](greader-api.md) for endpoint details.
@@ -65,12 +65,15 @@ completion, and committed-result read. The smaller batch stays under the
 
 Polling policy is owned by the polling module. `createPollingCycleManager()` selects eligible Feeds, starts Cycle Runs, and reconciles summaries from durable attempts. The Workflow chooses step boundaries, delegates each Feed to `FeedPoller`, and provides
 a narrow `FeedTransport` (global `fetch` with 15s timeout) and a `PollObserver`
-that maps domain events to logger, metrics, and wide events.  The module
+that maps domain events to metrics. The Workflow emits searchable terminal
+attempt logs after polling. The module
 handles conditional requests (ETag/Last-Modified), rate limiting (429 with
 Retry-After), two-tier error deactivation (2 strikes for permanent errors
 like 404/410, 5 for transient), lenient fallback parsing, and adaptive
-interval backoff (30 → 240 minutes). Eligibility queries use the persisted
-`next_poll_at`; forced runs bypass that timestamp but still honor Deactivation.
+interval Backoff (30 → 240 minutes). A parsed Feed `<ttl>` can set a longer
+interval up to 24 hours, and HTTP 429 can honor a longer `Retry-After`.
+Eligibility queries use the persisted `next_poll_at`; forced runs bypass that
+timestamp but still honor Deactivation.
 A successful parse completes initial backload even when the Feed is empty.
 Later ingestion uses the last precise new-Item discovery, or initial completion
 when no Item has been found, as the 24-hour backload anchor.
@@ -98,18 +101,20 @@ AE SQL dialect and `blob`/`double`/`index` column layout, runs four
 aggregate queries in parallel, and returns typed domain projections.
 The dashboard handler never sees raw AE rows.
 
-**Real-time dashboard cards** (cycle timeline, feed health, reads per day)
-query D1 directly and work without analytics. `createActivityReader()` owns the
-Timeline's 20-Cycle-Run D1 projection. It follows Item-to-attempt-to-Cycle-Run
+**D1 dashboard projections** work without analytics. `createActivityReader()`
+owns the Metrics tab's recent Cycle Runs, interval distribution, Item counts,
+Feed activity, and per-User read counts. It also owns the Timeline's bounded
+20-Cycle-Run projection. The Timeline follows Item-to-attempt-to-Cycle-Run
 foreign keys and filters attempts and Items through the authenticated User's
 Subscriptions. Cycle Run summaries are labeled as global, while the attributed
 Item count is labeled for the User's Subscriptions. Older Items without durable
 attribution are counted separately, and a missing Cycle Run history is shown as
-unavailable rather than zero activity. Timestamp windows are not used. Attempt
-rows expose the stable attempt and Feed IDs used in structured logs. The
-Activity projection derives public diagnostics from outcome, error class, and
-HTTP status instead of rendering stored error text, so response content and
-credentials cannot reach the Timeline.
+unavailable rather than zero activity. Timestamp windows are not used for Item
+attribution. Attempt rows expose the stable attempt and Feed IDs used in
+structured logs. The Activity projection derives public diagnostics from
+outcome, error class, and HTTP status instead of rendering stored error text, so
+response content and credentials cannot reach the Timeline. Current Feed health
+is read through `createSubscriptionLifecycle()` for the Feed tab.
 
 ## Retention
 
@@ -155,5 +160,6 @@ The old `force` Workflow payload and Pipeline configuration are removed. The dep
 ## Wrangler configuration
 
 One Worker, one D1 database, one Analytics Engine dataset, one Workflow.
-Two cron triggers.  Secrets: `CF_ACCESS_AUD`, `CF_API_TOKEN`, `DEV_MODE`.
+Two cron triggers. Secrets: `CF_ACCESS_AUD` and optional `CF_API_TOKEN`.
 Vars: `ITEM_RETENTION_DAYS`, `CF_ACCOUNT_ID`, `DISPLAY_TIMEZONE`, `ANALYTICS_ENABLED`.
+`DEV_MODE` is a local-only `.dev.vars` bypass and must not be set in production.

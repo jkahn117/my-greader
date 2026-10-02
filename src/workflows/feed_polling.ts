@@ -72,7 +72,7 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 // Batching strategy:
 //   - Feeds within a batch are fetched concurrently (Promise.allSettled) to
 //     minimise wall time. Concurrent fetches within one step share that step's
-//     budget, so the batch size leaves room for five subrequests per Feed.
+//     budget, so the batch size leaves room for up to four subrequests per Feed.
 //   - Batches are processed sequentially (one step.do per batch), each in a
 //     fresh invocation, so total feed count is not constrained by subrequests.
 //

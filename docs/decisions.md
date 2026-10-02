@@ -73,9 +73,7 @@ personal access tokens.
 
 ## Why Hono + htmx (not a SPA)
 
-The management UI has two screens and a handful of interactions. Hono's JSX renderer runs
-server-side in the Worker with no client bundle. htmx handles dynamic interactions (token
-revocation, generation response, OPML import result) via HTML attributes — no JS to write.
+The management UI has four small server-rendered tabs and a handful of interactions. Hono's JSX renderer runs server-side in the Worker with no client bundle. htmx handles dynamic interactions (token revocation, generation response, OPML import, Feed health changes, and manual sync controls) via HTML attributes.
 
 TanStack would be worth reconsidering if the UI grows to include per-user feed analytics or
 complex client-side state.
@@ -94,7 +92,7 @@ alongside the Worker — single deployment, single wrangler.jsonc.
 
 A naive implementation fetches each subscription separately, meaning 10 users subscribing to the
 same feed results in 10 fetches per cron cycle. The schema separates `feeds` (shared, canonical)
-from `subscriptions` (per-user). The cron queries distinct feeds with active subscribers and
+from `subscriptions` (per-user). The polling module selects distinct Feeds with active Subscribers and
 fetches each once, using `ETag`/`Last-Modified` for conditional requests. Only `item_state` is
 per-user — article content is stored once in `items`.
 
@@ -110,9 +108,9 @@ The repository previously described a Pipelines to R2/Iceberg backend after the 
 
 ---
 
-## Build order rationale
+## Original build order rationale
 
-Recommended sequence:
+The original implementation sequence was:
 
 1. D1 schema + migrations
 2. GReader API with hardcoded token (validate protocol against Current early)
