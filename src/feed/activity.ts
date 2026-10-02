@@ -30,6 +30,7 @@ export interface ActivityItem {
 
 export interface ActivityAttempt {
   id: string;
+  feedId: string;
   feedTitle: string;
   outcome: FeedAttemptOutcome | null;
   errorClass: FeedAttemptErrorClass | null;
@@ -38,8 +39,8 @@ export interface ActivityAttempt {
   diagnostic: string | null;
 }
 
-export interface ActivityCycle {
-  cycleId: string;
+export interface ActivityCycleRun {
+  cycleRunId: string;
   ranAt: number;
   globalSelectedFeeds: number;
   globalCheckedFeeds: number;
@@ -56,13 +57,42 @@ export interface ActivityCycle {
 }
 
 export interface ActivityTimeline {
-  cycles: ActivityCycle[];
+  cycleRuns: ActivityCycleRun[];
   unattributedItemCount: number;
   historyStatus: "available" | "empty" | "unavailable";
 }
 
 export interface ActivityReader {
   timeline(userId: string): Promise<ActivityTimeline>;
+}
+
+/** Builds a public diagnostic from classified fields instead of stored error text. */
+function publicAttemptDiagnostic(attempt: {
+  outcome: FeedAttemptOutcome | null;
+  errorClass: FeedAttemptErrorClass | null;
+  httpStatus: number | null;
+}): string | null {
+  if (attempt.outcome === "rate_limited") {
+    return "HTTP 429, Feed server requested Backoff";
+  }
+  if (attempt.outcome === "failed") {
+    if (attempt.errorClass === "http") {
+      return attempt.httpStatus == null
+        ? "HTTP request failed"
+        : `HTTP ${attempt.httpStatus}`;
+    }
+    if (attempt.errorClass === "network") {
+      return "Network request failed";
+    }
+    if (attempt.errorClass === "parse") {
+      return "Feed content could not be parsed";
+    }
+    return "Feed polling failed";
+  }
+  if (attempt.outcome === "skipped") {
+    return "Feed was skipped";
+  }
+  return null;
 }
 
 /** Creates the durable Activity read interface used by dashboard adapters. */
@@ -73,7 +103,7 @@ export function createActivityReader(dbBinding: D1Database): ActivityReader {
 
   /** Builds a bounded, User-visible Timeline without timestamp inference. */
   async function timeline(userId: string): Promise<ActivityTimeline> {
-    const cycles = await db
+    const recentCycleRuns = await db
       .select()
       .from(cycleRuns)
       .orderBy(desc(cycleRuns.ranAt), desc(cycleRuns.id))
@@ -92,25 +122,25 @@ export function createActivityReader(dbBinding: D1Database): ActivityReader {
       .get();
     const unattributedItemCount = Number(unattributedRow?.count ?? 0);
 
-    if (cycles.length === 0) {
+    if (recentCycleRuns.length === 0) {
       return {
-        cycles: [],
+        cycleRuns: [],
         unattributedItemCount,
         historyStatus: unattributedItemCount > 0 ? "unavailable" : "empty",
       };
     }
 
-    const cycleIds = cycles.map((cycle) => cycle.id);
+    const cycleRunIds = recentCycleRuns.map((cycleRun) => cycleRun.id);
     const attemptRows = await db
       .select({
         id: feedPollAttempts.id,
         cycleRunId: feedPollAttempts.cycleRunId,
+        feedId: feedPollAttempts.feedId,
         feedTitle: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
         outcome: feedPollAttempts.outcome,
         errorClass: feedPollAttempts.errorClass,
         httpStatus: feedPollAttempts.httpStatus,
         parserStatus: feedPollAttempts.parserStatus,
-        diagnostic: feedPollAttempts.diagnostic,
       })
       .from(feedPollAttempts)
       .innerJoin(feeds, eq(feedPollAttempts.feedId, feeds.id))
@@ -118,7 +148,7 @@ export function createActivityReader(dbBinding: D1Database): ActivityReader {
       .where(
         and(
           eq(subscriptions.userId, userId),
-          inArray(feedPollAttempts.cycleRunId, cycleIds),
+          inArray(feedPollAttempts.cycleRunId, cycleRunIds),
         ),
       )
       .orderBy(desc(feedPollAttempts.startedAt), desc(feedPollAttempts.id));
@@ -142,56 +172,57 @@ export function createActivityReader(dbBinding: D1Database): ActivityReader {
       .where(
         and(
           eq(subscriptions.userId, userId),
-          inArray(feedPollAttempts.cycleRunId, cycleIds),
+          inArray(feedPollAttempts.cycleRunId, cycleRunIds),
         ),
       )
       .orderBy(desc(feedPollAttempts.completedAt), desc(items.id));
 
-    const attemptsByCycle = new Map<string, ActivityAttempt[]>();
+    const attemptsByCycleRun = new Map<string, ActivityAttempt[]>();
     for (const row of attemptRows) {
-      const attempts = attemptsByCycle.get(row.cycleRunId) ?? [];
+      const attempts = attemptsByCycleRun.get(row.cycleRunId) ?? [];
       attempts.push({
         id: row.id,
+        feedId: row.feedId,
         feedTitle: row.feedTitle,
         outcome: row.outcome,
         errorClass: row.errorClass,
         httpStatus: row.httpStatus,
         parserStatus: row.parserStatus,
-        diagnostic: row.diagnostic,
+        diagnostic: publicAttemptDiagnostic(row),
       });
-      attemptsByCycle.set(row.cycleRunId, attempts);
+      attemptsByCycleRun.set(row.cycleRunId, attempts);
     }
 
-    const itemsByCycle = new Map<string, ActivityItem[]>();
+    const itemsByCycleRun = new Map<string, ActivityItem[]>();
     for (const row of itemRows) {
-      const cycleItems = itemsByCycle.get(row.cycleRunId) ?? [];
-      cycleItems.push({
+      const cycleRunItems = itemsByCycleRun.get(row.cycleRunId) ?? [];
+      cycleRunItems.push({
         itemTitle: row.itemTitle,
         itemUrl: row.itemUrl,
         publishedAt: row.publishedAt,
         feedTitle: row.feedTitle,
         attemptId: row.attemptId,
       });
-      itemsByCycle.set(row.cycleRunId, cycleItems);
+      itemsByCycleRun.set(row.cycleRunId, cycleRunItems);
     }
 
     return {
-      cycles: cycles.map((cycle) => {
-        const subscribedItems = itemsByCycle.get(cycle.id) ?? [];
+      cycleRuns: recentCycleRuns.map((cycleRun) => {
+        const subscribedItems = itemsByCycleRun.get(cycleRun.id) ?? [];
         return {
-          cycleId: cycle.id,
-          ranAt: cycle.ranAt,
-          globalSelectedFeeds: cycle.selectedFeeds,
-          globalCheckedFeeds: cycle.checkedFeeds,
-          globalFailedFeeds: cycle.failedFeeds,
-          globalSkippedFeeds: cycle.skippedFeeds,
-          globalNewItems: cycle.newItems,
+          cycleRunId: cycleRun.id,
+          ranAt: cycleRun.ranAt,
+          globalSelectedFeeds: cycleRun.selectedFeeds,
+          globalCheckedFeeds: cycleRun.checkedFeeds,
+          globalFailedFeeds: cycleRun.failedFeeds,
+          globalSkippedFeeds: cycleRun.skippedFeeds,
+          globalNewItems: cycleRun.newItems,
           subscribedItemCount: subscribedItems.length,
-          triggerReason: cycle.triggerReason,
-          status: cycle.status,
-          outcome: cycle.outcome,
-          attributed: cycle.startedAt != null,
-          attempts: attemptsByCycle.get(cycle.id) ?? [],
+          triggerReason: cycleRun.triggerReason,
+          status: cycleRun.status,
+          outcome: cycleRun.outcome,
+          attributed: cycleRun.startedAt != null,
+          attempts: attemptsByCycleRun.get(cycleRun.id) ?? [],
           items: subscribedItems,
         };
       }),

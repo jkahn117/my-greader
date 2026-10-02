@@ -82,6 +82,8 @@ D1 `batch()` is the attempt completion boundary. Item insertion, first-attempt a
 
 Cycle Run summaries derive from durable attempts. `active_feeds` and `selected_feeds` count distinct Feeds, not Subscription rows. `checked_feeds` counts terminal attempts except `skipped`; `failed_feeds` counts the `failed` subset; `skipped_feeds` counts selected Feeds deliberately not checked; and `new_items` sums committed attempt counts. Completion only updates a running Cycle Run, so replay cannot rewrite its durable summary. Forced runs bypass due time but still exclude deactivated and unsubscribed Feeds.
 
+Workflow logs use the Workflow instance ID as both the request correlation ID and Cycle Run ID. Per-Feed events also carry the stable attempt ID and Feed ID. Workflow logs omit User identity because polling work belongs to shared Feeds. Management request logs include the authenticated User when it is relevant. Analytics Engine delivery happens after durable D1 commits and is best effort, so an Analytics Engine outage cannot replay polling work or remove Cycle Run history.
+
 Manual Feed health changes use the same Polling module as automatic failure transitions. The module checks the requesting User's Subscription inside the D1 mutation before changing shared Feed state. Deactivation and reactivation also fence any in-flight poll and complete its attempt as skipped, so a stale response cannot overwrite the manual decision. Reactivation clears error diagnostics and restores the 30-minute Backoff interval with immediate eligibility.
 
 ## Metrics
@@ -102,7 +104,11 @@ foreign keys and filters attempts and Items through the authenticated User's
 Subscriptions. Cycle Run summaries are labeled as global, while the attributed
 Item count is labeled for the User's Subscriptions. Older Items without durable
 attribution are counted separately, and a missing Cycle Run history is shown as
-unavailable rather than zero activity. Timestamp windows are not used.
+unavailable rather than zero activity. Timestamp windows are not used. Attempt
+rows expose the stable attempt and Feed IDs used in structured logs. The
+Activity projection derives public diagnostics from outcome, error class, and
+HTTP status instead of rendering stored error text, so response content and
+credentials cannot reach the Timeline.
 
 ## Auth
 

@@ -427,6 +427,94 @@ describe("GET /app/timeline", () => {
     expect(html).toContain("1 selected");
   });
 
+  it("shows classified bounded diagnostics with stable attempt identifiers", async () => {
+    const successfulFeedId = await seedFeedAndSub({
+      feedUrl: "https://success.example/feed.xml",
+      title: "Successful Feed",
+    });
+    const rateLimitedFeedId = await seedFeedAndSub({
+      feedUrl: "https://limited.example/feed.xml",
+      title: "Rate Limited Feed",
+    });
+    const failedFeedId = await seedFeedAndSub({
+      feedUrl: "https://failed.example/feed.xml",
+      title: "Failed Feed",
+    });
+    const incompleteFeedId = await seedFeedAndSub({
+      feedUrl: "https://incomplete.example/feed.xml",
+      title: "Incomplete Feed",
+    });
+    const now = Date.now();
+    const db = getDb(env.DB);
+
+    await db.insert(cycleRuns).values({
+      id: "diagnostic-cycle",
+      ranAt: now,
+      selectedFeeds: 4,
+      checkedFeeds: 3,
+      failedFeeds: 1,
+      startedAt: now,
+      triggerReason: "scheduled",
+      status: "running",
+    });
+    await db.insert(feedPollAttempts).values([
+      {
+        id: "diagnostic-cycle:success",
+        cycleRunId: "diagnostic-cycle",
+        feedId: successfulFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "new_items",
+        newItems: 2,
+        httpStatus: 200,
+        parserStatus: "success",
+      },
+      {
+        id: "diagnostic-cycle:limited",
+        cycleRunId: "diagnostic-cycle",
+        feedId: rateLimitedFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "rate_limited",
+        httpStatus: 429,
+        parserStatus: "not_attempted",
+        diagnostic: "HTTP 429 (rate limited)",
+      },
+      {
+        id: "diagnostic-cycle:failed",
+        cycleRunId: "diagnostic-cycle",
+        feedId: failedFeedId,
+        startedAt: now,
+        completedAt: now + 1,
+        outcome: "failed",
+        errorClass: "parse",
+        httpStatus: 200,
+        parserStatus: "failure",
+        diagnostic:
+          "Invalid XML body <password>hunter2</password>?token=top-secret",
+      },
+      {
+        id: "diagnostic-cycle:incomplete",
+        cycleRunId: "diagnostic-cycle",
+        feedId: incompleteFeedId,
+        startedAt: now,
+      },
+    ]);
+
+    const res = await fetch("/app/timeline");
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toContain("New Items");
+    expect(html).toContain("Rate limited");
+    expect(html).toContain("Feed content could not be parsed");
+    expect(html).toContain("In progress");
+    expect(html).toContain("diagnostic-cycle:failed");
+    expect(html).not.toContain("hunter2");
+    expect(html).not.toContain("top-secret");
+    expect(html).not.toContain("Invalid XML body");
+  });
+
   it("groups equal-time and adjacent Cycle Runs by durable attribution", async () => {
     const visibleFeedId = await seedFeedAndSub({
       feedUrl: "https://visible.example/feed.xml",

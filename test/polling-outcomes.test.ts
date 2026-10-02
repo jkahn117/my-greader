@@ -2,6 +2,7 @@ import { env, type WorkflowStep } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "../src/lib/db";
+import { logger } from "../src/lib/logger";
 import { cycleRuns, feeds, subscriptions, users } from "../src/db/schema";
 import {
   createFeedPoller,
@@ -1196,6 +1197,258 @@ describe("Cycle Run outcomes", () => {
       attempt_id: "retry-cycle:retry-feed",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs stable identifiers for not-modified and skipped attempts", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "terminal-log-user",
+      email: "terminal-log@example.com",
+      createdAt: now,
+    });
+    await db.insert(feeds).values([
+      {
+        id: "not-modified-feed",
+        feedUrl: "https://not-modified.example/feed.xml",
+        title: "Not Modified Feed",
+        etag: 'W/"known"',
+      },
+      {
+        id: "skipped-feed",
+        feedUrl: "https://skipped.example/feed.xml",
+        title: "Skipped Feed",
+      },
+    ]);
+    await db.insert(subscriptions).values([
+      {
+        id: "not-modified-subscription",
+        userId: "terminal-log-user",
+        feedId: "not-modified-feed",
+      },
+      {
+        id: "skipped-subscription",
+        userId: "terminal-log-user",
+        feedId: "skipped-feed",
+      },
+    ]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 304 })),
+    );
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+    const step = {
+      do: async (
+        name: string,
+        configOrCallback: unknown,
+        maybeCallback?: unknown,
+      ) => {
+        const callback =
+          typeof configOrCallback === "function"
+            ? configOrCallback
+            : maybeCallback;
+        if (name.startsWith("fetch-batch-")) {
+          await db
+            .update(feeds)
+            .set({ deactivatedAt: now })
+            .where(eq(feeds.id, "skipped-feed"));
+        }
+        return (callback as () => Promise<unknown>)();
+      },
+    } as WorkflowStep;
+
+    await runFeedPollingWorkflow(
+      { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+      {
+        instanceId: "terminal-log-cycle",
+        timestamp: new Date(now),
+        payload: { triggerReason: "scheduled" },
+      },
+      step,
+    );
+
+    const attemptLogs = infoSpy.mock.calls.filter(
+      ([message]) => message === "feed polling attempt completed",
+    );
+    expect(attemptLogs).toHaveLength(2);
+    expect(attemptLogs.map(([, context]) => context)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cycleRunId: "terminal-log-cycle",
+          attemptId: "terminal-log-cycle:not-modified-feed",
+          feedId: "not-modified-feed",
+          outcome: "not_modified",
+        }),
+        expect.objectContaining({
+          cycleRunId: "terminal-log-cycle",
+          attemptId: "terminal-log-cycle:skipped-feed",
+          feedId: "skipped-feed",
+          outcome: "skipped",
+        }),
+      ]),
+    );
+  });
+
+  it("logs committed attempts when another Feed in the batch rejects", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "mixed-batch-user",
+      email: "mixed-batch@example.com",
+      createdAt: now,
+    });
+    await db.insert(feeds).values([
+      {
+        id: "committed-feed",
+        feedUrl: "https://committed.example/feed.xml",
+        title: "Committed Feed",
+        etag: 'W/"known"',
+      },
+      {
+        id: "conflicting-feed",
+        feedUrl: "https://conflicting.example/feed.xml",
+        title: "Conflicting Feed",
+      },
+    ]);
+    await db.insert(subscriptions).values([
+      {
+        id: "committed-subscription",
+        userId: "mixed-batch-user",
+        feedId: "committed-feed",
+      },
+      {
+        id: "conflicting-subscription",
+        userId: "mixed-batch-user",
+        feedId: "conflicting-feed",
+      },
+    ]);
+    await db.insert(cycleRuns).values({
+      id: "conflicting-owner-cycle",
+      ranAt: now - 1,
+      startedAt: now - 1,
+      triggerReason: "scheduled",
+      status: "running",
+    });
+    await env.DB.prepare(
+      `INSERT INTO feed_poll_attempts
+        (id, cycle_run_id, feed_id, started_at, new_items)
+       VALUES (?, ?, ?, ?, 0)`,
+    )
+      .bind(
+        "mixed-batch-cycle:conflicting-feed",
+        "conflicting-owner-cycle",
+        "conflicting-feed",
+        now - 1,
+      )
+      .run();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 304 })),
+    );
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+
+    await expect(
+      runFeedPollingWorkflow(
+        { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+        {
+          instanceId: "mixed-batch-cycle",
+          timestamp: new Date(now),
+          payload: { triggerReason: "scheduled" },
+        },
+        immediateStep(),
+      ),
+    ).rejects.toThrow("has conflicting identity");
+
+    expect(
+      infoSpy.mock.calls.find(
+        ([message, context]) =>
+          message === "feed polling attempt completed" &&
+          context?.attemptId === "mixed-batch-cycle:committed-feed",
+      )?.[1],
+    ).toMatchObject({
+      cycleRunId: "mixed-batch-cycle",
+      feedId: "committed-feed",
+      outcome: "not_modified",
+    });
+  });
+
+  it("keeps durable failure history and one correlated log when Analytics Engine is down", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "diagnostic-user",
+      email: "diagnostic@example.com",
+      createdAt: now,
+    });
+    await db.insert(feeds).values({
+      id: "diagnostic-feed",
+      feedUrl: "https://diagnostic.example/feed.xml",
+      title: "Diagnostic Feed",
+    });
+    await db.insert(subscriptions).values({
+      id: "diagnostic-subscription",
+      userId: "diagnostic-user",
+      feedId: "diagnostic-feed",
+    });
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const analytics = {
+      writeDataPoint() {
+        throw new Error("Analytics Engine unavailable");
+      },
+    } as unknown as AnalyticsEngineDataset;
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    const event = {
+      instanceId: "diagnostic-cycle",
+      timestamp: new Date(now),
+      payload: { triggerReason: "scheduled" as const },
+    };
+    const workflowEnv = {
+      ...env,
+      ANALYTICS: analytics,
+      ANALYTICS_ENABLED: "true",
+    } as unknown as Env;
+
+    await runFeedPollingWorkflow(workflowEnv, event, immediateStep());
+    await runFeedPollingWorkflow(workflowEnv, event, immediateStep());
+
+    const cycle = await env.DB.prepare(
+      `SELECT status, outcome, failed_feeds FROM cycle_runs WHERE id = ?`,
+    )
+      .bind("diagnostic-cycle")
+      .first();
+    const attempts = await env.DB.prepare(
+      `SELECT id, outcome, error_class, http_status
+         FROM feed_poll_attempts WHERE cycle_run_id = ?`,
+    )
+      .bind("diagnostic-cycle")
+      .all();
+    expect(cycle).toEqual({
+      status: "completed",
+      outcome: "completed",
+      failed_feeds: 1,
+    });
+    expect(attempts.results).toEqual([
+      {
+        id: "diagnostic-cycle:diagnostic-feed",
+        outcome: "failed",
+        error_class: "http",
+        http_status: 503,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const failureLogs = [...warnSpy.mock.calls, ...errorSpy.mock.calls].filter(
+      ([message]) => message === "feed polling attempt completed",
+    );
+    expect(failureLogs).toHaveLength(1);
+    expect(failureLogs[0]?.[1]).toMatchObject({
+      cycleRunId: "diagnostic-cycle",
+      attemptId: "diagnostic-cycle:diagnostic-feed",
+      feedId: "diagnostic-feed",
+    });
+    expect(failureLogs[0]?.[1]).not.toHaveProperty("userId");
   });
 
   it("leaves interrupted work running instead of completing it as success", async () => {

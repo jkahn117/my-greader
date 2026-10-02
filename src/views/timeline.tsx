@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
-// Timeline tab — articles grouped by polling cycle, most recent first
+// Timeline tab for Items and attempt diagnostics grouped by Cycle Run.
 // ---------------------------------------------------------------------------
 
 import { relativeTime } from "../lib/dates";
 import type {
   ActivityAttempt,
-  ActivityCycle,
+  ActivityCycleRun,
   ActivityTimeline,
 } from "../feed/activity";
 
@@ -34,61 +34,68 @@ function attemptLabel(attempt: ActivityAttempt): string {
   }
 }
 
-function CycleCard({ cycle }: { cycle: ActivityCycle }) {
+/** Renders one bounded Cycle Run projection with searchable attempt IDs. */
+function CycleRunCard({ cycleRun }: { cycleRun: ActivityCycleRun }) {
   return (
     <div class="rounded-lg border border-border bg-card shadow-sm">
       <div class="border-b border-border px-4 py-3 flex items-center justify-between gap-3">
         <div>
           <h3 class="text-sm font-semibold text-foreground">
-            Cycle at {relativeTime(cycle.ranAt)}
+            Cycle Run at {relativeTime(cycleRun.ranAt)}
           </h3>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            {cycle.outcome === "empty" ? (
+            {cycleRun.outcome === "empty" ? (
               "No eligible Feeds globally"
             ) : (
               <>
-                Global: {cycle.globalSelectedFeeds} selected ·{" "}
-                {cycle.globalCheckedFeeds} checked
-                {cycle.globalFailedFeeds > 0 &&
-                  ` · ${cycle.globalFailedFeeds} failed`}
-                {cycle.globalSkippedFeeds > 0 &&
-                  ` · ${cycle.globalSkippedFeeds} skipped`}
+                Global: {cycleRun.globalSelectedFeeds} selected ·{" "}
+                {cycleRun.globalCheckedFeeds} checked
+                {cycleRun.globalFailedFeeds > 0 &&
+                  ` · ${cycleRun.globalFailedFeeds} failed`}
+                {cycleRun.globalSkippedFeeds > 0 &&
+                  ` · ${cycleRun.globalSkippedFeeds} skipped`}
               </>
             )}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">
-            {cycle.globalNewItems} Item
-            {cycle.globalNewItems === 1 ? "" : "s"} globally ·{" "}
-            {cycle.subscribedItemCount} Item
-            {cycle.subscribedItemCount === 1 ? "" : "s"} in your Subscriptions
+            {cycleRun.globalNewItems} Item
+            {cycleRun.globalNewItems === 1 ? "" : "s"} globally ·{" "}
+            {cycleRun.subscribedItemCount} Item
+            {cycleRun.subscribedItemCount === 1 ? "" : "s"} in your
+            Subscriptions
           </p>
-          {cycle.attributed ? (
+          {cycleRun.attributed ? (
             <p class="mt-1 text-xs text-muted-foreground">
-              {cycle.triggerReason ?? "unknown trigger"} ·{" "}
-              {cycle.status === "running"
+              {cycleRun.triggerReason ?? "unknown trigger"} ·{" "}
+              {cycleRun.status === "running"
                 ? "In progress"
-                : cycle.outcome === "empty"
+                : cycleRun.outcome === "empty"
                   ? "Completed empty"
                   : "Completed"}{" "}
-              · {cycle.cycleId}
+              · {cycleRun.cycleRunId}
             </p>
           ) : (
             <p class="mt-1 text-xs text-muted-foreground">
-              Legacy cycle · exact Item attribution unavailable
+              Legacy Cycle Run · exact Item attribution unavailable
             </p>
           )}
         </div>
       </div>
 
-      {cycle.attempts.length > 0 && (
+      {cycleRun.attempts.length > 0 && (
         <div class="border-b border-border divide-y divide-border">
-          {cycle.attempts.map((attempt) => (
+          {cycleRun.attempts.map((attempt) => (
             <div class="px-4 py-2.5">
               <div class="flex items-start justify-between gap-3">
-                <p class="text-sm font-medium text-foreground">
-                  {attempt.feedTitle}
-                </p>
-                <span class="text-xs text-muted-foreground">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-foreground">
+                    {attempt.feedTitle}
+                  </p>
+                  <p class="mt-0.5 text-xs text-muted-foreground break-all">
+                    Attempt {attempt.id} · Feed {attempt.feedId}
+                  </p>
+                </div>
+                <span class="shrink-0 text-xs text-muted-foreground">
                   {attemptLabel(attempt)}
                 </span>
               </div>
@@ -107,9 +114,9 @@ function CycleCard({ cycle }: { cycle: ActivityCycle }) {
         </div>
       )}
 
-      {cycle.items.length > 0 ? (
+      {cycleRun.items.length > 0 ? (
         <div class="divide-y divide-border">
-          {cycle.items.map((item) => (
+          {cycleRun.items.map((item) => (
             <a
               href={item.itemUrl ?? "#"}
               target="_blank"
@@ -134,8 +141,8 @@ function CycleCard({ cycle }: { cycle: ActivityCycle }) {
         </div>
       ) : (
         <p class="px-4 py-3 text-sm text-muted-foreground">
-          {cycle.attributed
-            ? "No attributed Items in this cycle."
+          {cycleRun.attributed
+            ? "No attributed Items in this Cycle Run."
             : "Historical Items remain unattributed."}
         </p>
       )}
@@ -146,7 +153,7 @@ function CycleCard({ cycle }: { cycle: ActivityCycle }) {
 export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
   const unattributedMessage = `${timeline.unattributedItemCount} older Item${timeline.unattributedItemCount === 1 ? "" : "s"} in your Subscriptions ${timeline.unattributedItemCount === 1 ? "is" : "are"} unattributed`;
 
-  if (timeline.cycles.length === 0) {
+  if (timeline.cycleRuns.length === 0) {
     return (
       <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
         <p class="text-sm font-medium text-foreground">
@@ -170,8 +177,8 @@ export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
           {unattributedMessage}. They are not assigned to Cycle Runs.
         </div>
       )}
-      {timeline.cycles.map((cycle) => (
-        <CycleCard cycle={cycle} />
+      {timeline.cycleRuns.map((cycleRun) => (
+        <CycleRunCard cycleRun={cycleRun} />
       ))}
     </div>
   );

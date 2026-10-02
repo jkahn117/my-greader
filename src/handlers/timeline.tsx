@@ -30,13 +30,13 @@ handler.get("/app/timeline", async (c) => {
     const timeline = await createActivityReader(c.env.DB).timeline(userId);
 
     logger.info("timeline loaded", {
-      cycleCount: timeline.cycles.length,
-      attemptCount: timeline.cycles.reduce(
-        (count, cycle) => count + cycle.attempts.length,
+      cycleRunCount: timeline.cycleRuns.length,
+      attemptCount: timeline.cycleRuns.reduce(
+        (count, cycleRun) => count + cycleRun.attempts.length,
         0,
       ),
-      itemCount: timeline.cycles.reduce(
-        (count, cycle) => count + cycle.subscribedItemCount,
+      itemCount: timeline.cycleRuns.reduce(
+        (count, cycleRun) => count + cycleRun.subscribedItemCount,
         0,
       ),
       unattributedItemCount: timeline.unattributedItemCount,
