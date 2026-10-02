@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the current implementation. The [target architecture for next](next-architecture.md) records the directory layout and module ownership for the migration in [issue #18](https://github.com/jkahn117/my-greader/issues/18).
+This document describes the implementation after the migration in [issue #18](https://github.com/jkahn117/my-greader/issues/18). The [migration architecture record](next-architecture.md) now points here rather than describing a second target layout.
 
 ## Stack
 
@@ -16,7 +16,7 @@ the Workflow parse protocol concerns and delegate.
 
 | Module | Responsibility | Observer? |
 |--------|---------------|-----------|
-| `src/feed/poll.ts` | Fetch, parse, store items; interval backoff; error tracking and deactivation | `PollObserver`, Powertools stays in the Workflow |
+| `src/feed/poll.ts` | Feed selection, Cycle Run reconciliation, fetch and ingestion, Backoff, ownership, error tracking, and health transitions | `PollObserver`, Powertools stays in the Workflow |
 | `src/feed/subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver`, Powertools stays in handlers |
 | `src/feed/item-state.ts` | Per-User read/star transitions, read timestamps, ownership checks, and scoped mark-all updates | None, domain persistence module |
 | `src/feed/stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None, pure query module |
@@ -57,13 +57,13 @@ See [`docs/greader-api.md`](greader-api.md) for endpoint details.
 
 ## Feed polling
 
-Triggered every 30 minutes.  The cron handler starts a `FeedPollingWorkflow`
-which queries due Feeds and processes them in batches of 8. Each Feed uses a
+Triggered every 30 minutes. The cron handler starts a `FeedPollingWorkflow`.
+The Workflow asks the polling module for eligible Feeds and processes them in batches of 8. Each Feed uses a
 small fixed number of HTTP or D1 binding calls: progress check, HTTP, atomic
 completion, and committed-result read. The smaller batch stays under the
 50-subrequest invocation budget.
 
-Per-feed logic is owned by the `FeedPoller` module.  The Workflow provides
+Polling policy is owned by the polling module. `createPollingCycleManager()` selects eligible Feeds, starts Cycle Runs, and reconciles summaries from durable attempts. The Workflow chooses step boundaries, delegates each Feed to `FeedPoller`, and provides
 a narrow `FeedTransport` (global `fetch` with 15s timeout) and a `PollObserver`
 that maps domain events to logger, metrics, and wide events.  The module
 handles conditional requests (ETag/Last-Modified), rate limiting (429 with
@@ -138,6 +138,19 @@ GReader adapters delegate active-token lookup and hourly usage recording. The
 weekly cron delegates seven-day revoked-token cleanup.
 
 See [`docs/auth-flow.md`](auth-flow.md).
+
+## Retained compatibility and limitations
+
+The maintainer owns each item below. None has a second active implementation path.
+
+| Item | Reason retained | Removal condition |
+| --- | --- | --- |
+| `feeds.last_fetched_at` and `feeds.last_new_item_at` | Additive migrations and the documented rollback window require the old schema to remain readable. New code neither reads nor writes these columns. | Remove with a destructive migration after the production observation window closes, the verified backup ages out, and no supported rollback Worker reads them. |
+| `legacy_inferred`, `legacy_uncertain`, and `legacy_unknown` values | They preserve uncertainty in pre-migration Feed history instead of inventing precise events. | Remove each value only after production has no rows using it and the dashboard no longer needs to explain that state. |
+| Item IDs derived from `guid ?? URL` without Feed identity | Current stores these IDs, so changing them would require an Item State and client-compatibility migration. Equal GUIDs across different Feeds can still collide. | Replace only with a tested identity migration that preserves API IDs and every User's Item State, or after a protocol version allows new IDs. |
+| Nullable first-ingestion attribution | Items created before migration `0006` and Items whose 90-day history expired have no retained attempt. | This is permanent historical truth, not a field awaiting deletion. |
+
+The old `force` Workflow payload and Pipeline configuration are removed. The deployment runbook requires old Workflows to drain or terminate before cutover, so the new Worker accepts only `triggerReason`.
 
 ## Wrangler configuration
 

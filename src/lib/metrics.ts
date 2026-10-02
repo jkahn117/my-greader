@@ -12,8 +12,8 @@
 // createMetrics() is a per-call factory so concurrent Workflow steps each
 // get their own isolated instance — avoids dimension bleeding between feeds.
 //
-// The dashboard queries D1 directly for cycle history and feed health.
-// R2 SQL queries for historical Pipeline data are retained but deprecated.
+// The dashboard queries D1 directly for cycle history and feed health. It
+// queries Analytics Engine only for optional aggregate trends.
 
 import {
   MetricUnit,

@@ -100,39 +100,13 @@ per-user — article content is stored once in `items`.
 
 ---
 
-## Why Cloudflare Pipelines → R2/Iceberg for metrics (not Analytics Engine or D1)
+## Why D1 plus Analytics Engine for observability
 
-The original implementation used **Workers Analytics Engine (WAE)**. It was replaced after two issues:
+D1 is authoritative for Cycle Runs, Feed attempts, Item attribution, Feed health, and User-visible history. Those records need durable identity, exact reconciliation, and predictable retention. A metrics delivery failure must not change them.
 
-1. **Named-field records only** — WAE's `@workers-powertools/metrics` `AnalyticsEngineBackend`
-   emits one `writeDataPoint()` call per metric. WAE's positional schema (`index1`, `blob1..N`,
-   `double1..N`) works but is opaque — every column needs manual cross-referencing with docs.
+Workers Analytics Engine is the optional aggregate store. `@workers-powertools/metrics` writes through `AnalyticsEngineBackend`, and `src/feed/analytics.ts` owns the positional column mapping and SQL API queries. The dashboard needs `CF_API_TOKEN` with Account Analytics Read permission for those queries. Set `ANALYTICS_ENABLED=false` to turn off both writes and reads without affecting D1 history.
 
-2. **Paid-tier SQL API required** — the WAE SQL API requires a Cloudflare API token with
-   "Account Analytics Read". Querying it from the Worker introduced another secret and a cross-origin
-   request. The data was also not easily exportable for external tools.
-
-The current approach:
-
-- **`@workers-powertools/metrics` `PipelinesBackend`** writes named-field JSON records to a
-  Cloudflare Pipeline (`METRICS_PIPELINE`). Named fields are self-documenting; no schema mapping
-  needed.
-- **Pipeline → R2 Data Catalog** rolls Parquet files into `rss-reader-metrics-store` every 5
-  minutes as an Iceberg table (`rss_reader.metrics`). Files are immutable, backward-compatible,
-  and independently exportable.
-- **R2 SQL REST API** (see `src/lib/r2sql.ts`) queries the Iceberg table with standard SQL. No
-  additional Cloudflare API token needed beyond an R2-scoped one.
-- **Batched writes** — all metrics per logical unit of work are accumulated in-memory and flushed
-  in a single `backend.write()` call. This cut pipeline write volume from ~67k individual calls
-  over 14 days to a handful per cron cycle.
-- **`ANALYTICS_ENABLED` toggle** — setting this var to `"false"` disables both Pipeline writes
-  and R2 SQL queries without removing bindings. Useful when the pipeline is not configured in
-  local dev or when cost control is needed.
-
-The dashboard's real-time cards (cycle timeline, feed health, reads per day) query D1 directly,
-so they work even when analytics are disabled. R2 SQL cards (30-day trend, feed velocity, fetch
-performance, error rates) are rendered only when `ANALYTICS_ENABLED=true` and
-`R2_SQL_AUTH_TOKEN` is set.
+The repository previously described a Pipelines to R2/Iceberg backend after the code had returned to Analytics Engine. That configuration was never part of this migration's supported path. The cutover removes the unused Pipeline schema and setup instructions rather than keeping two observability architectures.
 
 ---
 

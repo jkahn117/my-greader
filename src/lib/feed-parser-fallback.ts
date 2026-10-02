@@ -1,5 +1,17 @@
 import { parseHTML } from "linkedom";
 
+// linkedom's declarations refer to the browser Element type, while Workers
+// intentionally supplies a smaller global Element declaration. Keep the DOM
+// operations used by this parser local instead of adding the browser DOM lib.
+interface FeedElement {
+  readonly children: Iterable<FeedElement>;
+  readonly localName: string;
+  readonly textContent: string | null;
+  getAttribute(name: string): string | null;
+  querySelector(selector: string): FeedElement | null;
+  querySelectorAll(selector: string): Iterable<FeedElement>;
+}
+
 // Lenient feed parser for malformed XML/HTML feeds.
 // Uses linkedom (an HTML parser, far more tolerant than xml2js used by
 // rss-parser) to extract feed items when the primary parser fails.
@@ -29,12 +41,12 @@ export interface FallbackFeed {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function text(parent: Element, selector: string): string | null {
+function text(parent: FeedElement, selector: string): string | null {
   const el = parent.querySelector(selector);
   return el?.textContent?.trim() ?? null;
 }
 
-function textByName(parent: Element, localName: string): string | null {
+function textByName(parent: FeedElement, localName: string): string | null {
   const lower = localName.toLowerCase();
   for (const child of parent.children) {
     if (child.localName.toLowerCase() === lower) {
@@ -50,7 +62,7 @@ function textByName(parent: Element, localName: string): string | null {
 }
 
 function attr(
-  parent: Element,
+  parent: FeedElement,
   selector: string,
   attrName: string,
 ): string | null {
@@ -62,7 +74,7 @@ function attr(
 // RSS 2.0 extraction
 // ---------------------------------------------------------------------------
 
-function parseRssItems(root: Element): FallbackFeedItem[] {
+function parseRssItems(root: FeedElement): FallbackFeedItem[] {
   const items: FallbackFeedItem[] = [];
   const itemEls = root.querySelectorAll("channel > item, item");
   for (const el of itemEls) {
@@ -89,7 +101,7 @@ function parseRssItems(root: Element): FallbackFeedItem[] {
 // Atom 1.0 extraction
 // ---------------------------------------------------------------------------
 
-function parseAtomEntries(root: Element): FallbackFeedItem[] {
+function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
   const entries: FallbackFeedItem[] = [];
   const entryEls = root.querySelectorAll("feed > entry, entry");
   for (const el of entryEls) {
@@ -123,7 +135,7 @@ function parseAtomEntries(root: Element): FallbackFeedItem[] {
 export function parseFeedLenient(xml: string): FallbackFeed | null {
   try {
     const { document } = parseHTML(`<html><body>${xml}</body></html>`);
-    const body = document.body;
+    const body = document.body as unknown as FeedElement;
 
     // Detect format: RSS has <channel>, Atom has <feed>
     const hasRss = body.querySelector("rss, channel, item");

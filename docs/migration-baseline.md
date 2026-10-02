@@ -9,7 +9,10 @@ Run these before and after every additive migration stage:
 ```bash
 pnpm exec vitest run test/migrations.test.ts
 pnpm exec vitest run test/greader.test.ts
+pnpm exec vitest run test/polling-outcomes.test.ts
+pnpm exec tsc --noEmit
 pnpm lint
+pnpm build
 ```
 
 `test/fixtures/legacy-data.ts` represents a populated database at the boundary. `test/migrations.test.ts` rebuilds D1 through migration `0005`, loads the fixture, applies every later migration, and compares the preserved state. It also runs `PRAGMA foreign_key_check`.
@@ -102,3 +105,102 @@ The migration preserves uncertainty:
 Apply the schema before deploying the new Worker. Pause polling and drain existing Workflow instances first because the previous code writes only the overloaded columns while the new code reads only the explicit columns. Run one scheduled and one forced canary after deployment. Verify successful-check and next-eligibility timestamps, an empty Feed's backload completion, and an automatic Deactivation reason.
 
 The `last_fetched_at` and `last_new_item_at` columns stay in place for schema-level rollback compatibility, but the new Worker does not read or write them. Do not deploy the old Worker after new polling writes begin: it cannot interpret explicit backload completion and may repeat an initial backload. Prefer a forward fix. If rollback is unavoidable, stop all writers and restore the pre-migration export with the matching old Worker. Remove the compatibility columns only after the final migration observation window closes and no rollback target reads them.
+
+## Final cutover runbook
+
+This is the supported deployment path for migrations `0006` through `0009` and the cutover Worker. Keep a deployment log with command output, row counts, version IDs, Workflow instance IDs, canary Cycle Run IDs, and the manual Current result. Never store the D1 export or token values in the repository.
+
+### 1. Rehearse locally
+
+Run the full gate:
+
+```bash
+pnpm exec vitest run test/migrations.test.ts
+pnpm exec vitest run test/greader.test.ts
+pnpm exec vitest run test/polling-outcomes.test.ts
+pnpm test
+pnpm exec tsc --noEmit
+pnpm lint
+pnpm build
+```
+
+`test/migrations.test.ts` rebuilds representative data at migration `0005`, applies every additive migration, compares stable IDs and relationships, and runs `PRAGMA foreign_key_check`. The Workflow suite covers empty, failed, retried, overlapping, interrupted, and Analytics Engine failure paths. Local Workflow doubles prove application idempotency, not Cloudflare runtime scheduling. Run the canaries below against Cloudflare before declaring the cutover complete.
+
+### 2. Export and verify recovery data
+
+Record baseline table counts, export remote D1 outside the checkout, hash the file, and prove that SQLite can restore it:
+
+```bash
+mkdir -p ../my-greader-deployment
+pnpm wrangler d1 export rss-reader --remote \
+  --output ../my-greader-deployment/before-cutover.sql
+shasum -a 256 ../my-greader-deployment/before-cutover.sql \
+  > ../my-greader-deployment/before-cutover.sql.sha256
+
+rm -f /tmp/my-greader-restore-check.sqlite
+sqlite3 /tmp/my-greader-restore-check.sqlite \
+  < ../my-greader-deployment/before-cutover.sql
+sqlite3 /tmp/my-greader-restore-check.sqlite \
+  'PRAGMA integrity_check; PRAGMA foreign_key_check;
+   SELECT "users", count(*) FROM users
+   UNION ALL SELECT "feeds", count(*) FROM feeds
+   UNION ALL SELECT "subscriptions", count(*) FROM subscriptions
+   UNION ALL SELECT "items", count(*) FROM items
+   UNION ALL SELECT "item_state", count(*) FROM item_state
+   UNION ALL SELECT "api_tokens", count(*) FROM api_tokens;'
+```
+
+The integrity result must be `ok`, the foreign-key query must return no rows, and counts must match production. Keep the export encrypted under the operator's normal backup policy. A checksum alone does not prove recovery; the temporary import is required.
+
+### 3. Stop old polling writers
+
+Pause both cron triggers in Cloudflare and avoid the normal and forced dashboard sync controls. List queued and running instances:
+
+```bash
+pnpm wrangler workflows instances list feed-polling --status queued
+pnpm wrangler workflows instances list feed-polling --status running
+```
+
+Let old instances complete. For each instance that cannot drain, record its ID and terminate it:
+
+```bash
+pnpm wrangler workflows instances terminate feed-polling <instance-id>
+```
+
+Repeat both list commands until neither reports an instance. Do not rely on a rolling Worker deployment. The cutover Worker no longer accepts the old `force` payload, and old polling code does not share every final invariant.
+
+### 4. Migrate and deploy
+
+Apply all pending migrations while writers remain stopped:
+
+```bash
+pnpm wrangler d1 migrations apply rss-reader --remote
+pnpm deploy
+```
+
+Record the deployed Worker version ID. Recheck the six baseline counts and `PRAGMA foreign_key_check` before restoring traffic. A count change at this point is a failed migration because the additive migrations do not delete domain data.
+
+### 5. Run Cloudflare and Current canaries
+
+Restore manual polling first, but leave the scheduled trigger paused.
+
+1. Run a normal manual sync. Confirm its Cycle Run has the `manual` trigger, reaches a terminal outcome, and reconciles with its Feed attempts.
+2. Run a forced sync and a second concurrent forced sync. Confirm busy Feeds are skipped, no stale owner changes Feed state, and both Cycle Runs finish or show an explicit interruption.
+3. Use an existing API Token in Current. Confirm ClientLogin, Subscription titles and Folders, Item IDs, read state, starred state, and a two-way read transition without generating a replacement token.
+4. Check `/app/timeline` for the canary Cycle Run and attempt IDs. Match those IDs in structured logs.
+5. If Analytics Engine is configured, check its optional cards. Then temporarily set `ANALYTICS_ENABLED=false` in the canary environment and confirm durable Timeline and Feed diagnostics still work.
+6. Restore scheduled polling and confirm the next scheduled Cycle Run.
+
+Keep the observation window open for at least seven days and through one weekly retention run. Review scheduler gaps, failure rates, unfinished attempts, reconciliation errors, ownership skips, Current sync, and retention before closing it.
+
+### 6. Recover a failed cutover
+
+Before the migrated Worker receives traffic, roll back the Worker and leave additive migrations in place only if that Worker is documented as compatible. Migration `0009` is not compatible with the pre-migration poller once writes resume.
+
+After new polling writes start, stop cron and manual writers first. Prefer a forward fix. The immediately preceding `next` release at `0e8443c` uses the same schema and is the only planned temporary code rollback for this final cutover. Record why it is needed and redeploy the cutover after repair.
+
+If data is damaged or an older Worker is unavoidable, keep all writers stopped, preserve the failed database for diagnosis, restore the verified export into a replacement D1 database, bind the matching Worker version to it, repeat the full data and Current checks, and only then switch traffic. Never import the export over a live database.
+
+## Cutover audit record
+
+The repository rehearsal covers additive migration of representative data, foreign-key verification, GReader behavior, domain D1 behavior, Workflow retry and overlap behavior, lint, type checking, and production build. Backup export, Cloudflare Workflow drainage, deployed canaries, and the manual Current check are operator gates because local tests cannot prove them. Attach their results to the deployment log before closing the production observation window.

@@ -1,16 +1,27 @@
 /**
  * Activity projections for the dashboard.
  *
- * The module owns bounded D1 reads for Cycle Run history. It follows durable
- * Item-to-attempt relationships and applies current Subscription visibility;
- * dashboard handlers only render the resulting projection.
+ * The module owns bounded D1 reads for dashboard metrics and Cycle Run
+ * history. It applies Subscription visibility and returns projections that
+ * dashboard handlers can render without database policy.
  */
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm";
 import {
   cycleRuns,
   feedPollAttempts,
   feeds,
   items,
+  itemState,
   subscriptions,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
@@ -19,6 +30,8 @@ import {
 import { getDb } from "../lib/db";
 
 const TIMELINE_CYCLE_LIMIT = 20;
+const METRICS_CYCLE_LIMIT = 48;
+const METRICS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface ActivityItem {
   itemTitle: string | null;
@@ -62,8 +75,44 @@ export interface ActivityTimeline {
   historyStatus: "available" | "empty" | "unavailable";
 }
 
+export interface MetricsCycleRun {
+  id: string;
+  ranAt: number;
+  activeFeeds: number;
+  dueFeeds: number;
+  selectedFeeds: number;
+  checkedFeeds: number;
+  newItems: number;
+  failedFeeds: number;
+  skippedFeeds: number;
+  status: "running" | "completed" | null;
+  outcome: "completed" | "empty" | null;
+}
+
+export interface FeedActivityRow {
+  feedId: string;
+  title: string;
+  count7d: number;
+  lastNewItemAt: number | null;
+}
+
+export interface ReadsByDay {
+  date: string;
+  reads: number;
+}
+
+export interface ActivityMetrics {
+  cycles: MetricsCycleRun[];
+  intervalDist: { minutes: number; count: number }[];
+  totalItems: number;
+  newItems7d: number;
+  feedActivity: FeedActivityRow[];
+  readsByDay: ReadsByDay[];
+}
+
 export interface ActivityReader {
   timeline(userId: string): Promise<ActivityTimeline>;
+  metrics(userId: string): Promise<ActivityMetrics>;
 }
 
 /** Builds a public diagnostic from classified fields instead of stored error text. */
@@ -96,10 +145,128 @@ function publicAttemptDiagnostic(attempt: {
 }
 
 /** Creates the durable Activity read interface used by dashboard adapters. */
-export function createActivityReader(dbBinding: D1Database): ActivityReader {
+export function createActivityReader(
+  dbBinding: D1Database,
+  now: () => number = Date.now,
+): ActivityReader {
   const db = getDb(dbBinding);
 
-  return { timeline };
+  return { timeline, metrics };
+
+  /** Builds current dashboard metrics with User-scoped activity where needed. */
+  async function metrics(userId: string): Promise<ActivityMetrics> {
+    const cutoffMs = now() - METRICS_WINDOW_MS;
+    const [
+      recentCycles,
+      intervalRows,
+      totalItemsRow,
+      newItemsRow,
+      readRows,
+      feedRows,
+    ] = await db.batch([
+      db
+        .select()
+        .from(cycleRuns)
+        .orderBy(desc(cycleRuns.ranAt))
+        .limit(METRICS_CYCLE_LIMIT),
+      db
+        .select({
+          checkIntervalMinutes: feeds.checkIntervalMinutes,
+          count: sql<number>`count(*)`,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(
+          and(eq(subscriptions.userId, userId), isNull(feeds.deactivatedAt)),
+        )
+        .groupBy(feeds.checkIntervalMinutes)
+        .orderBy(asc(feeds.checkIntervalMinutes)),
+      db.select({ count: sql<number>`count(*)` }).from(items),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(items)
+        .where(gt(items.fetchedAt, cutoffMs)),
+      db
+        .select({
+          date: sql<string>`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`,
+          reads: sql<number>`count(*)`,
+        })
+        .from(itemState)
+        .where(
+          and(
+            eq(itemState.userId, userId),
+            eq(itemState.isRead, 1),
+            isNotNull(itemState.readAt),
+            gt(itemState.readAt, cutoffMs),
+          ),
+        )
+        .groupBy(
+          sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`,
+        )
+        .orderBy(
+          desc(sql`date(${itemState.readAt} / 1000, 'unixepoch', 'localtime')`),
+        )
+        .limit(7),
+      db
+        .select({
+          feedId: subscriptions.feedId,
+          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
+          lastNewItemAt: feeds.lastNewItemDiscoveredAt,
+          count7d: sql<number>`count(${items.id})`,
+        })
+        .from(subscriptions)
+        .innerJoin(
+          feeds,
+          and(eq(subscriptions.feedId, feeds.id), isNull(feeds.deactivatedAt)),
+        )
+        .leftJoin(
+          items,
+          and(eq(items.feedId, feeds.id), gt(items.fetchedAt, cutoffMs)),
+        )
+        .where(eq(subscriptions.userId, userId))
+        .groupBy(
+          subscriptions.feedId,
+          subscriptions.title,
+          feeds.title,
+          feeds.feedUrl,
+          feeds.lastNewItemDiscoveredAt,
+        )
+        .orderBy(desc(sql<number>`count(${items.id})`))
+        .limit(15),
+    ]);
+
+    return {
+      cycles: recentCycles.map((cycle) => ({
+        id: cycle.id,
+        ranAt: cycle.ranAt,
+        activeFeeds: cycle.activeFeeds,
+        dueFeeds: cycle.dueFeeds,
+        selectedFeeds: cycle.selectedFeeds,
+        checkedFeeds: cycle.checkedFeeds,
+        newItems: cycle.newItems,
+        failedFeeds: cycle.failedFeeds,
+        skippedFeeds: cycle.skippedFeeds,
+        status: cycle.status,
+        outcome: cycle.outcome,
+      })),
+      intervalDist: intervalRows.map((row) => ({
+        minutes: row.checkIntervalMinutes,
+        count: Number(row.count),
+      })),
+      totalItems: Number(totalItemsRow[0]?.count ?? 0),
+      newItems7d: Number(newItemsRow[0]?.count ?? 0),
+      readsByDay: readRows.map((row) => ({
+        date: String(row.date ?? ""),
+        reads: Number(row.reads ?? 0),
+      })),
+      feedActivity: feedRows.map((row) => ({
+        feedId: row.feedId,
+        title: row.title,
+        count7d: Number(row.count7d ?? 0),
+        lastNewItemAt: row.lastNewItemAt ?? null,
+      })),
+    };
+  }
 
   /** Builds a bounded, User-visible Timeline without timestamp inference. */
   async function timeline(userId: string): Promise<ActivityTimeline> {

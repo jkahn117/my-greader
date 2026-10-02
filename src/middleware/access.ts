@@ -65,6 +65,11 @@ export async function accessMiddleware(c: Context, next: Next) {
     return c.text("Unauthorized", 401);
   }
 
+  if (!env.CF_ACCESS_AUD) {
+    logger.error("CF_ACCESS_AUD is not configured");
+    return c.text("Authentication unavailable", 500);
+  }
+
   const payload = await verifyAccessJwt(jwtToken, env.CF_ACCESS_AUD, logger);
   if (!payload) {
     return c.text("Unauthorized", 401);

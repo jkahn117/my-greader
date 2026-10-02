@@ -9,38 +9,13 @@ import type {
   ErrorRateRow,
   ArticleTrendRow,
 } from "../feed/analytics";
+import type {
+  FeedActivityRow,
+  MetricsCycleRun,
+  ReadsByDay,
+} from "../feed/activity";
 
 export type { FeedVelocityRow, FetchPerfRow, ErrorRateRow, ArticleTrendRow };
-
-// ---------------------------------------------------------------------------
-// Shared types (exported so the handler can construct typed data objects)
-// ---------------------------------------------------------------------------
-
-export interface CycleRun {
-  id: string;
-  ranAt: number;
-  activeFeeds: number;
-  dueFeeds: number;
-  selectedFeeds: number;
-  checkedFeeds: number;
-  newItems: number;
-  failedFeeds: number;
-  skippedFeeds: number;
-  status: "running" | "completed" | null;
-  outcome: "completed" | "empty" | null;
-}
-
-export interface FeedActivityRow {
-  feedId: string;
-  title: string;
-  count7d: number;
-  lastNewItemAt: number | null;
-}
-
-export interface ReadsByDay {
-  date: string;
-  reads: number;
-}
 
 interface IntervalDistRow {
   minutes: number;
@@ -48,7 +23,7 @@ interface IntervalDistRow {
 }
 
 interface StatusData {
-  cycles: CycleRun[];
+  cycles: MetricsCycleRun[];
   intervalDist: IntervalDistRow[];
   totalArticles: number;
   newArticles7d: number;
@@ -91,7 +66,7 @@ function StatCard({
 // Cycle timeline — per-run bar chart of new articles
 // ---------------------------------------------------------------------------
 
-function CycleTimelineCard({ cycles }: { cycles: CycleRun[] }) {
+function CycleTimelineCard({ cycles }: { cycles: MetricsCycleRun[] }) {
   if (cycles.length === 0) {
     return (
       <div class="rounded-lg border border-border bg-card shadow-sm">
@@ -679,21 +654,6 @@ function ArticleTrendCard({ rows }: { rows: ArticleTrendRow[] }) {
           <span>→ {ordered[ordered.length - 1]?.day.slice(5) ?? ""}</span>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Unconfigured placeholder
-// ---------------------------------------------------------------------------
-
-export function MetricsUnconfigured() {
-  return (
-    <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
-      <p class="text-sm font-medium text-foreground">Metrics unavailable</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Could not connect to the database.
-      </p>
     </div>
   );
 }

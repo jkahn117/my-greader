@@ -26,45 +26,31 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                          │    stable Workflow ID    ──► D1 cycle_runs          │
                          │    per-Feed attempt       ──► D1 feed_poll_attempts  │
                          │    first ingestion       ──► D1 Item attribution    │
-                         │                           ──► Pipeline (metrics)     │
+                         │                           ──► Analytics Engine      │
                          │                                                       │
                          │  Cron  0 3 * * 1  ──► bounded retention             │
                          │    purge unstarred old Items + 90-day poll history   │
                          └──────────────────────┬────────────────────────────┬──┘
                                                 │                            │
                                     ┌───────────▼────────┐    ┌─────────────▼──────────┐
-                                    │   Cloudflare D1    │    │  Cloudflare Pipeline   │
-                                    │   (SQLite)         │    │  → R2 rss-reader-      │
-                                    │                    │    │    metrics-store       │
-                                    │  feeds             │    │  → Iceberg/Parquet     │
-                                    │  subscriptions     │    │                        │
-                                    │  items             │    │  Queryable via         │
-                                    │  item_state        │    │  R2 SQL API            │
-                                    │  cycle_runs        │    │                        │
-                                    │  feed_poll_attempts│    │                        │
-                                    │  api_tokens        │    │  Metrics:              │
-                                    └────────┬───────────┘    │  feed_parse_duration   │
-                                             │                │  feed_new_articles     │
-                                             │                │  feed_fetch_error      │
-                                    ┌────────▼───────────┐    │  article_read          │
-                                    │  /app/metrics      │    │  cycle_*               │
-                                    │  Metrics dashboard │◄───┤  subscription_change   │
-                                    │                    │    └────────────────────────┘
-                                    │  D1-backed (real-  │
-                                    │  time, always on): │
-                                    │  · cycle timeline  │
-                                    │  · feed health     │
-                                    │  · reads per day   │
-                                    │  · feed activity   │
-                                    │  · poll intervals  │
-                                    │                    │
-                                    │  R2 SQL (30-day,   │
-                                    │  when configured): │
-                                    │  · article trend   │
-                                    │  · feed velocity   │
-                                    │  · fetch perf      │
-                                    │  · error rates     │
-                                    └────────────────────┘
+                                    │   Cloudflare D1    │    │  Analytics Engine      │
+                                    │   (SQLite)         │    │  optional trends       │
+                                    │                    │    │                        │
+                                    │  feeds             │    │  feed_parse_duration   │
+                                    │  subscriptions     │    │  feed_new_articles     │
+                                    │  items             │    │  feed_fetch_error      │
+                                    │  item_state        │    │  article_read          │
+                                    │  cycle_runs        │    │  cycle_*               │
+                                    │  feed_poll_attempts│    │  subscription_change   │
+                                    │  api_tokens        │    └────────────┬───────────┘
+                                    └────────┬───────────┘                 │
+                                             │                             │
+                                    ┌────────▼─────────────────────────────▼──┐
+                                    │  /app/metrics and /app/timeline         │
+                                    │                                         │
+                                    │  D1: durable history and current state  │
+                                    │  AE: optional aggregate trends          │
+                                    └─────────────────────────────────────────┘
 ```
 
 ## Stack
@@ -75,7 +61,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 - **Feed parsing**: rss-parser
 - **Auth**: Cloudflare Access (management UI) + SHA-256 API tokens (GReader clients)
 - **Schema / migrations**: Drizzle ORM
-- **Observability**: `@workers-powertools/logger` (structured JSON logs + correlation IDs), `@workers-powertools/tracer` (per-feed spans), `@workers-powertools/metrics` → Cloudflare Pipelines → R2/Iceberg (long-term analytics)
+- **Observability**: `@workers-powertools/logger` for structured logs and correlation IDs, `@workers-powertools/tracer` for per-Feed spans, and `@workers-powertools/metrics` with Workers Analytics Engine for optional trends
 
 ## Connecting Current and other RSS readers
 
@@ -126,13 +112,13 @@ The dashboard has two data layers:
 - Poll interval distribution — how backed-off the fleet currently is
 - Reads by day — 7-day bar chart from `item_state.read_at`
 
-**R2 SQL analytics (requires `R2_SQL_AUTH_TOKEN` secret, toggled by `ANALYTICS_ENABLED`):**
-- 30-day new articles trend — daily bar chart from pipeline data
+**Analytics Engine trends (requires `CF_API_TOKEN` with Account Analytics Read, toggled by `ANALYTICS_ENABLED`):**
+- 30-day new Items trend
 - Feed velocity — top publishers over 30 days with avg articles per fetch
 - Fetch performance — slowest feeds by avg/max parse duration (7d)
 - Error rates by HTTP status code (7d)
 
-Set `ANALYTICS_ENABLED=false` in `wrangler.jsonc` to disable all Pipeline metric writes and R2 SQL queries.
+Set `ANALYTICS_ENABLED=false` in `wrangler.jsonc` to disable Analytics Engine writes and dashboard queries. Durable D1 history remains available.
 
 ## One-time setup
 
@@ -149,34 +135,10 @@ pnpm wrangler d1 migrations apply rss-reader --remote  # production
 #    → Settings → scroll to "Application Audience (AUD) Tag" — a 64-char hex string
 wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verification)
 
-# 4. Create an R2 bucket and enable the Data Catalog (required for R2 SQL)
-pnpm wrangler r2 bucket create rss-reader-metrics-store
-pnpm wrangler r2 bucket catalog enable rss-reader-metrics-store
-
-# 5a. Create the pipeline stream (the Worker binding writes to this)
-#     pipeline-schema.json defines column types for each metric field
-pnpm wrangler pipelines streams create rss_reader_metrics_stream \
-  --schema-file pipeline-schema.json
-
-# 5b. Create the R2 Data Catalog sink (Iceberg tables, queryable via R2 SQL)
-#     Retrieve your catalog token: wrangler r2 bucket catalog get rss-reader-metrics-store
-pnpm wrangler pipelines sinks create rss_reader_metrics_sink \
-  --type r2-data-catalog \
-  --bucket rss-reader-metrics-store \
-  --namespace rss_reader \
-  --table metrics \
-  --catalog-token <your-r2-sql-auth-token> \
-  --roll-interval 300
-
-# 5c. Create the pipeline connecting stream to sink
-#     The pipeline name must match the "pipeline" value in wrangler.jsonc
-pnpm wrangler pipelines create rss_reader_metrics \
-  --sql 'INSERT INTO rss_reader_metrics_sink SELECT * FROM rss_reader_metrics_stream'
-
-# 6. Set R2 SQL auth token for dashboard analytics (optional but recommended)
-#    Create at: Cloudflare dashboard → R2 → Manage R2 API Tokens
-#    Permissions required: R2 Storage Read + Data Catalog Read + R2 SQL Read
-wrangler secret put R2_SQL_AUTH_TOKEN
+# 4. Set the optional Analytics Engine read credential used by the dashboard.
+#    The token needs Account Analytics Read permission. Metric writes use the
+#    ANALYTICS binding and do not use this token.
+pnpm wrangler secret put CF_API_TOKEN
 ```
 
 Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) so the reads-per-day chart groups by the correct local day.
@@ -218,7 +180,7 @@ For CSS hot-reload during UI development, run `pnpm dev:css` in a separate termi
 
 ## Deployment
 
-Before applying a database migration, follow the [migration baseline and recovery checks](docs/migration-baseline.md). Export D1 first, apply additive migrations, verify preserved data, then deploy code that uses the new schema. Apply migrations `0006` through `0008` before deploying the matching Worker. Before the `0008` deployment, pause polling entry points and drain or terminate Workflows started by the old Worker because those executions do not acquire Feed ownership. The detailed deployment and rollback order is in the migration guide.
+Before deploying this cutover, follow the [migration and recovery runbook](docs/migration-baseline.md). It covers the verified export, migrations `0006` through `0009`, old Workflow drainage, canaries, Current synchronization, and rollback or forward recovery.
 
 ```bash
 pnpm deploy     # compile CSS + wrangler deploy
@@ -244,11 +206,11 @@ pnpm deploy     # compile CSS + wrangler deploy
 | Name | Type | Description |
 |---|---|---|
 | `CF_ACCESS_AUD` | secret | Cloudflare Access audience tag for JWT verification |
-| `R2_SQL_AUTH_TOKEN` | secret | R2 API token for querying pipeline analytics via R2 SQL |
-| `CF_ACCOUNT_ID` | var | Cloudflare account ID (used by R2 SQL queries) |
+| `CF_API_TOKEN` | secret | Cloudflare API token with Account Analytics Read for optional Analytics Engine dashboard queries |
+| `CF_ACCOUNT_ID` | var | Cloudflare account ID used by Analytics Engine SQL queries |
 | `DISPLAY_TIMEZONE` | var | IANA timezone for dashboard date grouping (default: UTC) |
 | `ITEM_RETENTION_DAYS` | var | Days to retain articles before weekly cleanup (default: 30) |
-| `ANALYTICS_ENABLED` | var | Set to `"false"` to disable all Pipeline writes and R2 SQL queries |
+| `ANALYTICS_ENABLED` | var | Set to `"false"` to disable Analytics Engine writes and queries |
 
 ## Docs
 

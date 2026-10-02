@@ -1,23 +1,24 @@
 /**
  * Feed polling module — owns all feed-fetch policy.
  *
- * `createFeedPoller(db, transport, observe, now)` returns one
- * callable function per poll cycle.  The Workflow scheduler
- * provides bindings; the module handles HTTP responses, XML
- * parsing, fallback parsing, item storage, interval backoff,
- * permanent/transient error tracking, and deactivation.
+ * The Workflow provides binding lifetimes and step placement. This module
+ * owns Feed selection, Cycle Run reconciliation, HTTP outcomes, parsing,
+ * Item storage, Backoff, error tracking, ownership, and health transitions.
  *
  * Observability tools (logger, metrics, wide events) stay in the
  * Workflow's `PollObserver` adapter — no Powertools imports here.
  */
 import Parser from "rss-parser";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
 import {
+  cycleRuns,
   feedPollAttempts,
+  feeds,
+  subscriptions,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
 } from "../db/schema";
@@ -134,6 +135,160 @@ export type PollAttemptContext = {
 
 export interface FeedPoller {
   poll(feed: FeedToCheck, attempt: PollAttemptContext): Promise<FeedPollResult>;
+}
+
+export type PollingCycleSelection = {
+  feeds: FeedToCheck[];
+  totalActiveFeeds: number;
+};
+
+export type PollingCycleSummary = {
+  checkedFeeds: number;
+  newItems: number;
+  failedFeeds: number;
+  skippedFeeds: number;
+};
+
+export interface PollingCycleManager {
+  begin(
+    cycleRunId: string,
+    triggerReason: PollTriggerReason,
+  ): Promise<PollingCycleSelection>;
+  complete(
+    cycleRunId: string,
+    selectedFeeds: number,
+    totalActiveFeeds: number,
+  ): Promise<PollingCycleSummary>;
+}
+
+/** Owns Feed selection and durable Cycle Run reconciliation. */
+export function createPollingCycleManager(
+  dbBinding: D1Database,
+  now: () => number,
+): PollingCycleManager {
+  const db = getDb(dbBinding);
+
+  return { begin, complete };
+
+  /** Selects eligible Feeds and creates the Cycle Run before polling starts. */
+  async function begin(
+    cycleRunId: string,
+    triggerReason: PollTriggerReason,
+  ): Promise<PollingCycleSelection> {
+    const startedAt = now();
+    const forced = triggerReason === "forced";
+    const selectionQuery = db
+      .selectDistinct({
+        id: feeds.id,
+        feedUrl: feeds.feedUrl,
+        title: feeds.title,
+        htmlUrl: feeds.htmlUrl,
+        etag: feeds.etag,
+        lastModified: feeds.lastModified,
+        lastSuccessfulPollAt: feeds.lastSuccessfulPollAt,
+        lastNewItemDiscoveredAt: feeds.lastNewItemDiscoveredAt,
+        initialBackloadCompletedAt: feeds.initialBackloadCompletedAt,
+        nextPollAt: feeds.nextPollAt,
+        consecutiveErrors: feeds.consecutiveErrors,
+        checkIntervalMinutes: feeds.checkIntervalMinutes,
+      })
+      .from(feeds)
+      .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+      .where(
+        forced
+          ? isNull(feeds.deactivatedAt)
+          : and(
+              isNull(feeds.deactivatedAt),
+              or(isNull(feeds.nextPollAt), lte(feeds.nextPollAt, startedAt)),
+            ),
+      )
+      .orderBy(asc(sql`coalesce(${feeds.nextPollAt}, 0)`));
+
+    const [selectedFeeds, activeCount] = await db.batch([
+      selectionQuery,
+      db
+        .select({ count: sql<number>`count(distinct ${feeds.id})` })
+        .from(feeds)
+        .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+        .where(isNull(feeds.deactivatedAt)),
+    ]);
+    const totalActiveFeeds = Number(activeCount[0]?.count ?? 0);
+    const empty = selectedFeeds.length === 0;
+
+    await db
+      .insert(cycleRuns)
+      .values({
+        id: cycleRunId,
+        ranAt: startedAt,
+        startedAt,
+        completedAt: empty ? startedAt : null,
+        triggerReason,
+        status: empty ? "completed" : "running",
+        outcome: empty ? "empty" : null,
+        activeFeeds: totalActiveFeeds,
+        dueFeeds: selectedFeeds.length,
+        selectedFeeds: selectedFeeds.length,
+      })
+      .onConflictDoNothing();
+
+    return { feeds: selectedFeeds, totalActiveFeeds };
+  }
+
+  /** Reconciles one completed Cycle Run from its durable Feed attempts. */
+  async function complete(
+    cycleRunId: string,
+    selectedFeeds: number,
+    totalActiveFeeds: number,
+  ): Promise<PollingCycleSummary> {
+    const attempts = await db
+      .select({
+        outcome: feedPollAttempts.outcome,
+        newItems: feedPollAttempts.newItems,
+      })
+      .from(feedPollAttempts)
+      .where(eq(feedPollAttempts.cycleRunId, cycleRunId));
+    const terminalAttempts = attempts.filter(
+      (attempt) => attempt.outcome != null,
+    );
+    if (
+      attempts.length !== selectedFeeds ||
+      terminalAttempts.length !== selectedFeeds
+    ) {
+      throw new Error(`Cycle Run ${cycleRunId} has incomplete Feed attempts`);
+    }
+
+    const skippedFeeds = terminalAttempts.filter(
+      (attempt) => attempt.outcome === "skipped",
+    ).length;
+    const checkedFeeds = terminalAttempts.length - skippedFeeds;
+    const failedFeeds = terminalAttempts.filter(
+      (attempt) => attempt.outcome === "failed",
+    ).length;
+    const newItems = terminalAttempts.reduce(
+      (sum, attempt) => sum + attempt.newItems,
+      0,
+    );
+
+    await db
+      .update(cycleRuns)
+      .set({
+        completedAt: now(),
+        status: "completed",
+        outcome: "completed",
+        activeFeeds: totalActiveFeeds,
+        dueFeeds: selectedFeeds,
+        selectedFeeds,
+        checkedFeeds,
+        newItems,
+        failedFeeds,
+        skippedFeeds,
+      })
+      .where(
+        and(eq(cycleRuns.id, cycleRunId), eq(cycleRuns.status, "running")),
+      );
+
+    return { checkedFeeds, newItems, failedFeeds, skippedFeeds };
+  }
 }
 
 export interface FeedHealth {

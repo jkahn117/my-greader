@@ -20,12 +20,12 @@ that parse protocol concerns and delegate.
 
 | Module | Responsibility |
 |--------|---------------|
-| `poll.ts` | Fetch, parse, store items; interval backoff; error/deactivation |
+| `poll.ts` | Feed selection and Cycle Run reconciliation; fetch, parse, store; Backoff, ownership, health transitions |
 | `subscriptions.ts` | Canonical feed upsert; subscribe/unsubscribe/edit; list/get |
 | `item-state.ts` | Per-User read/star transitions, read timestamps, ownership, scoped mark-all |
 | `stream.ts` | User-scoped Stream resolution and paginated Item queries |
 | `analytics.ts` | Analytics Engine read adapter (SQL, column layout, row mapping) |
-| `activity.ts` | User-visible, D1-backed Cycle Run history and Item attribution projections |
+| `activity.ts` | User-visible D1 dashboard metrics, Cycle Run history, and Item attribution projections |
 | `retention.ts` | Bounded Item and operational-history cleanup; starred Item preservation |
 
 Modules accept D1 directly (no repository adapter — single store).  Observability

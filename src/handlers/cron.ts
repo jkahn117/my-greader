@@ -3,8 +3,6 @@ import { createLogger } from "../lib/logger";
 import type { PollTriggerReason } from "../feed/poll";
 import { createRetentionManager } from "../feed/retention";
 
-export type { FeedPollResult as FeedResult } from "../feed/poll";
-
 // ---------------------------------------------------------------------------
 // Entry point — dispatches on cron schedule string
 // ---------------------------------------------------------------------------
@@ -25,7 +23,7 @@ export async function scheduled(
 }
 
 // ---------------------------------------------------------------------------
-// Trigger the FeedPollingWorkflow — replaces the old inline fetchFeeds loop
+// Trigger the FeedPollingWorkflow
 // ---------------------------------------------------------------------------
 
 export async function triggerFeedPollingWorkflow(
