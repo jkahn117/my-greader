@@ -28,8 +28,8 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                          │    first ingestion       ──► D1 Item attribution    │
                          │                           ──► Pipeline (metrics)     │
                          │                                                       │
-                         │  Cron  0 3 * * 1  ──► purgeOldItems                 │
-                         │    DELETE items older than ITEM_RETENTION_DAYS       │
+                         │  Cron  0 3 * * 1  ──► bounded retention             │
+                         │    purge unstarred old Items + 90-day poll history   │
                          └──────────────────────┬────────────────────────────┬──┘
                                                 │                            │
                                     ┌───────────▼────────┐    ┌─────────────▼──────────┐
@@ -112,7 +112,7 @@ Feeds are fetched via a **Cloudflare Workflow** triggered every 30 minutes. Each
 | Any other HTTP error / parse error | No change to interval; consecutive error count incremented |
 | 5 transient errors or 2 permanent errors | Feed deactivated with the reason recorded; stops being polled |
 
-**Article retention** — a weekly cron (Mondays 03:00 UTC) deletes articles older than `ITEM_RETENTION_DAYS` (default: 30 days).
+**Item and polling-history retention** — a weekly cron (Mondays 03:00 UTC) deletes Items older than `ITEM_RETENTION_DAYS` (default: 30 days) only when no User has starred them. Starred Items and all of their Item State remain. Cycle Runs and Feed attempts expire after 90 days; retained Items then become explicitly unattributed rather than keeping dangling references or guessed history. Cleanup is bounded to five batches of 500 Items and five batches of 100 Cycle Runs per invocation.
 
 ## Metrics dashboard (`/app/metrics`)
 

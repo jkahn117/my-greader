@@ -13,7 +13,7 @@ import {
   type PollAttemptContext,
   type PollObserver,
 } from "../src/feed/poll";
-import { purgeOldItems } from "../src/handlers/cron";
+import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import { cycleRuns, feeds, items, itemState, users } from "../src/db/schema";
 import { deriveItemId } from "../src/lib/crypto";
@@ -119,6 +119,17 @@ async function seedUser() {
     email: "test@example.com",
     createdAt: Date.now(),
   });
+}
+
+/** Runs the public weekly cleanup entry point with the requested Item policy. */
+async function runWeeklyRetention(itemRetentionDays = "30"): Promise<void> {
+  await worker.scheduled(
+    { cron: "0 3 * * 1" } as ScheduledEvent,
+    {
+      ...env,
+      ITEM_RETENTION_DAYS: itemRetentionDays,
+    } as unknown as Env,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -615,10 +626,158 @@ describe("FeedPoller error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// purgeOldItems
+// Weekly retention
 // ---------------------------------------------------------------------------
 
-describe("purgeOldItems", () => {
+describe("weekly retention", () => {
+  it("preserves every User's Item State when any User starred an old Item", async () => {
+    const now = Date.UTC(2026, 3, 6, 3);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await seedUser();
+      const db = getDb(env.DB);
+      await db.insert(users).values({
+        id: "other-user",
+        email: "other@example.com",
+        createdAt: now,
+      });
+      const feedId = await seedFeed("https://example.com/shared-retained.xml");
+      await db.insert(items).values({
+        id: "shared-starred-item",
+        feedId,
+        title: "Shared saved Item",
+        fetchedAt: now - 31 * 24 * 60 * 60 * 1000,
+      });
+      await db.insert(itemState).values([
+        {
+          itemId: "shared-starred-item",
+          userId: "test-user",
+          isRead: 1,
+          isStarred: 0,
+          readAt: now - 1,
+        },
+        {
+          itemId: "shared-starred-item",
+          userId: "other-user",
+          isStarred: 1,
+        },
+      ]);
+
+      await runWeeklyRetention();
+
+      const stateRows = await db
+        .select({
+          userId: itemState.userId,
+          isRead: itemState.isRead,
+          isStarred: itemState.isStarred,
+        })
+        .from(itemState)
+        .all();
+      expect(stateRows).toEqual(
+        expect.arrayContaining([
+          { userId: "test-user", isRead: 1, isStarred: 0 },
+          { userId: "other-user", isRead: 0, isStarred: 1 },
+        ]),
+      );
+      expect(stateRows).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires operational history older than 90 days without deleting a starred Item", async () => {
+    const now = Date.UTC(2026, 3, 6, 3);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await seedUser();
+      const feedId = await seedFeed("https://example.com/retained.xml");
+      const db = getDb(env.DB);
+      const oldCycleRunAt = now - 91 * 24 * 60 * 60 * 1000;
+      const boundaryCycleRunAt = now - 90 * 24 * 60 * 60 * 1000;
+      await db.insert(cycleRuns).values([
+        { id: "expired-cycle-run", ranAt: oldCycleRunAt },
+        { id: "boundary-cycle-run", ranAt: boundaryCycleRunAt },
+      ]);
+      await env.DB.prepare(
+        `INSERT INTO feed_poll_attempts
+          (id, cycle_run_id, feed_id, started_at, completed_at, outcome, new_items)
+         VALUES
+          ('expired-attempt', 'expired-cycle-run', ?, ?, ?, 'new_items', 1),
+          ('boundary-attempt', 'boundary-cycle-run', ?, ?, ?, 'unchanged', 0)`,
+      )
+        .bind(
+          feedId,
+          oldCycleRunAt,
+          oldCycleRunAt,
+          feedId,
+          boundaryCycleRunAt,
+          boundaryCycleRunAt,
+        )
+        .run();
+      await db
+        .update(feeds)
+        .set({
+          pollOwnerAttemptId: "expired-attempt",
+          pollLeaseExpiresAt: oldCycleRunAt,
+        })
+        .where(eq(feeds.id, feedId));
+      await db.insert(items).values({
+        id: "retained-starred-item",
+        feedId,
+        title: "Retained",
+        fetchedAt: oldCycleRunAt,
+        firstIngestionAttemptId: "expired-attempt",
+      });
+      await db.insert(itemState).values({
+        itemId: "retained-starred-item",
+        userId: "test-user",
+        isStarred: 1,
+      });
+
+      await runWeeklyRetention();
+
+      const cycleRunRows = await db
+        .select({ id: cycleRuns.id })
+        .from(cycleRuns)
+        .all();
+      const retainedItem = await db
+        .select({ attemptId: items.firstIngestionAttemptId })
+        .from(items)
+        .get();
+      const retainedFeed = await db
+        .select({
+          ownerAttemptId: feeds.pollOwnerAttemptId,
+          leaseExpiresAt: feeds.pollLeaseExpiresAt,
+        })
+        .from(feeds)
+        .where(eq(feeds.id, feedId))
+        .get();
+      expect(cycleRunRows.map(({ id }) => id)).toContain("boundary-cycle-run");
+      expect(cycleRunRows.map(({ id }) => id)).not.toContain(
+        "expired-cycle-run",
+      );
+      expect(retainedItem?.attemptId).toBeNull();
+      expect(retainedFeed).toEqual({
+        ownerAttemptId: null,
+        leaseExpiresAt: null,
+      });
+      const foreignKeyViolations = await env.DB.prepare(
+        "PRAGMA foreign_key_check",
+      ).all();
+      expect(foreignKeyViolations.results).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weekly Item retention
+// ---------------------------------------------------------------------------
+
+describe("weekly Item retention", () => {
   it("deletes items older than ITEM_RETENTION_DAYS", async () => {
     await seedUser();
     const feedId = await seedFeed("https://example.com/feed.xml");
@@ -647,10 +806,7 @@ describe("purgeOldItems", () => {
       publishedAt: Date.now(),
     });
 
-    await purgeOldItems({
-      ...env,
-      ITEM_RETENTION_DAYS: "30",
-    } as unknown as Env);
+    await runWeeklyRetention();
 
     const remaining = await db.select({ id: items.id }).from(items).all();
     expect(remaining).toHaveLength(1);
@@ -677,10 +833,7 @@ describe("purgeOldItems", () => {
       .insert(itemState)
       .values({ itemId: oldItemId, userId: "test-user", isRead: 1 });
 
-    await purgeOldItems({
-      ...env,
-      ITEM_RETENTION_DAYS: "30",
-    } as unknown as Env);
+    await runWeeklyRetention();
 
     const stateRows = await db.select().from(itemState).all();
     const itemRows = await db.select().from(items).all();
@@ -705,10 +858,7 @@ describe("purgeOldItems", () => {
       publishedAt: weekAgo,
     });
 
-    await purgeOldItems({
-      ...env,
-      ITEM_RETENTION_DAYS: "7",
-    } as unknown as Env);
+    await runWeeklyRetention("7");
 
     const remaining = await db.select().from(items).all();
     expect(remaining).toHaveLength(0);
@@ -753,66 +903,12 @@ describe("purgeOldItems", () => {
       isStarred: 0,
     });
 
-    await purgeOldItems({
-      ...env,
-      ITEM_RETENTION_DAYS: "30",
-    } as unknown as Env);
+    await runWeeklyRetention();
 
     const remaining = await db.select({ id: items.id }).from(items).all();
     const itemIds = remaining.map((r) => r.id);
 
     expect(itemIds).toContain(starredId);
     expect(itemIds).not.toContain(unstarredId);
-  });
-
-  it("preserves item when any user has starred it", async () => {
-    await seedUser();
-    const feedId = await seedFeed("https://example.com/feed.xml");
-    const db = getDb(env.DB);
-
-    // second user
-    await db.insert(users).values({
-      id: "other-user",
-      email: "other@example.com",
-      createdAt: Date.now(),
-    });
-
-    const oldTime = Date.now() - 31 * 24 * 60 * 60 * 1000;
-
-    const sharedId = await deriveItemId("https://example.com/shared");
-    await db.insert(items).values({
-      id: sharedId,
-      feedId,
-      title: "Shared Old Article",
-      url: "https://example.com/shared",
-      content: "shared",
-      fetchedAt: oldTime,
-      publishedAt: oldTime,
-    });
-    // test-user has not starred, other-user has starred
-    await db.insert(itemState).values({
-      itemId: sharedId,
-      userId: "test-user",
-      isStarred: 0,
-    });
-    await db.insert(itemState).values({
-      itemId: sharedId,
-      userId: "other-user",
-      isStarred: 1,
-    });
-
-    await purgeOldItems({
-      ...env,
-      ITEM_RETENTION_DAYS: "30",
-    } as unknown as Env);
-
-    const remaining = await db.select({ id: items.id }).from(items).all();
-    expect(remaining.map((r) => r.id)).toContain(sharedId);
-
-    // test-user's non-starred state row should be gone
-    const states = await db.select().from(itemState).all();
-    expect(states).toHaveLength(1);
-    expect(states[0].isStarred).toBe(1);
-    expect(states[0].userId).toBe("other-user");
   });
 });

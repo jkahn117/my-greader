@@ -1,6 +1,7 @@
 import { createApiTokenLifecycle } from "../domain/tokens";
 import { createLogger } from "../lib/logger";
 import type { PollTriggerReason } from "../feed/poll";
+import { createRetentionManager } from "../feed/retention";
 
 export type { FeedPollResult as FeedResult } from "../feed/poll";
 
@@ -17,7 +18,7 @@ export async function scheduled(
       return triggerFeedPollingWorkflow(env);
     case "0 3 * * 1":
       await purgeRevokedTokens(env);
-      return purgeOldItems(env);
+      return purgeRetention(env);
     default:
       createLogger().warn("unknown cron schedule", { cron: event.cron });
   }
@@ -47,34 +48,16 @@ export async function triggerFeedPollingWorkflow(
 }
 
 // ---------------------------------------------------------------------------
-// Article cleanup — runs weekly (Mondays 03:00 UTC)
+// Item and operational-history cleanup — runs weekly (Mondays 03:00 UTC)
 // ---------------------------------------------------------------------------
 
-export async function purgeOldItems(env: Env): Promise<void> {
-  const logger = createLogger({ cron: "purgeOldItems" });
-  const retentionDays = parseInt(env.ITEM_RETENTION_DAYS ?? "30", 10);
-  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+async function purgeRetention(env: Env): Promise<void> {
+  const logger = createLogger({ cron: "purgeRetention" });
+  const itemRetentionDays = parseInt(env.ITEM_RETENTION_DAYS ?? "30", 10);
+  const retention = createRetentionManager(env.DB);
+  const result = await retention.purge(itemRetentionDays);
 
-  // Delete non-starred item_state first to satisfy FK constraint
-  const stateResult = await env.DB.prepare(
-    "DELETE FROM item_state WHERE item_id IN (SELECT id FROM items WHERE fetched_at < ?) AND is_starred = 0",
-  )
-    .bind(cutoffMs)
-    .run();
-
-  // Delete items that are old AND not starred by any user
-  const itemResult = await env.DB.prepare(
-    "DELETE FROM items WHERE fetched_at < ? AND id NOT IN (SELECT item_id FROM item_state WHERE is_starred = 1)",
-  )
-    .bind(cutoffMs)
-    .run();
-
-  logger.info("purged old items", {
-    retentionDays,
-    cutoff: new Date(cutoffMs).toISOString(),
-    statesDeleted: stateResult.meta.changes,
-    itemsDeleted: itemResult.meta.changes,
-  });
+  logger.info("purged retained data", { itemRetentionDays, ...result });
 }
 
 // ---------------------------------------------------------------------------

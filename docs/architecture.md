@@ -22,6 +22,7 @@ the Workflow parse protocol concerns and delegate.
 | `src/feed/stream.ts` | User-scoped Stream resolution and paginated Item queries; query predicates stay private | None, pure query module |
 | `src/feed/analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None, read adapter |
 | `src/feed/activity.ts` | Bounded Cycle Run history, User-visible attempt and Item projections, explicit unattributed history | None, read module |
+| `src/feed/retention.ts` | Bounded Item and operational-history cleanup, starred Item and Item State preservation, safe attribution expiry | None, domain persistence module |
 | `src/domain/tokens/` | Hash-only API Token generation, active lookup, usage recording, User-scoped revocation, listing, and revoked-token retention | None, domain persistence module |
 
 These modules accept D1 directly because there is one store implementation.
@@ -109,6 +110,25 @@ rows expose the stable attempt and Feed IDs used in structured logs. The
 Activity projection derives public diagnostics from outcome, error class, and
 HTTP status instead of rendering stored error text, so response content and
 credentials cannot reach the Timeline.
+
+## Retention
+
+The Monday cleanup delegates Item and polling-history policy to
+`createRetentionManager()`. Items use the configured `ITEM_RETENTION_DAYS`
+(default 30). An old Item is deleted only when no User has starred it; cleanup
+then deletes every Item State row for that same deletable Item. If any User has
+starred an Item, the Item and all Users' surviving Item State remain intact.
+This policy applies equally to attributed and legacy Items.
+
+Operational history has a fixed 90-day retention period. Cleanup processes up
+to five 500-Item batches and five 100-Cycle-Run batches per invocation. Each
+D1 batch deletes related records in reference-safe order. Before an expired
+Feed attempt is deleted, retained Items referencing it are set to explicitly
+unattributed and any matching Feed ownership pointer and lease are cleared;
+attempts are then deleted before their Cycle Runs. The Timeline
+reports such Items as having no retained Cycle Run attribution and explains
+that their history either expired or predates attribution tracking. It never
+reconstructs attribution from timestamps.
 
 ## Auth
 

@@ -151,7 +151,8 @@ function CycleRunCard({ cycleRun }: { cycleRun: ActivityCycleRun }) {
 }
 
 export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
-  const unattributedMessage = `${timeline.unattributedItemCount} older Item${timeline.unattributedItemCount === 1 ? "" : "s"} in your Subscriptions ${timeline.unattributedItemCount === 1 ? "is" : "are"} unattributed`;
+  const unattributedMessage = `${timeline.unattributedItemCount} Item${timeline.unattributedItemCount === 1 ? "" : "s"} in your Subscriptions ${timeline.unattributedItemCount === 1 ? "has" : "have"} no retained Cycle Run attribution`;
+  const unattributedExplanation = `${timeline.unattributedItemCount === 1 ? "Its" : "Their"} ingestion history expired or predates attribution tracking.`;
 
   if (timeline.cycleRuns.length === 0) {
     return (
@@ -163,7 +164,7 @@ export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
         </p>
         <p class="mt-1 text-sm text-muted-foreground">
           {timeline.historyStatus === "unavailable"
-            ? `${unattributedMessage}. Exact Cycle Run membership cannot be recovered.`
+            ? `${unattributedMessage}. ${unattributedExplanation}`
             : "Timeline appears after the first polling Cycle Run."}
         </p>
       </div>
@@ -174,7 +175,7 @@ export function TimelineTab({ timeline }: { timeline: ActivityTimeline }) {
     <div class="space-y-4">
       {timeline.unattributedItemCount > 0 && (
         <div class="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          {unattributedMessage}. They are not assigned to Cycle Runs.
+          {unattributedMessage}. {unattributedExplanation}
         </div>
       )}
       {timeline.cycleRuns.map((cycleRun) => (

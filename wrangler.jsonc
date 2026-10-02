@@ -24,7 +24,7 @@
   "triggers": {
     "crons": [
       "*/30 * * * *", // feed fetcher
-      "0 3 * * 1" // weekly article cleanup (Mondays 03:00 UTC)
+      "0 3 * * 1" // weekly Item and polling-history cleanup (Mondays 03:00 UTC)
     ]
   },
   "vars": {

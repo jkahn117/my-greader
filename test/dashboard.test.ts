@@ -380,6 +380,67 @@ describe("feed deactivate / reactivate", () => {
 });
 
 describe("GET /app/timeline", () => {
+  it("shows retained Items honestly after their operational history expires", async () => {
+    const now = Date.UTC(2026, 3, 6, 3);
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const feedId = await seedFeedAndSub({
+        feedUrl: "https://saved.example/feed.xml",
+        title: "Saved Feed",
+      });
+      const db = getDb(env.DB);
+      const expiredAt = now - 91 * 24 * 60 * 60 * 1000;
+      await db.insert(cycleRuns).values({
+        id: "expired-cycle-run",
+        ranAt: expiredAt,
+      });
+      await db.insert(feedPollAttempts).values({
+        id: "expired-attempt",
+        cycleRunId: "expired-cycle-run",
+        feedId,
+        startedAt: expiredAt,
+        completedAt: expiredAt,
+        outcome: "new_items",
+        newItems: 1,
+      });
+      await db.insert(items).values({
+        id: "saved-item",
+        feedId,
+        title: "Saved Item",
+        fetchedAt: expiredAt,
+        firstIngestionAttemptId: "expired-attempt",
+      });
+      await db.insert(itemState).values({
+        itemId: "saved-item",
+        userId: "dev-user-id",
+        isStarred: 1,
+      });
+
+      await worker.scheduled(
+        { cron: "0 3 * * 1" } as ScheduledEvent,
+        {
+          ...env,
+          ITEM_RETENTION_DAYS: "30",
+        } as unknown as Env,
+      );
+      const res = await fetch("/app/timeline");
+      const html = await res.text();
+
+      expect(res.status).toBe(200);
+      expect(html).toContain("Cycle Run history unavailable");
+      expect(html).toContain(
+        "1 Item in your Subscriptions has no retained Cycle Run attribution",
+      );
+      expect(html).toContain(
+        "history expired or predates attribution tracking",
+      );
+      expect(html).not.toContain("expired-cycle-run");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows empty, interrupted, and failed durable outcomes without Analytics Engine", async () => {
     const feedId = await seedFeedAndSub({
       feedUrl: "https://failed.example/feed.xml",
@@ -645,7 +706,7 @@ describe("GET /app/timeline", () => {
     expect(html).toContain("2 Items globally");
     expect(html).toContain("1 Item in your Subscriptions");
     expect(html).toContain(
-      "1 older Item in your Subscriptions is unattributed",
+      "1 Item in your Subscriptions has no retained Cycle Run attribution",
     );
     expect(html).toContain("No eligible Feeds globally");
     expect(html).not.toContain("Private Item");
@@ -710,7 +771,7 @@ describe("GET /app/timeline", () => {
     expect(res.status).toBe(200);
     expect(html).toContain("Cycle Run history unavailable");
     expect(html).toContain(
-      "1 older Item in your Subscriptions is unattributed",
+      "1 Item in your Subscriptions has no retained Cycle Run attribution",
     );
     expect(html).not.toContain("No cycles yet");
   });

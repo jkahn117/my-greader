@@ -14,7 +14,7 @@ A personal RSS aggregator on Cloudflare Workers exposing a Google Reader-compati
 
 ## Architecture
 
-Feed-level business logic lives in six deep modules under `src/feed/`, each
+Feed-level business logic lives in seven deep modules under `src/feed/`, each
 behind a small factory interface. Handlers and the Workflow are thin adapters
 that parse protocol concerns and delegate.
 
@@ -26,6 +26,7 @@ that parse protocol concerns and delegate.
 | `stream.ts` | User-scoped Stream resolution and paginated Item queries |
 | `analytics.ts` | Analytics Engine read adapter (SQL, column layout, row mapping) |
 | `activity.ts` | User-visible, D1-backed Cycle Run history and Item attribution projections |
+| `retention.ts` | Bounded Item and operational-history cleanup; starred Item preservation |
 
 Modules accept D1 directly (no repository adapter — single store).  Observability
 tooling (`@workers-powertools`) never crosses the module seams; observer interfaces
