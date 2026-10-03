@@ -165,10 +165,10 @@ describe("realistic Feed Polling", () => {
       },
       {
         id: await deriveItemId(
-          "https://journal.example.test/feeds/entries/42?from=feed&lang=en",
+          "https://journal.example.test/entries/42?from=feed&lang=en",
         ),
         title: "Fish & Chips",
-        url: "https://journal.example.test/feeds/entries/42?from=feed&lang=en",
+        url: "https://journal.example.test/entries/42?from=feed&lang=en",
         content: "<p>Complete entry with é and &amp;.</p>",
         author: "Sam Example",
         publishedAt: Date.parse("2024-05-06T07:08:09Z"),
@@ -239,7 +239,9 @@ describe("realistic Feed Polling", () => {
       error_class: "parse",
       parser_status: "failure",
     });
-    expect(String(failedAttempt?.diagnostic).length).toBeGreaterThan(0);
+    expect(String(failedAttempt?.diagnostic).trim()).toMatch(
+      /^Non-whitespace before first tag/,
+    );
     expect(await loadFeed(feedId)).toMatchObject({
       consecutiveErrors: 1,
       lastSuccessfulPollAt: null,

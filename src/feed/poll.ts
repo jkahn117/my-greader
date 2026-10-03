@@ -867,10 +867,11 @@ export function createFeedPoller(
     const newLastModified = response.headers.get("Last-Modified");
     const time = now();
 
+    const documentBaseUrl = resolveDocumentBaseUrl(xml, feed.feedUrl);
     const itemRows: ItemCommitRow[] = (
       await Promise.all(
         (parsed.items ?? []).map(async (item: any) => {
-          const itemUrl = resolveUrl(item.link, feed.feedUrl);
+          const itemUrl = resolveUrl(item.link, documentBaseUrl);
           const guid = item.guid ?? itemUrl;
           if (!guid) return null;
           return {
@@ -1006,7 +1007,7 @@ export function createFeedPoller(
           newItemsInterval,
           unchangedInterval,
           parsed.title ?? null,
-          resolveUrl(parsed.link, feed.feedUrl),
+          resolveUrl(parsed.link, documentBaseUrl),
           newEtag,
           newLastModified,
           feed.id,
@@ -1313,6 +1314,19 @@ function resultFromAttempt(
         error: attempt.diagnostic ?? "Feed polling failed",
       };
   }
+}
+
+/** Uses a root xml:base when present, otherwise the requested Feed URL. */
+function resolveDocumentBaseUrl(xml: string, feedUrl: string): string {
+  const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, "");
+  const rootAttributes =
+    /<(?:[A-Za-z_][\w.-]*:)?(?:rss|feed)\b([^>]*)>/i.exec(
+      withoutComments,
+    )?.[1] ?? "";
+  const declaredBase = /\bxml:base\s*=\s*(["'])(.*?)\1/i.exec(
+    rootAttributes,
+  )?.[2];
+  return resolveUrl(declaredBase, feedUrl) ?? feedUrl;
 }
 
 /** Resolves parser-provided relative links while preserving malformed values for diagnostics. */
