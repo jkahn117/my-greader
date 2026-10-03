@@ -241,9 +241,21 @@ describe("production Access through protected Worker requests", () => {
     expect(jwksFetch).not.toHaveBeenCalled();
   });
 
+  it.each(["CF_ACCESS_AUD", "CF_ACCESS_ISSUER"])(
+    "reports unavailable authentication for missing required secret %s",
+    async (secret) => {
+      const bindings: Env = { ...env, CF_ACCESS_ISSUER: ISSUER };
+      // Deliberately violate the generated binding contract to test deployment misconfiguration.
+      Reflect.deleteProperty(bindings, secret);
+      const response = await request(await assertion(), bindings);
+      expect(response.status).toBe(500);
+      expect(await response.text()).toBe("Authentication unavailable");
+      expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);
+      expect(jwksFetch).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
-    { CF_ACCESS_AUD: undefined },
-    { CF_ACCESS_ISSUER: undefined },
     { CF_ACCESS_ISSUER: "http://test-team.cloudflareaccess.com" },
     {
       CF_ACCESS_ISSUER: "https://user:password@test-team.cloudflareaccess.com",
@@ -254,7 +266,6 @@ describe("production Access through protected Worker requests", () => {
     async (override) => {
       const response = await request(await assertion(), {
         ...env,
-        CF_ACCESS_ISSUER: ISSUER,
         ...override,
       });
       expect(response.status).toBe(500);

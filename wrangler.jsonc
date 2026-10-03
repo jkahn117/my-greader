@@ -37,6 +37,9 @@
     // Set to "false" to disable all Analytics Engine metric writes and AE SQL dashboard queries.
     "ANALYTICS_ENABLED": "true"
   },
+  "secrets": {
+    "required": ["CF_ACCESS_AUD", "CF_ACCESS_ISSUER"]
+  },
   // Secrets — set via: wrangler secret put <NAME>
   // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
   // CF_ACCESS_ISSUER — Exact HTTPS Access team origin, without a trailing slash

@@ -1,8 +1,6 @@
-// Wrangler generates configured bindings, but secrets and local-only values
-// are not present in wrangler.jsonc and need explicit declarations.
+// Wrangler generates configured bindings and required secrets. Optional secrets
+// and local-only values still need explicit declarations.
 interface Env {
-  CF_ACCESS_AUD?: string;
-  CF_ACCESS_ISSUER?: string;
   CF_API_TOKEN?: string;
   DEV_MODE?: string;
 }

@@ -142,6 +142,8 @@ pnpm wrangler secret put CF_ACCESS_ISSUER # Exact team origin: https://<team>.cl
 pnpm wrangler secret put CF_API_TOKEN
 ```
 
+`wrangler.jsonc` declares both Access secrets in `secrets.required` for generated binding types and local missing-secret warnings. `CF_API_TOKEN` remains optional.
+
 Set `DISPLAY_TIMEZONE` in `wrangler.jsonc` to your local [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/Chicago`) for dashboard timestamp display. D1's reads-per-day aggregation uses UTC day boundaries.
 
 **Cloudflare Access setup:**

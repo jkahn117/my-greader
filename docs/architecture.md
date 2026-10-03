@@ -166,6 +166,8 @@ The old `force` Workflow payload and Pipeline configuration are removed. The dep
 ## Wrangler configuration
 
 One Worker, one D1 database, one Analytics Engine dataset, one Workflow.
-Two cron triggers. Secrets: `CF_ACCESS_AUD`, `CF_ACCESS_ISSUER`, and optional `CF_API_TOKEN`.
+Two cron triggers. `secrets.required` declares `CF_ACCESS_AUD` and `CF_ACCESS_ISSUER`;
+`CF_API_TOKEN` is optional. Required-secret types come from Wrangler; optional
+secrets and the local bypass are declared in `src/env.d.ts`.
 Vars: `ITEM_RETENTION_DAYS`, `CF_ACCOUNT_ID`, `DISPLAY_TIMEZONE`, `ANALYTICS_ENABLED`.
 `DEV_MODE` is a local-only `.dev.vars` bypass and must not be set in production.
