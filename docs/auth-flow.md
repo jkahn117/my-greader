@@ -96,6 +96,22 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
    - The handler returns the raw token once in the htmx response fragment; it is never stored
 4. User copies raw token into Current's password field
 
+### ClientLogin rate limiting
+
+Before API Token validation, ClientLogin delegates to the native Workers
+`LOGIN_RATE_LIMITER` binding, configured for five attempts per sixty seconds.
+The key is `CF-Connecting-IP`. Requests without that header share the literal
+`unknown` key; the Worker does not trust other forwarding headers as a substitute.
+An allow decision proceeds with normal API Token authentication. A deny decision
+returns `429 Rate limited`, without an Auth response. If the binding throws,
+the Worker fails closed with `503 Authentication unavailable` and logs a
+structured error without platform exception details.
+
+An absent binding retains the existing optional runtime behavior, proceeding
+with authentication. A focused test of `wrangler.jsonc` requires the production
+binding and its intended limit so configuration omissions fail the local/CI gate.
+Local tests verify adapter decisions, not Cloudflare's distributed enforcement.
+
 ### Usage (GReader ClientLogin)
 
 ```

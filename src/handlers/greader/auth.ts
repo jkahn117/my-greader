@@ -20,12 +20,22 @@ export const clientLoginSchema = v.object({
 });
 
 auth.post("/accounts/ClientLogin", async (c) => {
-  const logger = createLogger({ path: "/accounts/ClientLogin" });
+  const logger = createLogger().child({
+    rayId: c.req.header("cf-ray"),
+    path: c.req.path,
+  });
 
   // Rate limit by client IP — 5 attempts per 60s (see wrangler.jsonc)
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (c.env.LOGIN_RATE_LIMITER) {
-    const { success } = await c.env.LOGIN_RATE_LIMITER.limit({ key: ip });
+    let success: boolean;
+    try {
+      ({ success } = await c.env.LOGIN_RATE_LIMITER.limit({ key: ip }));
+    } catch {
+      // Fail closed without exposing platform exception details to clients or logs.
+      logger.error("ClientLogin rate limiter unavailable", { ip });
+      return c.text("Authentication unavailable", 503);
+    }
     if (!success) {
       logger.warn("ClientLogin rate limited", { ip });
       return c.text("Rate limited", 429);
