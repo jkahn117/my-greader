@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://journal.example.test/">
+  <title>Sanitized Atom Journal</title>
+  <link rel="self" href="https://journal.example.test/feed.atom" />
+  <link rel="alternate" href="/journal" />
+  <entry>
+    <title>Fish &amp; Chips</title>
+    <link rel="related" href="/related/42" />
+    <link rel="alternate" href="entries/42?from=feed&amp;lang=en" />
+    <updated>2024-05-06T07:08:09Z</updated>
+    <author><name>Sam Example</name></author>
+    <summary type="html">&lt;p&gt;Short summary&lt;/p&gt;</summary>
+    <content type="html">&lt;p&gt;Complete entry with &#233; and &amp;amp;.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <link rel="alternate" href="https://journal.example.test/entries/link-only" />
+    <summary>Entry without a title, identifier, or date.</summary>
+  </entry>
+</feed>

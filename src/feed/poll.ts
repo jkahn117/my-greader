@@ -870,13 +870,14 @@ export function createFeedPoller(
     const itemRows: ItemCommitRow[] = (
       await Promise.all(
         (parsed.items ?? []).map(async (item: any) => {
-          const guid = item.guid ?? item.link;
+          const itemUrl = resolveUrl(item.link, feed.feedUrl);
+          const guid = item.guid ?? itemUrl;
           if (!guid) return null;
           return {
             id: await deriveItemId(guid),
             feedId: feed.id,
             title: item.title ?? null,
-            url: item.link ?? null,
+            url: itemUrl,
             content: (() => {
               const raw = [
                 item.content,
@@ -1005,7 +1006,7 @@ export function createFeedPoller(
           newItemsInterval,
           unchangedInterval,
           parsed.title ?? null,
-          parsed.link ?? null,
+          resolveUrl(parsed.link, feed.feedUrl),
           newEtag,
           newLastModified,
           feed.id,
@@ -1311,6 +1312,16 @@ function resultFromAttempt(
         errorClass: attempt.errorClass,
         error: attempt.diagnostic ?? "Feed polling failed",
       };
+  }
+}
+
+/** Resolves parser-provided relative links while preserving malformed values for diagnostics. */
+function resolveUrl(value: unknown, baseUrl: string): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    return new URL(value, baseUrl).href;
+  } catch {
+    return value;
   }
 }
 
