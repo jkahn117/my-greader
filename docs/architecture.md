@@ -142,6 +142,12 @@ policy. Dashboard handlers delegate generation, listing, and revocation. The
 GReader adapters delegate active-token lookup and hourly usage recording. The
 weekly cron delegates seven-day revoked-token cleanup.
 
+Management authentication verifies RS256 Access assertions against keys from the
+configured `CF_ACCESS_ISSUER` HTTPS origin, never an assertion-selected endpoint.
+Audience and typed claims are validated before User provisioning. An issuer-scoped
+isolate JWKS cache lasts one hour and refreshes once for an unknown key ID; expired
+keys are not used after service failure.
+
 See [`docs/auth-flow.md`](auth-flow.md).
 
 ## Retained compatibility and limitations
@@ -160,6 +166,6 @@ The old `force` Workflow payload and Pipeline configuration are removed. The dep
 ## Wrangler configuration
 
 One Worker, one D1 database, one Analytics Engine dataset, one Workflow.
-Two cron triggers. Secrets: `CF_ACCESS_AUD` and optional `CF_API_TOKEN`.
+Two cron triggers. Secrets: `CF_ACCESS_AUD`, `CF_ACCESS_ISSUER`, and optional `CF_API_TOKEN`.
 Vars: `ITEM_RETENTION_DAYS`, `CF_ACCOUNT_ID`, `DISPLAY_TIMEZONE`, `ANALYTICS_ENABLED`.
 `DEV_MODE` is a local-only `.dev.vars` bypass and must not be set in production.

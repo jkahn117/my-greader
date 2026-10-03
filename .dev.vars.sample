@@ -6,6 +6,9 @@
 # Not required locally; leave as placeholder if testing without Access.
 CF_ACCESS_AUD=placeholder
 
+# Exact HTTPS Access team origin, with no trailing slash. Required outside DEV_MODE.
+CF_ACCESS_ISSUER=https://your-team.cloudflareaccess.com
+
 # Set to "true" to bypass Cloudflare Access JWT check in local dev.
 # Never set in production.
 DEV_MODE=true

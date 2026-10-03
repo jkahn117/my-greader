@@ -134,6 +134,7 @@ pnpm wrangler d1 migrations apply rss-reader --remote  # production
 #    To find CF_ACCESS_AUD: Zero Trust → Access → Applications → your management UI app
 #    → Settings → scroll to "Application Audience (AUD) Tag" — a 64-char hex string
 pnpm wrangler secret put CF_ACCESS_AUD   # Cloudflare Access audience tag (JWT verification)
+pnpm wrangler secret put CF_ACCESS_ISSUER # Exact team origin: https://<team>.cloudflareaccess.com
 
 # 4. Set the optional Analytics Engine read credential used by the dashboard.
 #    The token needs Account Analytics Read permission. Metric writes use the
@@ -160,6 +161,7 @@ Access must protect the management UI while allowing GReader clients to reach th
 2. Domain: `myreader.example.com` (no path — catches everything else)
 3. Policy: **Action = Allow**, Include = **Emails** → your email address
 4. Copy the **Audience Tag** → `pnpm wrangler secret put CF_ACCESS_AUD`
+5. Set `CF_ACCESS_ISSUER` to your HTTPS team origin, `https://<team>.cloudflareaccess.com`, with no trailing slash. Find the team name in Cloudflare One settings. Existing deployments must set this before deploying the updated Worker; authenticated requests return `500 Authentication unavailable` without it.
 
 Also add a custom domain to the Worker in the Cloudflare dashboard and point both Access applications at it.
 
@@ -190,7 +192,7 @@ pnpm typecheck
 pnpm build
 ```
 
-`pnpm check` runs the last four commands after dependencies are installed. The test suite uses workerd, local D1 databases, and every migration in `drizzle/`. `vitest.config.ts` keeps the existing development-auth bypass. `vitest.production.config.ts` disables that bypass and supplies a synthetic Access audience for production-auth tests. Both configurations override test variables with checked-in synthetic values and disable remote bindings, so `.dev.vars`, Cloudflare credentials, remote D1, and live Analytics Engine data cannot affect test behavior. Tests simulate outbound services such as Feed servers and Access JWKS when those boundaries are exercised.
+`pnpm check` runs the last four commands after dependencies are installed. The test suite uses workerd, local D1 databases, and every migration in `drizzle/`. `vitest.config.ts` keeps the existing development-auth bypass. `vitest.production.config.ts` disables that bypass and supplies a synthetic Access audience and issuer for production-auth tests. Both configurations override test variables with checked-in synthetic values and disable remote bindings, so `.dev.vars`, Cloudflare credentials, remote D1, and live Analytics Engine data cannot affect test behavior. Tests simulate outbound services such as Feed servers and Access JWKS when those boundaries are exercised. `test/access.production.test.ts` signs local RSA assertions and sends them through `/app/access`, exercising real Web Crypto, middleware, and migrated D1. It covers malformed assertions, identity provisioning, rejection without provisioning, expiry boundaries, issuer-scoped JWKS reuse, expiration, and unknown-key refresh. Independent cases reload Worker modules to isolate the private key cache; cache-policy cases preserve modules and control time. Run it alone with `pnpm exec vitest run --config vitest.production.config.ts test/access.production.test.ts`.
 
 ## Deployment
 
@@ -222,6 +224,7 @@ pnpm deploy     # compile CSS + wrangler deploy
 | Name | Type | Description |
 |---|---|---|
 | `CF_ACCESS_AUD` | secret | Cloudflare Access audience tag for JWT verification |
+| `CF_ACCESS_ISSUER` | secret | Exact HTTPS Access team origin, without a trailing slash |
 | `CF_API_TOKEN` | secret | Cloudflare API token with Account Analytics Read for optional Analytics Engine dashboard queries |
 | `CF_ACCOUNT_ID` | var | Cloudflare account ID used by Analytics Engine SQL queries |
 | `DISPLAY_TIMEZONE` | var | IANA timezone for dashboard timestamp display (default: UTC); reads-per-day uses UTC boundaries |

@@ -20,8 +20,29 @@ On every authenticated request, Access injects a signed JWT:
 Cf-Access-Jwt-Assertion: <jwt>
 ```
 
-The Worker verifies this JWT against Access's public JWKS (fetched from `<iss>/cdn-cgi/access/certs`),
-checks audience (`CF_ACCESS_AUD`) and expiry, then extracts the `email` claim.
+The Worker requires `iss` to exactly match `CF_ACCESS_ISSUER`, a configured HTTPS
+team origin without a trailing slash, credentials, or path. It fetches public
+JWKS only from `${CF_ACCESS_ISSUER}/cdn-cgi/access/certs`, with redirects disabled.
+The assertion cannot choose its own key service.
+
+Only `RS256` is allowed, with a non-empty string `kid`. Claims `iss`, `sub`, and
+`email` must be non-empty strings; `aud` must be a non-empty string or non-empty
+array of non-empty strings containing `CF_ACCESS_AUD`. `iat` and `exp` must be
+finite integers. Tokens expire when `exp <= floor(Date.now() / 1000)`, with no
+expiry leeway. There is no future-`iat` restriction pending an agreed clock-skew
+policy. Real Web Crypto verifies the RSA signature before any User is provisioned.
+
+Missing assertions and invalid assertions return `401 Unauthorized`. An assertion
+with missing audience or missing/invalid issuer configuration returns
+`500 Authentication unavailable`. Malformed encoding, JSON, claims, keys, and
+signature data, as well as JWKS HTTP/network failures, are controlled rejections.
+
+The isolate retains one issuer-scoped JWKS cache for one hour. At the TTL boundary
+it must fetch keys again; service failures never fall back to expired keys. If a
+key ID is absent from fresh cached keys, the Worker refreshes once and retries the
+lookup. A newly fetched JWKS missing the key is rejected without another fetch.
+Independent tests reset module state; cache-policy tests preserve state and control
+time. No verification helpers are exported for testing.
 
 ### User provisioning
 

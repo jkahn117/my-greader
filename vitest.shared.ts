@@ -28,6 +28,7 @@ export async function createWorkersTestConfig({
             TEST_MIGRATIONS: JSON.stringify(migrations),
             DEV_MODE: developmentAuth ? "true" : "false",
             CF_ACCESS_AUD: "test-access-audience",
+            CF_ACCESS_ISSUER: "https://test-team.cloudflareaccess.com",
             CF_API_TOKEN: "test-api-token",
             CF_ACCOUNT_ID: "test-account-id",
             DISPLAY_TIMEZONE: "UTC",

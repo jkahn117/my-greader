@@ -39,6 +39,7 @@
   },
   // Secrets — set via: wrangler secret put <NAME>
   // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
+  // CF_ACCESS_ISSUER — Exact HTTPS Access team origin, without a trailing slash
   // CF_API_TOKEN   — Cloudflare API token (Account Analytics:Read) for AE SQL dashboard queries
   // Metrics are written to Workers Analytics Engine (fire-and-forget, no R2 accumulation).
   // The dashboard queries D1 directly; AE data supplements with aggregate time-series.
