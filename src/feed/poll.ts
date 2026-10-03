@@ -778,7 +778,14 @@ export function createFeedPoller(
     if (!response.ok) {
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
-      const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
+      const mediaType = response.headers
+        .get("Content-Type")
+        ?.split(";")[0]
+        ?.trim()
+        .toLowerCase();
+      const htmlEvidence =
+        mediaType === "text/html" || mediaType === "application/xhtml+xml";
+      const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}${htmlEvidence ? ": HTML response instead of Feed content" : ""}`;
       const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: errorClass,
@@ -829,12 +836,18 @@ export function createFeedPoller(
     let parsed;
     let parseStatus: "success" | "fallback" = "success";
 
+    const htmlDocument = isHtmlDocument(xml);
     try {
+      if (htmlDocument) {
+        throw new Error(
+          `HTTP ${response.status}: HTML document instead of RSS or Atom`,
+        );
+      }
       parsed = await parser.parseString(xml);
     } catch (e) {
       const parserError = safeDiagnostic((e as Error).message);
 
-      const fallback = parseFeedLenient(xml);
+      const fallback = htmlDocument ? null : parseFeedLenient(xml);
       if (fallback && fallback.items.length > 0) {
         parsed = fallback;
         parseStatus = "fallback";
@@ -1316,6 +1329,19 @@ function resultFromAttempt(
   }
 }
 
+/** Rejects HTML pages before the lenient parser can ingest embedded Feed markup. */
+function isHtmlDocument(document: string): boolean {
+  const withoutProlog = document.replace(
+    /^\s*(?:(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->)\s*)*/i,
+    "",
+  );
+  // HTML permits omitted document tags; its doctype is still explicit evidence.
+  return (
+    /^<!DOCTYPE\s+html(?:\s|>)/i.test(withoutProlog) ||
+    /^<(?:html|head|body)\b/i.test(withoutProlog)
+  );
+}
+
 /** Uses a root xml:base when present, otherwise the requested Feed URL. */
 function resolveDocumentBaseUrl(xml: string, feedUrl: string): string {
   const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, "");
@@ -1339,17 +1365,18 @@ function resolveUrl(value: unknown, baseUrl: string): string | null {
   }
 }
 
+/** Keeps stored Item content within its UTF-8 byte bound without partial characters. */
 function trimContent(content: string, maxBytes: number): string {
   const encoded = new TextEncoder().encode(content);
   if (encoded.length <= maxBytes) return content;
-  return new TextDecoder().decode(encoded.slice(0, maxBytes));
+  return new TextDecoder().decode(encoded.slice(0, maxBytes), { stream: true });
 }
 
 /** Removes common credential-bearing URL detail and bounds stored diagnostics. */
 function safeDiagnostic(message: string): string {
   const redacted = message
     .replace(/(https?:\/\/)([^@\s/]+)@/gi, "$1[redacted]@")
-    .replace(/(https?:\/\/[^\s?]+)\?[^\s]*/gi, "$1?[redacted]")
+    .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1?[redacted]")
     .replace(/\b(Bearer|GoogleLogin)\s+[^\s]+/gi, "$1 [redacted]")
     .replace(/\b(auth|token|key|secret)=([^\s&]+)/gi, "$1=[redacted]");
   return redacted.slice(0, 500);
