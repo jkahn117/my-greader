@@ -41,8 +41,13 @@ The isolate retains one issuer-scoped JWKS cache for one hour. At the TTL bounda
 it must fetch keys again; service failures never fall back to expired keys. If a
 key ID is absent from fresh cached keys, the Worker refreshes once and retries the
 lookup. A newly fetched JWKS missing the key is rejected without another fetch.
-Independent tests reset module state; cache-policy tests preserve state and control
-time. No verification helpers are exported for testing.
+Keys removed by the service remain usable while their cached key set is fresh.
+After a successful refresh replaces that set, removed keys are rejected. The
+production HTTP tests cover rotation both before and exactly at cache expiry,
+retired-key rejection, and HTTP, network, JSON, and schema failures during refresh.
+An explicit module-reset test proves a new Worker module cannot reuse the old
+module's keys. Independent tests reset module state; cache-policy tests preserve
+state and control time. No verification helpers are exported for testing.
 
 ### User provisioning
 

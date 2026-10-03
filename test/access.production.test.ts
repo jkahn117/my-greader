@@ -13,6 +13,17 @@ let worker: typeof import("../src/index").default;
 let key: CryptoKeyPair;
 let jwk: JsonWebKey;
 let jwksFetch: ReturnType<typeof vi.fn>;
+const JWKS_FAILURES = ["http", "network", "json", "schema"] as const;
+
+// Simulate key-service failures at the only replaced external boundary.
+function failJwksWith(failure: (typeof JWKS_FAILURES)[number]): void {
+  jwksFetch.mockImplementation(async () => {
+    if (failure === "network") throw new Error("Network unavailable");
+    if (failure === "http") return new Response("Unavailable", { status: 503 });
+    if (failure === "json") return new Response("not json");
+    return Response.json({ keys: null });
+  });
+}
 
 // Encode the actual UTF-8 signing input, including non-ASCII identity claims.
 function encode(value: unknown): string {
@@ -211,27 +222,53 @@ describe("production Access through protected Worker requests", () => {
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);
   });
 
-  it("refreshes cached JWKS once when Access rotates to an unknown key ID", async () => {
-    expect((await request(await assertion())).status).toBe(200);
-    const rotated = await generateRsaKey();
-    const rotatedJwk = await publicJwk(rotated);
-    jwksFetch.mockImplementation(async () =>
-      Response.json({ keys: [{ ...rotatedJwk, kid: "rotated" }] }),
-    );
-    expect(
-      (
-        await request(
-          await assertion(
-            { sub: "rotated-user", email: "rotated@example.com" },
-            { alg: "RS256", kid: "rotated" },
-            rotated.privateKey,
-          ),
-        )
-      ).status,
-    ).toBe(200);
-    expect(jwksFetch).toHaveBeenCalledTimes(2);
-    expect(await getDb(env.DB).select().from(users).all()).toHaveLength(2);
-  });
+  it.each([
+    { age: 1, cachedKeyStatus: 200, fetchesBeforeRotation: 1 },
+    { age: 3600, cachedKeyStatus: 401, fetchesBeforeRotation: 2 },
+  ])(
+    "uses rotated keys and rejects retired keys at cache age $age seconds",
+    async ({ age, cachedKeyStatus, fetchesBeforeRotation }) => {
+      const originalToken = await assertion({ exp: NOW + 7200 });
+      expect((await request(originalToken)).status).toBe(200);
+      const rotated = await generateRsaKey();
+      const rotatedJwk = await publicJwk(rotated);
+      jwksFetch.mockImplementation(async () =>
+        Response.json({ keys: [{ ...rotatedJwk, kid: "rotated" }] }),
+      );
+      vi.spyOn(Date, "now").mockReturnValue((NOW + age) * 1000);
+      // Fresh keys remain trusted until refresh; expired keys cannot hide retirement.
+      expect((await request(originalToken)).status).toBe(cachedKeyStatus);
+      expect(jwksFetch).toHaveBeenCalledTimes(fetchesBeforeRotation);
+      expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
+      const rotatedToken = await assertion(
+        { sub: "rotated-user", email: "rotated@example.com", exp: NOW + 7200 },
+        { alg: "RS256", kid: "rotated" },
+        rotated.privateKey,
+      );
+      expect((await request(rotatedToken)).status).toBe(200);
+      expect(jwksFetch).toHaveBeenCalledTimes(2);
+      expect((await request(rotatedToken)).status).toBe(200);
+      expect(jwksFetch).toHaveBeenCalledTimes(2);
+
+      const retiredToken = await assertion({
+        sub: "retired-user",
+        email: "retired@example.com",
+        exp: NOW + 7200,
+      });
+      const rejected = await request(retiredToken);
+      expect(rejected.status).toBe(401);
+      expect(await rejected.text()).toBe("Unauthorized");
+      // The retired kid gets one refresh, but the new key set never accepts it.
+      expect(jwksFetch).toHaveBeenCalledTimes(3);
+      expect((await request(rotatedToken)).status).toBe(200);
+      expect(jwksFetch).toHaveBeenCalledTimes(3);
+      const persisted = await getDb(env.DB).select().from(users).all();
+      expect(persisted.map((user) => user.id).sort()).toEqual([
+        "access-user",
+        "rotated-user",
+      ]);
+    },
+  );
 
   it("rejects a missing assertion without contacting JWKS or provisioning", async () => {
     const response = await request();
@@ -314,17 +351,10 @@ describe("production Access through protected Worker requests", () => {
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);
   });
 
-  it.each(["http", "network", "json"])(
+  it.each(JWKS_FAILURES)(
     "fails closed on JWKS %s failures",
     async (failure) => {
-      if (failure === "http")
-        jwksFetch.mockResolvedValue(
-          new Response("Unavailable", { status: 503 }),
-        );
-      if (failure === "network")
-        jwksFetch.mockRejectedValue(new Error("Network unavailable"));
-      if (failure === "json")
-        jwksFetch.mockResolvedValue(new Response("not json"));
+      failJwksWith(failure);
       const response = await request(await assertion());
       expect(response.status).toBe(401);
       expect(await response.text()).toBe("Unauthorized");
@@ -346,6 +376,26 @@ describe("production Access through protected Worker requests", () => {
       200,
     );
     expect(jwksFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts with an empty JWKS cache after resetting Worker modules", async () => {
+    expect((await request(await assertion())).status).toBe(200);
+    expect(jwksFetch).toHaveBeenCalledTimes(1);
+    jwksFetch.mockImplementation(async () => Response.json({ keys: [] }));
+    vi.resetModules();
+    worker = (await import("../src/index")).default;
+
+    const response = await request(
+      await assertion({
+        sub: "isolated-user",
+        email: "isolated@example.com",
+      }),
+    );
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized");
+    expect(jwksFetch).toHaveBeenCalledTimes(2);
+    const persisted = await getDb(env.DB).select().from(users).all();
+    expect(persisted.map((user) => user.id)).toEqual(["access-user"]);
   });
 
   it("does not reuse keys from another configured issuer", async () => {
@@ -371,18 +421,14 @@ describe("production Access through protected Worker requests", () => {
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
   });
 
-  it.each(["http", "network"])(
+  it.each(JWKS_FAILURES)(
     "does not fall back to expired keys after a %s failure",
     async (failure) => {
       expect((await request(await assertion({ exp: NOW + 7200 }))).status).toBe(
         200,
       );
       vi.spyOn(Date, "now").mockReturnValue((NOW + 3600) * 1000);
-      if (failure === "http")
-        jwksFetch.mockResolvedValue(
-          new Response("Unavailable", { status: 503 }),
-        );
-      else jwksFetch.mockRejectedValue(new Error("Network unavailable"));
+      failJwksWith(failure);
       expect(
         (
           await request(
@@ -415,22 +461,24 @@ describe("production Access through protected Worker requests", () => {
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
   });
 
-  it("fails closed when an unknown-key refresh cannot reach JWKS", async () => {
-    expect((await request(await assertion())).status).toBe(200);
-    jwksFetch.mockRejectedValue(new Error("Network unavailable"));
-    expect(
-      (
-        await request(
-          await assertion(
-            { sub: "unknown-user" },
-            { alg: "RS256", kid: "unknown" },
-          ),
-        )
-      ).status,
-    ).toBe(401);
-    expect(jwksFetch).toHaveBeenCalledTimes(2);
-    expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
-  });
+  it.each(JWKS_FAILURES)(
+    "fails closed when an unknown-key refresh encounters a %s failure",
+    async (failure) => {
+      expect((await request(await assertion())).status).toBe(200);
+      failJwksWith(failure);
+      const response = await request(
+        await assertion(
+          { sub: "unknown-user", email: "unknown@example.com" },
+          { alg: "RS256", kid: "unknown" },
+        ),
+      );
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe("Unauthorized");
+      expect(jwksFetch).toHaveBeenCalledTimes(2);
+      const persisted = await getDb(env.DB).select().from(users).all();
+      expect(persisted.map((user) => user.id)).toEqual(["access-user"]);
+    },
+  );
 
   it("verifies RSA assertions and provisions a UTF-8 User only once", async () => {
     expect((await request(await assertion())).status).toBe(200);
