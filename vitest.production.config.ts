@@ -2,10 +2,9 @@ import { defineConfig, mergeConfig } from "vitest/config";
 import { createWorkersTestConfig } from "./vitest.shared";
 
 export default defineConfig(async () =>
-  mergeConfig(await createWorkersTestConfig({ developmentAuth: true }), {
+  mergeConfig(await createWorkersTestConfig({ developmentAuth: false }), {
     test: {
-      include: ["test/**/*.test.ts"],
-      exclude: ["test/**/*.production.test.ts"],
+      include: ["test/**/*.production.test.ts"],
     },
   }),
 );

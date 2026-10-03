@@ -173,10 +173,24 @@ cp .dev.vars.sample .dev.vars
 # Set DEV_MODE=true to bypass Cloudflare Access JWT verification locally
 
 pnpm dev        # compile CSS then start wrangler dev
-pnpm test       # run vitest suite
+pnpm test       # run development-auth and production-auth test modes
 ```
 
 For CSS hot-reload during UI development, run `pnpm dev:css` in a separate terminal.
+
+### Reproducing pull request checks
+
+Pull requests targeting `next` run the following credential-free checks. Run the same commands from a clean checkout:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+`pnpm check` runs the last four commands after dependencies are installed. The test suite uses workerd, local D1 databases, and every migration in `drizzle/`. `vitest.config.ts` keeps the existing development-auth bypass. `vitest.production.config.ts` disables that bypass and supplies a synthetic Access audience for production-auth tests. Both configurations override test variables with checked-in synthetic values and disable remote bindings, so `.dev.vars`, Cloudflare credentials, remote D1, and live Analytics Engine data cannot affect test behavior. Tests simulate outbound services such as Feed servers and Access JWKS when those boundaries are exercised.
 
 ## Deployment
 
@@ -194,7 +208,9 @@ pnpm deploy     # compile CSS + wrangler deploy
 | `pnpm dev:css`    | Watch mode CSS compilation                                       |
 | `pnpm build`      | Compile CSS + production Worker build (no deploy)                |
 | `pnpm deploy`     | Build + deploy to Cloudflare                                     |
-| `pnpm test`       | Run vitest suite                                                 |
+| `pnpm test`       | Run development-auth and isolated production-auth test modes     |
+| `pnpm typecheck`  | Run the verified strict TypeScript check without emitting files  |
+| `pnpm check`      | Run lint, both test modes, type-checking, and the production build |
 | `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config      |
 | `pnpm studio`     | Open Drizzle Studio against local D1 (run `wrangler dev` first)  |
 | `pnpm format`     | Format TypeScript source files with Oxfmt                        |
