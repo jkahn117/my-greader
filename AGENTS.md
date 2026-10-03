@@ -21,6 +21,6 @@ A personal RSS aggregator on Cloudflare Workers exposing a Google Reader-compati
 ## Task references
 
 - Authentication: read [auth flow](docs/auth-flow.md) when changing Access JWT verification or the API Token lifecycle.
-- API compatibility: read [GReader API](docs/greader-api.md) when implementing or reviewing endpoints or client behavior.
-- Design decisions: read [decisions](docs/decisions.md) before revisiting a technical choice.
+- API compatibility: read [GReader API](docs/reference/greader-api.md) when implementing or reviewing endpoints or client behavior.
+- Design decisions: consult the [ADR index](docs/decisions.md) before revisiting a technical choice.
 - Deployment: read [README.md](README.md) before changing configuration or deployment procedures.

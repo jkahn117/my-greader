@@ -1,7 +1,9 @@
 # Troubleshooting RSS feed faults
 
-This doc covers how to investigate feed-level failures using the observability
-tooling already wired into my-greader.
+This guide covers investigating feed-level failures using the observability
+tooling already wired into my-greader. For API connection and authentication
+behavior, see the [Google Reader API reference](reference/greader-api.md) and
+[Auth flow](auth-flow.md).
 
 ## Error categories
 

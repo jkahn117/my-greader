@@ -26,4 +26,4 @@ Current connects to this backend using its **FreshRSS** sync option (custom serv
 
 - [Architecture](../architecture.md)
 - [Auth flow](../auth-flow.md)
-- [GReader API](../greader-api.md)
+- [GReader API reference](../reference/greader-api.md)
