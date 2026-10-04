@@ -24,6 +24,7 @@ protocol concerns and delegate.
 | `activity.ts` | Bounded dashboard projections (overview totals, subscription workspace rows) scoped to the authenticated user | None — read model |
 | `eligibility.ts` | Due-feed selection shared by the polling Workflow and manual sync (`force` drops due time only) | None — read model |
 | `history.ts` | Per-feed attempt evidence: cursor pagination, terminal-check streaks, problem grouping, attributed items | None — read model |
+| `reading.ts` | Marked-read metrics (daily in the display timezone, per-Feed) scoped to current Subscriptions | None — read model |
 
 These modules accept D1 directly (no repository adapter) because there is only
 one store implementation.
@@ -110,6 +111,20 @@ The dashboard handler never sees raw AE rows.
 
 **Real-time dashboard cards** (cycle timeline, feed health, reads per day)
 query D1 directly and work without analytics.
+
+**Reading page** (`GET /app/api/reading?days=7|14|30`, `src/feed/reading.ts`)
+counts current `item_state` rows with `is_read = 1`, grouped by `read_at` —
+the latest server receipt of a mark-read.  `edit-tag` and
+`mark-all-as-read` stamp `read_at` on every mark-read (re-reads replace
+it) and `edit-tag` clears it on unread, so there is no read history: only
+current state with its latest receipt time.  Scope is the user's current
+Subscriptions (deactivated Feeds included, unsubscribed Feeds excluded).
+The window is whole calendar days in `DISPLAY_TIMEZONE` (invalid values
+fall back to UTC) ending with today as a partial day; boundaries are
+computed in the Worker and passed to SQLite as one `json_each` parameter,
+and missing days are zero-filled.  Starred count is a current-state
+supporting metric, not windowed.  Item retention purges unstarred items and
+their state, so older receipts can disappear.
 
 ## Auth
 

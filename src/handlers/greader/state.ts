@@ -65,11 +65,12 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     return c.text("OK");
   }
 
-  // Stamp readAt when marking as read so the dashboard can show reads per day
-  const readAt = updates.isRead === 1 ? Date.now() : undefined;
+  // readAt is the latest server receipt of a mark-read (re-reads replace it);
+  // marking unread clears it so Reading metrics never count stale timing.
   const fullUpdates = {
     ...updates,
-    ...(readAt !== undefined ? { readAt } : {}),
+    ...(updates.isRead === 1 ? { readAt: Date.now() } : {}),
+    ...(updates.isRead === 0 ? { readAt: null } : {}),
   };
 
   // Prefetch feedId for all items in one query — needed for the article_read metric
@@ -149,43 +150,44 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
   // The LEFT JOIN filter ensures only unread items are touched.
   let insertSql: string;
   const params: (string | number)[] = [];
+  const receivedAt = Date.now();
 
   if (streamId.type === "feed") {
     insertSql = `
-      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
-      SELECT i.id, ?, 1, 0
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred, read_at)
+      SELECT i.id, ?, 1, 0, ?
       FROM items i
       LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
       WHERE i.feed_id = ?
         AND (s.is_read IS NULL OR s.is_read = 0)
         ${cutoffClause}
-      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1, read_at = excluded.read_at
     `;
-    params.push(userId, userId, feedId!);
+    params.push(userId, receivedAt, userId, feedId!);
   } else if (streamId.type === "folder") {
     insertSql = `
-      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
-      SELECT i.id, ?, 1, 0
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred, read_at)
+      SELECT i.id, ?, 1, 0, ?
       FROM items i
       LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
       WHERE i.feed_id IN (SELECT feed_id FROM subscriptions WHERE user_id = ? AND folder = ?)
         AND (s.is_read IS NULL OR s.is_read = 0)
         ${cutoffClause}
-      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1, read_at = excluded.read_at
     `;
-    params.push(userId, userId, userId, streamId.value!);
+    params.push(userId, receivedAt, userId, userId, streamId.value!);
   } else if (streamId.type === "all") {
     insertSql = `
-      INSERT INTO item_state (item_id, user_id, is_read, is_starred)
-      SELECT i.id, ?, 1, 0
+      INSERT INTO item_state (item_id, user_id, is_read, is_starred, read_at)
+      SELECT i.id, ?, 1, 0, ?
       FROM items i
       LEFT JOIN item_state s ON s.item_id = i.id AND s.user_id = ?
       WHERE i.feed_id IN (SELECT feed_id FROM subscriptions WHERE user_id = ?)
         AND (s.is_read IS NULL OR s.is_read = 0)
         ${cutoffClause}
-      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1
+      ON CONFLICT (item_id, user_id) DO UPDATE SET is_read = 1, read_at = excluded.read_at
     `;
-    params.push(userId, userId, userId);
+    params.push(userId, receivedAt, userId, userId);
   } else {
     return c.text("OK");
   }

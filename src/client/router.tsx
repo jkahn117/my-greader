@@ -9,6 +9,7 @@ import type {
   FeedDetailResponse,
   FeedsResponse,
   OverviewResponse,
+  ReadingResponse,
   TokensResponse,
 } from "../shared/dashboard-api";
 import { apiGet, ApiError } from "./lib/api";
@@ -25,7 +26,12 @@ import {
   FeedDetailPending,
 } from "./routes/feed-detail";
 import { AccessError, AccessPage, AccessPending } from "./routes/access";
-import { PlaceholderPage } from "./routes/placeholder";
+import {
+  parseReadingSearch,
+  ReadingError,
+  ReadingPage,
+  ReadingPending,
+} from "./routes/reading";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -87,12 +93,20 @@ const feedDetailRoute = createRoute({
 const readingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/reading",
-  component: () => (
-    <PlaceholderPage
-      title="Reading"
-      body="Reading metrics are being migrated to React."
+  validateSearch: parseReadingSearch,
+  loaderDeps: ({ search }) => ({ days: search.days }),
+  pendingComponent: ReadingPending,
+  errorComponent: ({ error }) => (
+    <ReadingError
+      status={error instanceof ApiError ? error.status : undefined}
     />
   ),
+  loader: ({ deps }) =>
+    apiGet<ReadingResponse>(`/app/api/reading?days=${deps.days}`),
+  component: function Reading() {
+    const data = readingRoute.useLoaderData();
+    return <ReadingPage data={data} />;
+  },
 });
 
 const accessRoute = createRoute({
