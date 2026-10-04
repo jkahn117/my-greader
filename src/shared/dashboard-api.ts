@@ -26,6 +26,60 @@ export interface OverviewResponse {
   generatedAt: number;
 }
 
+/** Reading panel: marked-read trend + top feeds, user-scoped. */
+export interface ReadingPanelData {
+  windowDays: number;
+  /** Zero-filled per-day marked-read counts in display timezone; boundary
+   *  days (oldest and today) are partial. */
+  daily: { date: string; count: number }[];
+  total: number;
+  topFeeds: { feedId: string; title: string | null; count: number }[];
+}
+
+/** Per-feed health buckets derived from each subscribed feed's latest
+ *  recorded attempt outcome. */
+export interface FeedHealthData {
+  /** Latest check stored new items. */
+  successful: number;
+  rateLimited: number;
+  failed: number;
+  /** Deliberately skipped (deactivated mid-cycle). */
+  skipped: number;
+  /** Attempt currently in progress. */
+  running: number;
+  /** Latest check completed with no new items (ok-0 or 304). */
+  empty: number;
+  /** No recorded attempt. */
+  missing: number;
+}
+
+/** Latest polling-cycle lifecycle. */
+export interface CycleData {
+  state: "running" | "completed" | "empty" | "missing";
+  ranAt: number | null;
+  checkedFeeds: number | null;
+}
+
+/** One feed needing attention, linked to its detail page. */
+export interface AttentionFeed {
+  feedId: string;
+  title: string | null;
+  reason: string;
+}
+
+/** GET /app/api/overview/panels — the panels beneath the summary cards. */
+export interface OverviewPanelsResponse {
+  reading: ReadingPanelData;
+  feedHealth: FeedHealthData;
+  cycle: CycleData;
+  needsAttention: AttentionFeed[];
+  /** Optional Analytics Engine projection — degrades independently. */
+  analyticsEngine:
+    | { status: "ok"; trend30d: { day: string; newArticles: number }[] }
+    | { status: "unavailable" };
+  generatedAt: number;
+}
+
 /** Current check health of a feed, derived from persisted state.
  *  `new` = never successfully checked; `rate_limited`/`failing`/`deactivated`
  *  from the last check outcome and error streak. */

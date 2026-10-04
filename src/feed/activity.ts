@@ -14,6 +14,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  or,
   sql,
 } from "drizzle-orm";
 import {
@@ -32,6 +33,7 @@ import { getDb } from "../lib/db";
 const TIMELINE_CYCLE_LIMIT = 20;
 const METRICS_CYCLE_LIMIT = 48;
 const METRICS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const NEEDS_ATTENTION_LIMIT = 8;
 
 export interface ActivityItem {
   itemTitle: string | null;
@@ -119,10 +121,44 @@ export interface OverviewSummary {
   feedsNeedingAttention: number;
 }
 
+export interface ReadingDay {
+  date: string;
+  count: number;
+}
+
+export interface OverviewPanels {
+  reading: {
+    windowDays: number;
+    daily: ReadingDay[];
+    total: number;
+    topFeeds: { feedId: string; title: string | null; count: number }[];
+  };
+  feedHealth: {
+    successful: number;
+    rateLimited: number;
+    failed: number;
+    skipped: number;
+    running: number;
+    empty: number;
+    missing: number;
+  };
+  cycle: {
+    state: "running" | "completed" | "empty" | "missing";
+    ranAt: number | null;
+    checkedFeeds: number | null;
+  };
+  needsAttention: { feedId: string; title: string | null; reason: string }[];
+}
+
 export interface ActivityReader {
   timeline(userId: string): Promise<ActivityTimeline>;
   metrics(userId: string): Promise<ActivityMetrics>;
   overviewSummary(userId: string): Promise<OverviewSummary>;
+  overviewPanels(
+    userId: string,
+    timestamp: number,
+    timezone: string,
+  ): Promise<OverviewPanels>;
 }
 
 /** Builds a public diagnostic from classified fields instead of stored error text. */
@@ -161,7 +197,7 @@ export function createActivityReader(
 ): ActivityReader {
   const db = getDb(dbBinding);
 
-  return { timeline, metrics, overviewSummary };
+  return { timeline, metrics, overviewSummary, overviewPanels };
 
   /** Builds User-scoped totals for the React dashboard overview. */
   async function overviewSummary(userId: string): Promise<OverviewSummary> {
@@ -217,6 +253,214 @@ export function createActivityReader(
       newItemsLast7Days: Number(newItemsRow[0]?.count ?? 0),
       markedReadLast7Days: Number(readRow[0]?.count ?? 0),
       feedsNeedingAttention: Number(attentionRow[0]?.count ?? 0),
+    };
+  }
+
+  /** Builds the reading, Feed health, Cycle, and attention panels. */
+  async function overviewPanels(
+    userId: string,
+    timestamp: number,
+    timezone: string,
+  ): Promise<OverviewPanels> {
+    const cutoffMs = timestamp - METRICS_WINDOW_MS;
+    const latestPerFeed = db
+      .select({
+        feedId: feedPollAttempts.feedId,
+        startedAt: sql<number>`max(${feedPollAttempts.startedAt})`.as(
+          "started_at",
+        ),
+      })
+      .from(feedPollAttempts)
+      .groupBy(feedPollAttempts.feedId)
+      .as("latest_per_feed");
+
+    const [
+      readRows,
+      topFeedRows,
+      latestAttemptRows,
+      cycleRow,
+      attentionRows,
+      subscriptionCountRow,
+    ] = await Promise.all([
+      db
+        .select({ readAt: itemState.readAt })
+        .from(itemState)
+        .innerJoin(items, eq(itemState.itemId, items.id))
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.userId, itemState.userId),
+            eq(subscriptions.feedId, items.feedId),
+          ),
+        )
+        .where(
+          and(
+            eq(itemState.userId, userId),
+            eq(itemState.isRead, 1),
+            isNotNull(itemState.readAt),
+            gt(itemState.readAt, cutoffMs),
+          ),
+        ),
+      db
+        .select({
+          feedId: items.feedId,
+          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+          count: sql<number>`count(*)`,
+        })
+        .from(itemState)
+        .innerJoin(items, eq(itemState.itemId, items.id))
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.userId, itemState.userId),
+            eq(subscriptions.feedId, items.feedId),
+          ),
+        )
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(
+          and(
+            eq(itemState.userId, userId),
+            eq(itemState.isRead, 1),
+            isNotNull(itemState.readAt),
+            gt(itemState.readAt, cutoffMs),
+          ),
+        )
+        .groupBy(items.feedId, subscriptions.title, feeds.title)
+        .orderBy(desc(sql`count(*)`))
+        .limit(5),
+      db
+        .select({
+          feedId: feedPollAttempts.feedId,
+          outcome: feedPollAttempts.outcome,
+          newItems: feedPollAttempts.newItems,
+          completedAt: feedPollAttempts.completedAt,
+        })
+        .from(feedPollAttempts)
+        .innerJoin(
+          latestPerFeed,
+          and(
+            eq(feedPollAttempts.feedId, latestPerFeed.feedId),
+            eq(feedPollAttempts.startedAt, latestPerFeed.startedAt),
+          ),
+        )
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.feedId, feedPollAttempts.feedId),
+            eq(subscriptions.userId, userId),
+          ),
+        ),
+      db.select().from(cycleRuns).orderBy(desc(cycleRuns.ranAt)).limit(1),
+      db
+        .select({
+          feedId: feeds.id,
+          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+          deactivatedAt: feeds.deactivatedAt,
+          deactivationReason: feeds.deactivationReason,
+          consecutiveErrors: feeds.consecutiveErrors,
+          lastError: feeds.lastError,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            or(
+              isNotNull(feeds.deactivatedAt),
+              gt(feeds.consecutiveErrors, 0),
+            ),
+          ),
+        )
+        .limit(NEEDS_ATTENTION_LIMIT),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId)),
+    ]);
+
+    const dayFormat = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const readCounts = new Map<string, number>();
+    for (const row of readRows) {
+      const day = dayFormat.format(new Date(row.readAt!));
+      readCounts.set(day, (readCounts.get(day) ?? 0) + 1);
+    }
+    const daily: ReadingDay[] = [];
+    for (let offset = 6; offset >= 0; offset--) {
+      const day = dayFormat.format(
+        new Date(timestamp - offset * 24 * 60 * 60 * 1000),
+      );
+      daily.push({ date: day, count: readCounts.get(day) ?? 0 });
+    }
+
+    const feedHealth: OverviewPanels["feedHealth"] = {
+      successful: 0,
+      rateLimited: 0,
+      failed: 0,
+      skipped: 0,
+      running: 0,
+      empty: 0,
+      missing: 0,
+    };
+    const seenFeeds = new Set<string>();
+    for (const attempt of latestAttemptRows) {
+      if (seenFeeds.has(attempt.feedId)) continue;
+      seenFeeds.add(attempt.feedId);
+      if (attempt.completedAt === null) feedHealth.running++;
+      else if (attempt.outcome === "skipped") feedHealth.skipped++;
+      else if (attempt.outcome === "rate_limited") feedHealth.rateLimited++;
+      else if (attempt.outcome === "failed") feedHealth.failed++;
+      else if (attempt.outcome === "new_items" && attempt.newItems > 0)
+        feedHealth.successful++;
+      else feedHealth.empty++;
+    }
+    feedHealth.missing = Math.max(
+      0,
+      Number(subscriptionCountRow[0]?.count ?? 0) - seenFeeds.size,
+    );
+
+    const latestCycle = cycleRow[0];
+    const cycle: OverviewPanels["cycle"] = !latestCycle
+      ? { state: "missing", ranAt: null, checkedFeeds: null }
+      : latestCycle.status === "running"
+        ? {
+            state: "running",
+            ranAt: latestCycle.ranAt,
+            checkedFeeds: latestCycle.checkedFeeds,
+          }
+        : latestCycle.outcome === "empty"
+          ? { state: "empty", ranAt: latestCycle.ranAt, checkedFeeds: 0 }
+          : {
+              state: "completed",
+              ranAt: latestCycle.ranAt,
+              checkedFeeds: latestCycle.checkedFeeds,
+            };
+
+    return {
+      reading: {
+        windowDays: 7,
+        daily,
+        total: readRows.length,
+        topFeeds: topFeedRows.map((row) => ({
+          feedId: row.feedId,
+          title: row.title ?? null,
+          count: Number(row.count),
+        })),
+      },
+      feedHealth,
+      cycle,
+      needsAttention: attentionRows.map((row) => ({
+        feedId: row.feedId,
+        title: row.title ?? null,
+        reason:
+          row.deactivatedAt !== null
+            ? `Deactivated${row.deactivationReason === "manual" ? " (manual)" : ""}`
+            : `${row.consecutiveErrors} consecutive errors${row.lastError ? `: ${row.lastError}` : ""}`,
+      })),
     };
   }
 
