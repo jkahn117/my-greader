@@ -9,6 +9,7 @@
 import { and, eq, gt, isNotNull, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { feeds, items, itemState, subscriptions } from "../db/schema";
+import type { FeedListItem, FeedStatus } from "../shared/dashboard-api";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -21,8 +22,25 @@ export interface OverviewSummary {
   feedsNeedingAttention: number;
 }
 
+/** Classify a subscription's current health from persisted check state.
+ *  Order matters: deactivation dominates; a never-checked feed is "new";
+ *  the recorded last outcome distinguishes rate-limiting from failures. */
+export function classifyFeedStatus(sub: {
+  deactivatedAt: number | null;
+  lastFetchedAt: number | null;
+  lastStatus: string | null;
+  consecutiveErrors: number;
+}): FeedStatus {
+  if (sub.deactivatedAt != null) return "deactivated";
+  if (sub.lastFetchedAt == null) return "new";
+  if (sub.lastStatus === "rate_limited") return "rate_limited";
+  if (sub.consecutiveErrors > 0 || sub.lastStatus === "error") return "failing";
+  return "active";
+}
+
 export interface Activity {
   overviewSummary(userId: string, now: number): Promise<OverviewSummary>;
+  listFeedRows(userId: string): Promise<FeedListItem[]>;
 }
 
 /** Returns the activity read model backed by D1. */
@@ -94,6 +112,57 @@ export function createActivity(dbBinding: D1Database): Activity {
         markedReadLast7Days: Number(readRow[0]?.count ?? 0),
         feedsNeedingAttention: Number(attentionRow[0]?.count ?? 0),
       };
+    },
+
+    /** All of the user's subscriptions with honest health fields —
+     *  last successful check, last new item, and next eligibility are
+     *  separate facts, never merged into a single "last seen". */
+    async listFeedRows(userId) {
+      const rows = await d
+        .select({
+          feedId: feeds.id,
+          subscriptionId: subscriptions.id,
+          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+          feedUrl: feeds.feedUrl,
+          htmlUrl: feeds.htmlUrl,
+          folder: subscriptions.folder,
+          deactivatedAt: feeds.deactivatedAt,
+          deactivatedReason: feeds.deactivatedReason,
+          lastFetchedAt: feeds.lastFetchedAt,
+          lastSuccessfulAt: feeds.lastSuccessfulAt,
+          lastStatus: feeds.lastStatus,
+          lastNewItemAt: feeds.lastNewItemAt,
+          consecutiveErrors: feeds.consecutiveErrors,
+          lastError: feeds.lastError,
+          checkIntervalMinutes: feeds.checkIntervalMinutes,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(eq(subscriptions.userId, userId))
+        .orderBy(subscriptions.folder, feeds.title);
+
+      return rows.map((r) => ({
+        feedId: r.feedId,
+        subscriptionId: r.subscriptionId,
+        title: r.title ?? null,
+        feedUrl: r.feedUrl,
+        htmlUrl: r.htmlUrl,
+        folder: r.folder,
+        status: classifyFeedStatus(r),
+        lastSuccessfulAt: r.lastSuccessfulAt,
+        lastCheckedAt: r.lastFetchedAt,
+        nextCheckAt:
+          r.lastFetchedAt != null
+            ? r.lastFetchedAt + r.checkIntervalMinutes * 60_000
+            : null,
+        lastNewItemAt: r.lastNewItemAt,
+        consecutiveErrors: r.consecutiveErrors,
+        lastError: r.lastError,
+        checkIntervalMinutes: r.checkIntervalMinutes,
+        deactivatedAt: r.deactivatedAt,
+        deactivatedReason: r.deactivatedReason,
+        legacyUncertain: r.deactivatedAt != null && r.deactivatedReason == null,
+      }));
     },
   };
 }

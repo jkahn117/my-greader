@@ -21,7 +21,8 @@ protocol concerns and delegate.
 | `subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver` — Powertools stays in handlers |
 | `stream.ts` | GReader stream scope resolution, paginated item queries, feed-ID lookup | None — pure query module |
 | `analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None — read adapter |
-| `activity.ts` | Bounded dashboard projections (overview totals) scoped to the authenticated user | None — read model |
+| `activity.ts` | Bounded dashboard projections (overview totals, subscription workspace rows) scoped to the authenticated user | None — read model |
+| `eligibility.ts` | Due-feed selection shared by the polling Workflow and manual sync (`force` drops due time only) | None — read model |
 
 These modules accept D1 directly (no repository adapter) because there is only
 one store implementation.
@@ -35,6 +36,12 @@ the concrete logger and metrics implementations.
 - **Shared:** `feeds` (canonical), `items` (article content, trimmed to 50KB)
 - **Per-user:** `subscriptions`, `item_state` (read/starred), `api_tokens`
 - **Operational:** `cycle_runs` (polling cycle summary)
+
+`feeds` carries check-state columns (`last_fetched_at`,
+`last_successful_at`, `last_status`, `check_interval_minutes`,
+`consecutive_errors`, `last_error`, `deactivated_at`,
+`deactivated_reason`) so the dashboard can present health, eligibility,
+and deactivation facts without reconstructing them from item timestamps.
 
 See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 

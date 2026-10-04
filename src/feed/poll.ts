@@ -133,6 +133,8 @@ export function createFeedPoller(
         .update(feeds)
         .set({
           lastFetchedAt: now(),
+          lastSuccessfulAt: now(),
+          lastStatus: "not_modified",
           checkIntervalMinutes: newInterval,
         })
         .where(eq(feeds.id, feed.id));
@@ -169,6 +171,7 @@ export function createFeedPoller(
         .update(feeds)
         .set({
           lastFetchedAt: now(),
+          lastStatus: "rate_limited",
           checkIntervalMinutes: backoffMinutes,
           lastError: errorMessage,
         })
@@ -311,6 +314,8 @@ export function createFeedPoller(
       .update(feeds)
       .set({
         lastFetchedAt: time,
+        lastSuccessfulAt: time,
+        lastStatus: "ok",
         consecutiveErrors: 0,
         lastError: null,
         checkIntervalMinutes: newInterval,
@@ -353,8 +358,11 @@ export function createFeedPoller(
       .set({
         consecutiveErrors: next,
         lastError: errorMessage,
+        lastStatus: "error",
         lastFetchedAt: now(),
-        ...(deactivate ? { deactivatedAt: now() } : {}),
+        ...(deactivate
+          ? { deactivatedAt: now(), deactivatedReason: errorClass }
+          : {}),
       })
       .where(eq(feeds.id, feed.id));
     if (deactivate) {

@@ -3,11 +3,12 @@ import {
   WorkflowEvent,
   WorkflowStep,
 } from "cloudflare:workers";
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import { feeds, subscriptions, cycleRuns } from "../db/schema";
+import { dueFeedsQuery } from "../feed/eligibility";
 import {
   createFeedPoller,
   type FeedPollResult,
@@ -15,8 +16,9 @@ import {
   type PollObserver,
 } from "../feed/poll";
 
-// No per-run parameters needed — the Workflow always fetches all due feeds
-type Params = Record<string, never>;
+// `force` bypasses due-time eligibility (manual forced sync); deactivated
+// and unsubscribed feeds stay excluded either way.
+type Params = { force?: boolean };
 
 // Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
 // Sequential steps each get their own fresh subrequest budget (free plan: 50).
@@ -98,7 +100,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     try {
-      await this.#poll(step);
+      await this.#poll(step, event.payload?.force ?? false);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -125,7 +127,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(step: WorkflowStep): Promise<void> {
+  async #poll(step: WorkflowStep, force: boolean): Promise<void> {
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
     // ------------------------------------------------------------------
@@ -139,34 +141,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           const now = Date.now();
 
           const [due, activeCount] = await db.batch([
-            db
-              .selectDistinct({
-                id: feeds.id,
-                feedUrl: feeds.feedUrl,
-                title: feeds.title,
-                htmlUrl: feeds.htmlUrl,
-                etag: feeds.etag,
-                lastModified: feeds.lastModified,
-                lastFetchedAt: feeds.lastFetchedAt,
-                consecutiveErrors: feeds.consecutiveErrors,
-                checkIntervalMinutes: feeds.checkIntervalMinutes,
-                lastNewItemAt: feeds.lastNewItemAt,
-              })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(
-                and(
-                  isNull(feeds.deactivatedAt),
-                  or(
-                    isNull(feeds.lastFetchedAt),
-                    lte(
-                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                      now,
-                    ),
-                  ),
-                ),
-              )
-              .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
+            dueFeedsQuery(db, now, force),
 
             db
               .select({ count: sql<number>`count(*)` })

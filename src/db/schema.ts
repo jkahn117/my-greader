@@ -20,7 +20,10 @@ export const feeds = sqliteTable("feeds", {
   feedUrl: text("feed_url").unique().notNull(),
   htmlUrl: text("html_url"),
   title: text("title"),
-  lastFetchedAt: integer("last_fetched_at"),
+  lastFetchedAt: integer("last_fetched_at"), // most recent check attempt
+  lastSuccessfulAt: integer("last_successful_at"), // most recent check that completed (200 or 304)
+  lastStatus: text("last_status"), // outcome of the most recent check: ok | not_modified | rate_limited | error
+  deactivatedReason: text("deactivated_reason"), // transient | permanent | manual; NULL = deactivated before reasons existed (legacy uncertain)
   etag: text("etag"), // for conditional HTTP requests
   lastModified: text("last_modified"), // for conditional HTTP requests
   consecutiveErrors: integer("consecutive_errors").notNull().default(0),

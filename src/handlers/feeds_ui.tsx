@@ -107,7 +107,7 @@ handler.post("/feeds/:id/deactivate", async (c) => {
 
   await db
     .update(feeds)
-    .set({ deactivatedAt: Date.now() })
+    .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
     .where(eq(feeds.id, id));
 
   logger.info("feed deactivated", { feedId: id });
