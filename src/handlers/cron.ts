@@ -13,7 +13,8 @@ export async function scheduled(
 ): Promise<void> {
   switch (event.cron) {
     case "*/30 * * * *":
-      return triggerFeedPollingWorkflow(env);
+      await triggerFeedPollingWorkflow(env);
+      return;
     case "0 3 * * 1":
       await purgeRevokedTokens(env);
       return purgeRetention(env);
@@ -29,7 +30,7 @@ export async function scheduled(
 export async function triggerFeedPollingWorkflow(
   env: Env,
   triggerReason: PollTriggerReason = "scheduled",
-): Promise<void> {
+): Promise<string> {
   const logger = createLogger({
     cron:
       triggerReason === "forced"
@@ -43,6 +44,7 @@ export async function triggerFeedPollingWorkflow(
     instanceId: instance.id,
     triggerReason,
   });
+  return instance.id;
 }
 
 // ---------------------------------------------------------------------------

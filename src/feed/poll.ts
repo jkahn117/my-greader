@@ -161,6 +161,29 @@ export interface PollingCycleManager {
   ): Promise<PollingCycleSummary>;
 }
 
+/** Counts globally eligible subscribed Feeds without starting a Cycle Run. */
+export async function countEligibleFeeds(
+  dbBinding: D1Database,
+  nowMs: number,
+  forced: boolean,
+): Promise<number> {
+  const db = getDb(dbBinding);
+  const row = await db
+    .select({ count: sql<number>`count(distinct ${feeds.id})` })
+    .from(feeds)
+    .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+    .where(
+      forced
+        ? isNull(feeds.deactivatedAt)
+        : and(
+            isNull(feeds.deactivatedAt),
+            or(isNull(feeds.nextPollAt), lte(feeds.nextPollAt, nowMs)),
+          ),
+    )
+    .get();
+  return Number(row?.count ?? 0);
+}
+
 /** Owns Feed selection and durable Cycle Run reconciliation. */
 export function createPollingCycleManager(
   dbBinding: D1Database,

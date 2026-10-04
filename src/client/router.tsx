@@ -5,7 +5,7 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
-import type { OverviewResponse } from "../shared/dashboard-api";
+import type { FeedsResponse, OverviewResponse } from "../shared/dashboard-api";
 import { apiGet, ApiError } from "./lib/api";
 import { Shell } from "./components/shell";
 import {
@@ -13,6 +13,7 @@ import {
   OverviewPage,
   OverviewPending,
 } from "./routes/overview";
+import { FeedsError, FeedsPage, FeedsPending } from "./routes/feeds";
 import { PlaceholderPage } from "./routes/placeholder";
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -44,12 +45,29 @@ const overviewRoute = createRoute({
 const feedsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/feeds",
-  component: () => (
-    <PlaceholderPage
-      title="Feeds"
-      body="The subscription workspace is being migrated to React."
-    />
+  pendingComponent: FeedsPending,
+  errorComponent: ({ error }) => (
+    <FeedsError status={error instanceof ApiError ? error.status : undefined} />
   ),
+  loader: () => apiGet<FeedsResponse>("/app/api/feeds"),
+  component: function Feeds() {
+    const data = feedsRoute.useLoaderData();
+    return <FeedsPage data={data} />;
+  },
+});
+
+const feedDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/feeds/$feedId",
+  component: function FeedDetail() {
+    const { feedId } = feedDetailRoute.useParams();
+    return (
+      <PlaceholderPage
+        title="Feed detail"
+        body={`Feed ${feedId} — the diagnosis and management view is being migrated to React.`}
+      />
+    );
+  },
 });
 
 const readingRoute = createRoute({
@@ -78,6 +96,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   overviewRoute,
   feedsRoute,
+  feedDetailRoute,
   readingRoute,
   accessRoute,
 ]);
