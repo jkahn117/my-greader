@@ -315,8 +315,12 @@ export function createFeedPoller(
         lastError: null,
         checkIntervalMinutes: newInterval,
         lastNewItemAt: newItems > 0 ? time : (feed.lastNewItemAt ?? time),
-        ...(feed.title == null && parsed.title != null ? { title: parsed.title } : {}),
-        ...(feed.htmlUrl == null && parsed.link != null ? { htmlUrl: parsed.link } : {}),
+        ...(feed.title == null && parsed.title != null
+          ? { title: parsed.title }
+          : {}),
+        ...(feed.htmlUrl == null && parsed.link != null
+          ? { htmlUrl: parsed.link }
+          : {}),
         ...(newEtag != null ? { etag: newEtag } : {}),
         ...(newLastModified != null ? { lastModified: newLastModified } : {}),
       })

@@ -28,9 +28,12 @@ function CycleCard({ cycle }: { cycle: CycleTimelineWindow }) {
             Cycle at {relativeTime(cycle.ranAt)}
           </h3>
           <p class="mt-0.5 text-xs text-muted-foreground">
-            {cycle.checkedFeeds} feed{cycle.checkedFeeds !== 1 ? "s" : ""} checked
+            {cycle.checkedFeeds} feed{cycle.checkedFeeds !== 1 ? "s" : ""}{" "}
+            checked
             {cycle.newItems > 0 && (
-              <span class="ml-1 text-primary font-medium">· +{cycle.newItems} article{cycle.newItems !== 1 ? "s" : ""}</span>
+              <span class="ml-1 text-primary font-medium">
+                · +{cycle.newItems} article{cycle.newItems !== 1 ? "s" : ""}
+              </span>
             )}
           </p>
         </div>
@@ -54,13 +57,17 @@ function CycleCard({ cycle }: { cycle: CycleTimelineWindow }) {
                 </p>
               </div>
               <span class="shrink-0 text-xs text-muted-foreground pt-0.5">
-                {item.publishedAt != null ? relativeTime(item.publishedAt) : "—"}
+                {item.publishedAt != null
+                  ? relativeTime(item.publishedAt)
+                  : "—"}
               </span>
             </a>
           ))}
         </div>
       ) : (
-        <p class="px-4 py-3 text-sm text-muted-foreground">No new articles this cycle.</p>
+        <p class="px-4 py-3 text-sm text-muted-foreground">
+          No new articles this cycle.
+        </p>
       )}
     </div>
   );
@@ -71,7 +78,9 @@ export function TimelineTab({ cycles }: { cycles: CycleTimelineWindow[] }) {
     return (
       <div class="rounded-lg border border-border bg-card px-6 py-10 text-center shadow-sm">
         <p class="text-sm font-medium text-foreground">No cycles yet</p>
-        <p class="mt-1 text-sm text-muted-foreground">Timeline appears after the first polling cycle runs.</p>
+        <p class="mt-1 text-sm text-muted-foreground">
+          Timeline appears after the first polling cycle runs.
+        </p>
       </div>
     );
   }

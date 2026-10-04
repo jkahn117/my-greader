@@ -2,10 +2,12 @@
 
 ## Stack
 
-Single Cloudflare Worker (Hono + JSX) backed by D1 (SQLite) and Workers
+Single Cloudflare Worker (Hono) backed by D1 (SQLite) and Workers
 Analytics Engine for metrics.  Feed polling runs inside a Cloudflare Workflow
-to stay within the free-tier subrequest budget.  The management UI uses htmx
-for interactivity without a client bundle.
+to stay within the free-tier subrequest budget.  The management UI is a React
+single-page client (Vite + TanStack Router + shadcn components) served from
+the same Worker's assets, calling a same-origin JSON API under `/app/api/*`.
+(The earlier htmx server-rendered UI is being retired — see issue #42.)
 
 ## Deep modules (`src/feed/`)
 
@@ -19,6 +21,7 @@ protocol concerns and delegate.
 | `subscriptions.ts` | Canonical feed upsert; subscribe, unsubscribe, edit; list and get | `SubObserver` — Powertools stays in handlers |
 | `stream.ts` | GReader stream scope resolution, paginated item queries, feed-ID lookup | None — pure query module |
 | `analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None — read adapter |
+| `activity.ts` | Bounded dashboard projections (overview totals) scoped to the authenticated user | None — read model |
 
 These modules accept D1 directly (no repository adapter) because there is only
 one store implementation.
@@ -38,10 +41,30 @@ See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 ## Request routing
 
 - `/reader/*` and `/accounts/ClientLogin` — GReader-compatible API, token auth
-- `/app/*`, `/tokens/*`, `/import` — Management UI, Cloudflare Access JWT auth
+- `/app/api/*` — Dashboard JSON API for the React client, Cloudflare Access JWT
+- `/app/*` (other paths) — Static assets; `not_found_handling:
+  single-page-application` serves `index.html` so TanStack Router routes
+  deep-link.  `assets.run_worker_first` in `wrangler.jsonc` keeps JSON,
+  GReader, and legacy mutation endpoints on the Worker.
+- `/tokens/*`, `/import`, `/feeds/*` — Legacy mutation endpoints, Cloudflare
+  Access JWT auth (replaced by `/app/api/*` as the React client lands)
 
 The GReader API follows the FreshRSS dialect of the Google Reader protocol.
 See [`docs/greader-api.md`](greader-api.md) for endpoint details.
+
+## Management client
+
+`src/client/` holds the React SPA (`main.tsx` entry from `index.html`,
+TanStack Router routes under basepath `/app`, shadcn components in
+`components/ui/`).  It consumes `/app/api/*` via plain `fetch` in route
+loaders; response types are shared in `src/shared/dashboard-api.ts`.
+`vite build` emits the client to `dist/client` (the wrangler `assets`
+directory) and the Worker to `dist/my_greader`.  Per-file
+`@jsxImportSource react` pragmas keep `tsc` honest while the server side
+stays on `hono/jsx`.
+
+Browser acceptance tests live in `e2e/` (Playwright, `pnpm test:browser`)
+and run against `pnpm dev`.
 
 ## Feed polling
 

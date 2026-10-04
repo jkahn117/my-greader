@@ -4,7 +4,11 @@ import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
 import { feeds, items, subscriptions, cycleRuns } from "../db/schema";
 import { App } from "../views/app";
-import { TimelineTab, type CycleTimelineWindow, type TimelineItem } from "../views/timeline";
+import {
+  TimelineTab,
+  type CycleTimelineWindow,
+  type TimelineItem,
+} from "../views/timeline";
 
 import type { Variables } from "../types/context";
 
@@ -22,7 +26,9 @@ handler.get("/app/timeline", async (c) => {
     return c.html(
       <App email={email} active="timeline">
         <div class="rounded-lg border border-destructive bg-card px-6 py-10 text-center shadow-sm">
-          <p class="text-sm font-medium text-destructive">Database unavailable</p>
+          <p class="text-sm font-medium text-destructive">
+            Database unavailable
+          </p>
         </div>
       </App>,
     );
@@ -59,10 +65,7 @@ handler.get("/app/timeline", async (c) => {
       .innerJoin(feeds, eq(items.feedId, feeds.id))
       .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
       .where(
-        and(
-          eq(subscriptions.userId, userId),
-          gte(items.fetchedAt, fetchStart),
-        ),
+        and(eq(subscriptions.userId, userId), gte(items.fetchedAt, fetchStart)),
       )
       .orderBy(desc(items.fetchedAt), desc(items.id));
 
@@ -71,7 +74,12 @@ handler.get("/app/timeline", async (c) => {
       const windowEnd = cycle.ranAt;
 
       const cycleItems: TimelineItem[] = itemRows
-        .filter((r) => r.fetchedAt != null && r.fetchedAt >= windowStart && r.fetchedAt <= windowEnd)
+        .filter(
+          (r) =>
+            r.fetchedAt != null &&
+            r.fetchedAt >= windowStart &&
+            r.fetchedAt <= windowEnd,
+        )
         .map((r) => ({
           itemTitle: r.itemTitle,
           itemUrl: r.itemUrl,
@@ -88,7 +96,10 @@ handler.get("/app/timeline", async (c) => {
       };
     });
 
-    logger.info("timeline loaded", { cycleCount: cycles.length, itemCount: itemRows.length });
+    logger.info("timeline loaded", {
+      cycleCount: cycles.length,
+      itemCount: itemRows.length,
+    });
 
     return c.html(
       <App email={email} active="timeline">
@@ -103,7 +114,9 @@ handler.get("/app/timeline", async (c) => {
     return c.html(
       <App email={email} active="timeline">
         <div class="rounded-lg border border-destructive bg-card px-6 py-10 text-center shadow-sm">
-          <p class="text-sm font-medium text-destructive">Failed to load timeline</p>
+          <p class="text-sm font-medium text-destructive">
+            Failed to load timeline
+          </p>
           <p class="mt-1 text-sm text-muted-foreground">{String(err)}</p>
         </div>
       </App>,

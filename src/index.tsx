@@ -3,6 +3,7 @@ import { tokenMiddleware } from "./middleware/token";
 import { accessMiddleware } from "./middleware/access";
 import { observabilityMiddleware } from "./middleware/observability";
 import { greader } from "./handlers/greader";
+import { dashboardHandler } from "./handlers/dashboard";
 import { tokensHandler } from "./handlers/tokens";
 import { feedsUiHandler } from "./handlers/feeds_ui";
 import { importHandler } from "./handlers/import";
@@ -39,6 +40,9 @@ app.use("/app/*", accessMiddleware);
 app.use("/tokens/*", accessMiddleware);
 app.use("/feeds/*", accessMiddleware);
 app.use("/import", accessMiddleware);
+
+// Dashboard JSON API for the React management client (under /app/api/*)
+app.route("/", dashboardHandler);
 
 app.route("/", metricsHandler); // GET /app/metrics
 app.route("/", timelineHandler); // GET /app/timeline
