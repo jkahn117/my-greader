@@ -19,6 +19,7 @@ export default defineConfig(async () => {
           bindings: {
             TEST_MIGRATIONS: JSON.stringify(migrations),
             DEV_MODE: "true",
+            DISPLAY_TIMEZONE: "America/Los_Angeles",
           },
         },
       }),

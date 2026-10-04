@@ -23,6 +23,69 @@ test("overview summary cards appear in the required order", async ({
   await expect(cards.nth(3)).toContainText("Needs attention");
 });
 
+test("overview panels: reading, feed health, needs attention — names and values", async ({
+  page,
+}) => {
+  await page.goto("/app/overview");
+
+  const reading = page.locator("[data-slot='card']", {
+    hasText: "Reading activity",
+  });
+  const health = page.locator("[data-slot='card']", {
+    hasText: "Feed health",
+  });
+  // "Needs attention" also matches the summary stat card — take the panel.
+  const attention = page
+    .locator("[data-slot='card']", { hasText: "Needs attention" })
+    .last();
+  await expect(reading).toBeVisible();
+  await expect(health).toBeVisible();
+  await expect(attention).toBeVisible();
+
+  // Reading panel: one item marked read in window; Alpha News tops the list.
+  await expect(reading).toContainText("Most marked read");
+  await expect(
+    reading.getByRole("link", { name: "Alpha News" }),
+  ).toHaveAttribute("href", "/app/feeds/e2e-feed-active");
+
+  // Feed health: latest attempt buckets — Beta/Gamma have no recorded
+  // attempts; Alpha's latest is the seeded 500 error.
+  await expect(health).toContainText("Failed");
+  await expect(health).toContainText("No recorded activity");
+  await expect(health).toContainText("Analytics Engine");
+  // Latest cycle lifecycle from the seeded run.
+  await expect(health).toContainText("cycle completed");
+
+  // Needs attention links to feed detail; failing + deactivated seeds.
+  const betaLink = attention.getByRole("link", { name: "Beta Blog" });
+  await expect(betaLink).toHaveAttribute(
+    "href",
+    "/app/feeds/e2e-feed-failing",
+  );
+  await expect(
+    attention.getByRole("link", { name: "Gamma Gazette" }),
+  ).toBeVisible();
+});
+
+test("overview panels stack reading → health → attention on mobile", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 700 });
+  await page.goto("/app/overview");
+
+  const y = async (name: string) =>
+    (await page
+      .locator("[data-slot='card']", { hasText: name })
+      .last()
+      .boundingBox())!.y;
+
+  const readingY = await y("Reading activity");
+  const healthY = await y("Feed health");
+  const attentionY = await y("Needs attention");
+  expect(readingY).toBeLessThan(healthY);
+  expect(healthY).toBeLessThan(attentionY);
+});
+
 test("deep-link reload resolves a client route", async ({ page }) => {
   await page.goto("/app/reading");
   await expect(

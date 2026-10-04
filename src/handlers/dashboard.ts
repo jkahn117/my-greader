@@ -23,6 +23,7 @@ import type {
   FeedDetailResponse,
   FeedsResponse,
   ImportResponse,
+  OverviewPanelsResponse,
   OverviewResponse,
   SyncResponse,
 } from "../shared/dashboard-api";
@@ -63,6 +64,74 @@ handler.get("/app/api/overview", async (c) => {
     );
     return c.json({ error: "failed to load overview" }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /app/api/overview/panels — reading trend, feed health buckets, cycle
+// lifecycle, needs-attention list, and the optional Analytics Engine panel
+// (which degrades independently and never blocks the core projections).
+// ---------------------------------------------------------------------------
+
+handler.get("/app/api/overview/panels", async (c) => {
+  const userId = c.get("userId");
+  const logger = createLogger({ path: "/app/api/overview/panels", userId });
+
+  if (!c.env.DB) {
+    return c.json({ error: "database unavailable" }, 503);
+  }
+
+  const timezone =
+    (c.env as unknown as Record<string, string>).DISPLAY_TIMEZONE || "UTC";
+
+  const activity = createActivity(c.env.DB);
+  let panels: Awaited<ReturnType<typeof activity.overviewPanels>>;
+  try {
+    panels = await activity.overviewPanels(userId, Date.now(), timezone);
+  } catch (err) {
+    logger.error(
+      "overview panels failed",
+      err instanceof Error ? err : { err: String(err) },
+    );
+    return c.json({ error: "failed to load overview panels" }, 500);
+  }
+
+  // Optional AE projection — isolated so an AE outage or missing
+  // credentials degrades this panel alone.
+  let analyticsEngine: OverviewPanelsResponse["analyticsEngine"] = {
+    status: "unavailable",
+  };
+  try {
+    const envVars = c.env as unknown as Record<string, string>;
+    const cfApiToken = envVars.CF_API_TOKEN;
+    const aeEnabled = envVars.ANALYTICS_ENABLED !== "false" && !!cfApiToken;
+    if (aeEnabled) {
+      const { createAnalyticsReader } = await import("../feed/analytics");
+      const reader = createAnalyticsReader({
+        accountId: envVars.CF_ACCOUNT_ID,
+        apiToken: cfApiToken,
+        enabled: true,
+      });
+      // trend30d needs no feed-title map — pass an empty list. The
+      // adapter swallows AE failures into empty results, so an empty
+      // trend reads as unavailable rather than a real zero.
+      const data = await reader.queryAll([]);
+      if (data.trend30d.length > 0) {
+        analyticsEngine = { status: "ok", trend30d: data.trend30d };
+      }
+    }
+  } catch (err) {
+    logger.warn("analytics engine panel degraded", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    analyticsEngine = { status: "unavailable" };
+  }
+
+  const response: OverviewPanelsResponse = {
+    ...panels,
+    analyticsEngine,
+    generatedAt: Date.now(),
+  };
+  return c.json(response);
 });
 
 // ---------------------------------------------------------------------------

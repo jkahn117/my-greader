@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import type { OverviewResponse } from "../../shared/dashboard-api";
+import { OverviewPanels } from "../components/overview-panels";
 import {
   Card,
   CardContent,
@@ -97,6 +98,7 @@ export function OverviewPage({ data }: { data: OverviewResponse }) {
           sub="deactivated or erroring feeds"
         />
       </div>
+      <OverviewPanels timezone={data.timezone} />
       <p className="text-xs text-muted-foreground">
         Marked-read counts reflect reader-reported state receipts, not verified
         reading time. Times shown in {data.timezone}.

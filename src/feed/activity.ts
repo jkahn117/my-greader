@@ -6,12 +6,20 @@
  * domain tables; no business rules are duplicated here beyond the
  * documented metric semantics (see docs/architecture.md).
  */
-import { and, eq, gt, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
-import { feeds, items, itemState, subscriptions } from "../db/schema";
+import {
+  cycleRuns,
+  feedAttempts,
+  feeds,
+  items,
+  itemState,
+  subscriptions,
+} from "../db/schema";
 import type { FeedListItem, FeedStatus } from "../shared/dashboard-api";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const NEEDS_ATTENTION_LIMIT = 8;
 
 export interface OverviewSummary {
   feedCount: number;
@@ -38,8 +46,62 @@ export function classifyFeedStatus(sub: {
   return "active";
 }
 
+export interface ReadingDay {
+  /** YYYY-MM-DD in the configured display timezone. */
+  date: string;
+  count: number;
+}
+
+export interface ReadingPanel {
+  windowDays: number;
+  /** Per-day marked-read totals in display-timezone order, zero-filled;
+   *  boundary days stay partial. */
+  daily: ReadingDay[];
+  total: number;
+  topFeeds: { feedId: string; title: string | null; count: number }[];
+}
+
+export interface FeedHealthCounts {
+  /** Latest check stored new items. */
+  successful: number;
+  rateLimited: number;
+  failed: number;
+  /** Deactivated mid-cycle — deliberate skip. */
+  skipped: number;
+  /** Attempt still in progress. */
+  running: number;
+  /** Latest check completed but produced nothing (ok-0 or 304). */
+  empty: number;
+  /** No recorded attempt ever. */
+  missing: number;
+}
+
+export interface CycleState {
+  state: "running" | "completed" | "empty" | "missing";
+  ranAt: number | null;
+  checkedFeeds: number | null;
+}
+
+export interface AttentionItem {
+  feedId: string;
+  title: string | null;
+  reason: string;
+}
+
+export interface OverviewPanels {
+  reading: ReadingPanel;
+  feedHealth: FeedHealthCounts;
+  cycle: CycleState;
+  needsAttention: AttentionItem[];
+}
+
 export interface Activity {
   overviewSummary(userId: string, now: number): Promise<OverviewSummary>;
+  overviewPanels(
+    userId: string,
+    now: number,
+    timezone: string,
+  ): Promise<OverviewPanels>;
   listFeedRows(userId: string): Promise<FeedListItem[]>;
   /** Single subscription row; null when the user has no subscription
    *  for the feed — the same guard mutations rely on. */
@@ -114,6 +176,249 @@ export function createActivity(dbBinding: D1Database): Activity {
         newItemsLast7Days: Number(newItemsRow[0]?.count ?? 0),
         markedReadLast7Days: Number(readRow[0]?.count ?? 0),
         feedsNeedingAttention: Number(attentionRow[0]?.count ?? 0),
+      };
+    },
+
+    /**
+     * Overview panels: 7-day marked-read trend + top feeds, per-feed
+     * health buckets from each feed's latest attempt, latest cycle
+     * lifecycle, and a compact needs-attention list.
+     */
+    async overviewPanels(userId, now, timezone) {
+      const cutoff = now - SEVEN_DAYS_MS;
+
+      // Latest attempt per feed — subquery joined back for the row itself.
+      const latestPerFeed = d
+        .select({
+          feedId: feedAttempts.feedId,
+          m: sql<number>`max(${feedAttempts.startedAt})`.as("m"),
+        })
+        .from(feedAttempts)
+        .groupBy(feedAttempts.feedId)
+        .as("latest_per_feed");
+
+      const [
+        readRows,
+        topFeedRows,
+        latestAttemptRows,
+        runningRow,
+        cycleRow,
+        attentionRows,
+      ] = await Promise.all([
+        d
+          .select({
+            readAt: itemState.readAt,
+            feedId: items.feedId,
+          })
+          .from(itemState)
+          .innerJoin(items, eq(itemState.itemId, items.id))
+          .innerJoin(
+            subscriptions,
+            and(
+              eq(subscriptions.userId, itemState.userId),
+              eq(subscriptions.feedId, items.feedId),
+            ),
+          )
+          .where(
+            and(
+              eq(itemState.userId, userId),
+              eq(itemState.isRead, 1),
+              isNotNull(itemState.readAt),
+              gt(itemState.readAt, cutoff),
+            ),
+          ),
+
+        d
+          .select({
+            feedId: items.feedId,
+            title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+            count: sql<number>`count(*)`,
+          })
+          .from(itemState)
+          .innerJoin(items, eq(itemState.itemId, items.id))
+          .innerJoin(
+            subscriptions,
+            and(
+              eq(subscriptions.userId, itemState.userId),
+              eq(subscriptions.feedId, items.feedId),
+            ),
+          )
+          .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+          .where(
+            and(
+              eq(itemState.userId, userId),
+              eq(itemState.isRead, 1),
+              isNotNull(itemState.readAt),
+              gt(itemState.readAt, cutoff),
+            ),
+          )
+          .groupBy(items.feedId)
+          .orderBy(desc(sql`count(*)`))
+          .limit(5),
+
+        // Latest attempt per subscribed feed (any state).
+        d
+          .select({
+            feedId: feedAttempts.feedId,
+            status: feedAttempts.status,
+            itemsAdded: feedAttempts.itemsAdded,
+          })
+          .from(feedAttempts)
+          .innerJoin(
+            latestPerFeed,
+            and(
+              eq(feedAttempts.feedId, latestPerFeed.feedId),
+              eq(feedAttempts.startedAt, latestPerFeed.m),
+            ),
+          )
+          .innerJoin(
+            subscriptions,
+            and(
+              eq(subscriptions.feedId, feedAttempts.feedId),
+              eq(subscriptions.userId, userId),
+            ),
+          ),
+
+        d
+          .select({ count: sql<number>`count(*)` })
+          .from(feedAttempts)
+          .innerJoin(
+            subscriptions,
+            and(
+              eq(subscriptions.feedId, feedAttempts.feedId),
+              eq(subscriptions.userId, userId),
+            ),
+          )
+          .where(sql`${feedAttempts.finishedAt} is null`),
+
+        d.select().from(cycleRuns).orderBy(desc(cycleRuns.ranAt)).limit(1),
+
+        d
+          .select({
+            feedId: feeds.id,
+            title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+            deactivatedAt: feeds.deactivatedAt,
+            deactivatedReason: feeds.deactivatedReason,
+            consecutiveErrors: feeds.consecutiveErrors,
+            lastError: feeds.lastError,
+          })
+          .from(subscriptions)
+          .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+          .where(
+            and(
+              eq(subscriptions.userId, userId),
+              or(
+                isNotNull(feeds.deactivatedAt),
+                gt(feeds.consecutiveErrors, 0),
+              ),
+            ),
+          )
+          .limit(NEEDS_ATTENTION_LIMIT),
+      ]);
+
+      // --- Reading: bucket read receipts by display-timezone day.
+      const dayFmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const byDay = new Map<string, number>();
+      for (const r of readRows) {
+        const day = dayFmt.format(new Date(r.readAt!));
+        byDay.set(day, (byDay.get(day) ?? 0) + 1);
+      }
+      const daily: ReadingDay[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const day = dayFmt.format(new Date(now - i * 24 * 60 * 60 * 1000));
+        daily.push({ date: day, count: byDay.get(day) ?? 0 });
+      }
+
+      // --- Feed health: bucket each feed's latest attempt outcome.
+      const health: FeedHealthCounts = {
+        successful: 0,
+        rateLimited: 0,
+        failed: 0,
+        skipped: 0,
+        running: 0,
+        empty: 0,
+        missing: 0,
+      };
+      const seenFeeds = new Set<string>();
+      for (const a of latestAttemptRows) {
+        if (seenFeeds.has(a.feedId)) continue;
+        seenFeeds.add(a.feedId);
+        if (a.status == null) health.running++;
+        else if (a.status === "skipped") health.skipped++;
+        else if (a.status === "rate_limited") health.rateLimited++;
+        else if (a.status === "error") health.failed++;
+        else if (a.status === "ok" && (a.itemsAdded ?? 0) > 0)
+          health.successful++;
+        else health.empty++;
+      }
+      const [subCountRow] = await d
+        .select({ count: sql<number>`count(*)` })
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
+      const totalSubs = Number(subCountRow?.count ?? 0);
+      health.missing = Math.max(0, totalSubs - seenFeeds.size);
+
+      // --- Cycle lifecycle.
+      const running = Number(runningRow[0]?.count ?? 0) > 0;
+      const latestCycle = cycleRow[0];
+      const cycle: CycleState = running
+        ? {
+            state: "running",
+            ranAt: latestCycle?.ranAt ?? null,
+            checkedFeeds: null,
+          }
+        : !latestCycle
+          ? { state: "missing", ranAt: null, checkedFeeds: null }
+          : latestCycle.checkedFeeds === 0
+            ? {
+                state: "empty",
+                ranAt: latestCycle.ranAt,
+                checkedFeeds: 0,
+              }
+            : {
+                state: "completed",
+                ranAt: latestCycle.ranAt,
+                checkedFeeds: latestCycle.checkedFeeds,
+              };
+
+      const needsAttention: AttentionItem[] = attentionRows.map((r) => ({
+        feedId: r.feedId,
+        title: r.title ?? null,
+        reason:
+          r.deactivatedAt != null
+            ? `Deactivated${
+                r.deactivatedReason === "manual"
+                  ? " (manual)"
+                  : r.deactivatedReason === "permanent"
+                    ? " — permanent failure"
+                    : r.deactivatedReason === "transient"
+                      ? " — repeated errors"
+                      : ""
+              }`
+            : `${r.consecutiveErrors} consecutive errors${
+                r.lastError ? ` — ${r.lastError}` : ""
+              }`,
+      }));
+
+      return {
+        reading: {
+          windowDays: 7,
+          daily,
+          total: readRows.length,
+          topFeeds: topFeedRows.map((r) => ({
+            feedId: r.feedId,
+            title: r.title ?? null,
+            count: Number(r.count),
+          })),
+        },
+        feedHealth: health,
+        cycle,
+        needsAttention,
       };
     },
 
