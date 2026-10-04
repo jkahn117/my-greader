@@ -64,8 +64,7 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
 
 1. Authenticated user visits `/app/access` (Access-protected React page)
 2. Enters a token name (e.g. "Current on iPhone") and clicks Generate
-3. `POST /app/api/tokens` (legacy htmx: `POST /tokens/generate`) — both use
-   `generateApiToken` in `src/lib/api-tokens.ts`:
+3. `POST /app/api/tokens` — uses `generateApiToken` in `src/lib/api-tokens.ts`:
    - Worker generates 32 cryptographically random bytes encoded as a 64-char hex string
    - SHA-256 hashes it and stores the hash in `api_tokens`
    - Returns the **raw token once** (`no-store` JSON) — never stored, logged,
@@ -93,7 +92,7 @@ Body: Email=user@example.com&Passwd=<raw-token>
 
 1. User visits `/app/access`, sees tokens with name, created, last used, and state
 2. Clicks Revoke, then confirms the named token inline
-3. `DELETE /app/api/tokens/:id` (legacy: `DELETE /tokens/:id`) sets
+3. `DELETE /app/api/tokens/:id` sets
    `revoked_at = Date.now()` — ownership verified against `userId`; another
    User's token id returns 404 and is untouched
 4. The route loader re-runs and the row shows as Revoked
@@ -110,9 +109,7 @@ Body: Email=user@example.com&Passwd=<raw-token>
 | GET | `/app/api/tokens` | Cloudflare Access | List tokens + connection info (JSON) |
 | POST | `/app/api/tokens` | Cloudflare Access | Generate new API token (JSON, raw value once) |
 | DELETE | `/app/api/tokens/:id` | Cloudflare Access | Revoke token (JSON) |
-| POST | `/tokens/generate` | Cloudflare Access | Generate new API token (legacy htmx) |
-| DELETE | `/tokens/:id` | Cloudflare Access | Revoke token (legacy htmx) |
-| POST | `/import` | Cloudflare Access | OPML feed import |
+| POST | `/app/api/import` | Cloudflare Access | OPML feed import |
 | GET | `/auth/logout` | None | Redirect to Access logout URL |
 | POST | `/accounts/ClientLogin` | None (validates token) | GReader auth entry point |
 | GET/POST | `/reader/*` | API token header | All GReader API endpoints |

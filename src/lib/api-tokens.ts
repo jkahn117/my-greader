@@ -15,7 +15,7 @@ export type ApiTokenRow = InferSelectModel<typeof apiTokens>;
  */
 export const LAST_USED_RESOLUTION_MS = 3_600_000;
 
-/** Token label input shared by the legacy htmx form and the JSON API. */
+/** Token label input for the Access-page JSON API. */
 export const TokenNameSchema = v.pipe(
   v.string(),
   v.trim(),

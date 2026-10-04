@@ -68,7 +68,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 
 - **Runtime**: Cloudflare Workers + D1 (SQLite) + Workflows + static assets
 - **Router**: Hono; client routing by TanStack Router
-- **UI**: React SPA (Vite + shadcn components) + Tailwind CSS v4 — replacing htmx
+- **UI**: React SPA (Vite + shadcn components) + Tailwind CSS v4
 - **Feed parsing**: rss-parser
 - **Auth**: Cloudflare Access (management UI) + SHA-256 API tokens (GReader clients)
 - **Schema / migrations**: Drizzle ORM
