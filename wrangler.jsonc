@@ -11,7 +11,22 @@
     }
   },
   "assets": {
-    "directory": "./public"
+    // Built React client (vite build → dist/client). Requests that do not
+    // match a file asset serve index.html so client-side routes deep-link.
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    // Dashboard JSON, GReader API and legacy mutation endpoints stay on the Worker.
+    "run_worker_first": [
+      "/",
+      "/app/api/*",
+      "/reader/*",
+      "/api/*",
+      "/accounts/*",
+      "/tokens/*",
+      "/feeds/*",
+      "/import",
+      "/auth/*"
+    ]
   },
   "d1_databases": [
     {

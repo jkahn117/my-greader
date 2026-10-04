@@ -110,9 +110,19 @@ export interface ActivityMetrics {
   readsByDay: ReadsByDay[];
 }
 
+export interface OverviewSummary {
+  feedCount: number;
+  activeFeedCount: number;
+  deactivatedFeedCount: number;
+  newItemsLast7Days: number;
+  markedReadLast7Days: number;
+  feedsNeedingAttention: number;
+}
+
 export interface ActivityReader {
   timeline(userId: string): Promise<ActivityTimeline>;
   metrics(userId: string): Promise<ActivityMetrics>;
+  overviewSummary(userId: string): Promise<OverviewSummary>;
 }
 
 /** Builds a public diagnostic from classified fields instead of stored error text. */
@@ -151,7 +161,64 @@ export function createActivityReader(
 ): ActivityReader {
   const db = getDb(dbBinding);
 
-  return { timeline, metrics };
+  return { timeline, metrics, overviewSummary };
+
+  /** Builds User-scoped totals for the React dashboard overview. */
+  async function overviewSummary(userId: string): Promise<OverviewSummary> {
+    const cutoffMs = now() - METRICS_WINDOW_MS;
+    const [feedRows, newItemsRow, readRow, attentionRow] = await db.batch([
+      db
+        .select({
+          total: sql<number>`count(*)`,
+          deactivated: sql<number>`sum(case when ${feeds.deactivatedAt} is not null then 1 else 0 end)`,
+        })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(eq(subscriptions.userId, userId)),
+      db
+        .select({ count: sql<number>`count(distinct ${items.id})` })
+        .from(items)
+        .innerJoin(subscriptions, eq(items.feedId, subscriptions.feedId))
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            gt(items.fetchedAt, cutoffMs),
+          ),
+        ),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(itemState)
+        .where(
+          and(
+            eq(itemState.userId, userId),
+            eq(itemState.isRead, 1),
+            isNotNull(itemState.readAt),
+            gt(itemState.readAt, cutoffMs),
+          ),
+        ),
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(subscriptions)
+        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            sql`(${feeds.deactivatedAt} is not null or ${feeds.consecutiveErrors} > 0)`,
+          ),
+        ),
+    ]);
+
+    const feedCount = Number(feedRows[0]?.total ?? 0);
+    const deactivatedFeedCount = Number(feedRows[0]?.deactivated ?? 0);
+    return {
+      feedCount,
+      activeFeedCount: feedCount - deactivatedFeedCount,
+      deactivatedFeedCount,
+      newItemsLast7Days: Number(newItemsRow[0]?.count ?? 0),
+      markedReadLast7Days: Number(readRow[0]?.count ?? 0),
+      feedsNeedingAttention: Number(attentionRow[0]?.count ?? 0),
+    };
+  }
 
   /** Builds current dashboard metrics with User-scoped activity where needed. */
   async function metrics(userId: string): Promise<ActivityMetrics> {

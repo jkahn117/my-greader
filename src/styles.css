@@ -1,6 +1,9 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
-/* shadcn-aesthetic design tokens — extends the default Tailwind v4 theme */
+/* Dashboard design tokens — extends the default Tailwind v4 theme.
+   Palette: blue for actions/ingestion, violet for reading, amber for
+   actionable warnings, red for failures / automatic deactivation. */
 @theme {
   /* Neutral background / surface colors */
   --color-background:          oklch(1 0 0);
@@ -12,19 +15,36 @@
   --color-muted:               oklch(0.97 0 0);
   --color-muted-foreground:    oklch(0.556 0 0);
 
-  /* Primary action (near-black) */
-  --color-primary:             oklch(0.205 0 0);
+  /* Primary action — blue */
+  --color-primary:             oklch(0.546 0.245 262.881);
   --color-primary-foreground:  oklch(0.985 0 0);
 
   /* Secondary (light gray) */
   --color-secondary:           oklch(0.97 0 0);
   --color-secondary-foreground: oklch(0.205 0 0);
 
-  /* Borders + rings */
-  --color-border:              oklch(0.922 0 0);
-  --color-ring:                oklch(0.708 0 0);
+  /* Popover (floating surfaces) */
+  --color-popover:             oklch(1 0 0);
+  --color-popover-foreground:  oklch(0.145 0 0);
 
-  /* Destructive (red) */
+  /* Accent (hover surfaces) */
+  --color-accent:              oklch(0.967 0.003 264.542);
+  --color-accent-foreground:   oklch(0.205 0 0);
+
+  /* Borders, inputs, focus rings */
+  --color-border:              oklch(0.922 0 0);
+  --color-input:               oklch(0.922 0 0);
+  --color-ring:                oklch(0.708 0.19 262.881);
+
+  /* Reading — violet */
+  --color-reading:             oklch(0.541 0.281 293.009);
+  --color-reading-foreground:  oklch(0.985 0 0);
+
+  /* Warning — amber */
+  --color-warning:             oklch(0.769 0.188 70.08);
+  --color-warning-foreground:  oklch(0.279 0.077 45.635);
+
+  /* Destructive / failure — red */
   --color-destructive:         oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
 }
