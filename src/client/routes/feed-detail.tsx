@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { Link, useRouter } from "@tanstack/react-router";
 import type { FeedDetailResponse } from "../../shared/dashboard-api";
 import { ApiError, apiPost } from "../lib/api";
+import { AttemptHistory } from "../components/attempt-history";
 import { formatTime } from "../lib/time";
 import {
   Card,
@@ -212,6 +213,8 @@ export function FeedDetailPage({ data }: { data: FeedDetailResponse }) {
           </dl>
         </CardContent>
       </Card>
+
+      <AttemptHistory feedId={detail.feedId} />
     </div>
   );
 }

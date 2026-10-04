@@ -2,15 +2,26 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { createLogger } from "../lib/logger";
 import { createActivityReader } from "../feed/activity";
-import { countEligibleFeeds } from "../feed/poll";
-import { createSubscriptionLifecycle } from "../feed/subscriptions";
+import {
+  ATTEMPT_RETENTION_DAYS,
+  PROBLEM_WINDOW_DAYS,
+  createFeedHistory,
+  decodeCursor,
+  encodeCursor,
+} from "../feed/history";
+import { countEligibleFeeds, createFeedHealth } from "../feed/poll";
+import {
+  createSubscriptionLifecycle,
+  type SubRow,
+} from "../feed/subscriptions";
 import { parseOpml } from "../lib/opml";
 import { triggerFeedPollingWorkflow } from "./cron";
-import { getDb } from "../lib/db";
-import { eq } from "drizzle-orm";
-import { feeds } from "../db/schema";
 import type {
+  AttemptStatus,
+  FeedAttempt,
+  FeedAttemptsResponse,
   FeedDetailResponse,
+  FeedListItem,
   FeedsResponse,
   ImportResponse,
   OverviewResponse,
@@ -20,6 +31,35 @@ import type {
 import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+function toFeedListItem(subscription: SubRow): FeedListItem {
+  return {
+    feedId: subscription.feedId,
+    subscriptionId: subscription.id,
+    title: subscription.title,
+    feedUrl: subscription.feedUrl,
+    htmlUrl: subscription.htmlUrl,
+    folder: subscription.folder,
+    status:
+      subscription.deactivatedAt !== null
+        ? "deactivated"
+        : subscription.lastSuccessfulPollAt === null
+          ? "new"
+          : subscription.consecutiveErrors > 0
+            ? "failing"
+            : "active",
+    lastSuccessfulAt: subscription.lastSuccessfulPollAt,
+    lastCheckedAt: subscription.lastSuccessfulPollAt,
+    nextCheckAt: subscription.nextPollAt,
+    lastNewItemAt: subscription.lastNewItemDiscoveredAt,
+    consecutiveErrors: subscription.consecutiveErrors,
+    lastError: subscription.lastError,
+    checkIntervalMinutes: subscription.checkIntervalMinutes,
+    deactivatedAt: subscription.deactivatedAt,
+    deactivatedReason: subscription.deactivationReason,
+    legacyUncertain: subscription.pollStateOrigin === "legacy_uncertain",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /app/api/overview — Overview summary totals for the authenticated user
@@ -71,34 +111,13 @@ handler.get("/app/api/feeds", async (c) => {
       publish: () => {},
     });
     const subscriptions = await lifecycle.list(userId);
-    const feeds = subscriptions.map((subscription) => ({
-      feedId: subscription.feedId,
-      subscriptionId: subscription.id,
-      title: subscription.title,
-      feedUrl: subscription.feedUrl,
-      htmlUrl: subscription.htmlUrl,
-      folder: subscription.folder,
-      status:
-        subscription.deactivatedAt !== null
-          ? ("deactivated" as const)
-          : subscription.lastSuccessfulPollAt === null
-            ? ("new" as const)
-            : subscription.consecutiveErrors > 0
-              ? ("failing" as const)
-              : ("active" as const),
-      lastSuccessfulAt: subscription.lastSuccessfulPollAt,
-      lastCheckedAt: subscription.lastSuccessfulPollAt,
-      nextCheckAt: subscription.nextPollAt,
-      lastNewItemAt: subscription.lastNewItemDiscoveredAt,
-      consecutiveErrors: subscription.consecutiveErrors,
-      lastError: subscription.lastError,
-      checkIntervalMinutes: subscription.checkIntervalMinutes,
-      deactivatedAt: subscription.deactivatedAt,
-      deactivatedReason: subscription.deactivationReason,
-      legacyUncertain: subscription.pollStateOrigin === "legacy_uncertain",
-    }));
+    const feeds = subscriptions.map(toFeedListItem);
     const folders = [
-      ...new Set(feeds.map((feed) => feed.folder).filter((folder): folder is string => !!folder)),
+      ...new Set(
+        feeds
+          .map((feed) => feed.folder)
+          .filter((folder): folder is string => !!folder),
+      ),
     ].sort();
 
     const response: FeedsResponse = {
@@ -130,16 +149,19 @@ handler.get("/app/api/feeds/:feedId", async (c) => {
     return c.json({ error: "database unavailable" }, 503);
   }
 
-  const activity = createActivity(c.env.DB);
-  const row = await activity.getFeedRow(userId, feedId);
-  if (!row) {
-    logger.info("feed detail rejected — not subscribed", { feedId });
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, {
+    publish: () => {},
+  });
+  const subscription = await lifecycle.get(userId, feedId);
+  if (!subscription) {
+    logger.info("feed detail rejected, not subscribed", { feedId });
     return c.json({ error: "feed not found" }, 404);
   }
 
+  const row = toFeedListItem(subscription);
   const response: FeedDetailResponse = {
     ...row,
-    backloadComplete: row.lastSuccessfulAt != null,
+    backloadComplete: subscription.initialBackloadCompletedAt !== null,
   };
   return c.json(response);
 });
@@ -162,50 +184,104 @@ for (const action of ["deactivate", "reactivate"] as const) {
       return c.json({ error: "database unavailable" }, 503);
     }
 
-    const activity = createActivity(c.env.DB);
-    const row = await activity.getFeedRow(userId, feedId);
-    if (!row) {
+    const health = createFeedHealth(c.env.DB, Date.now);
+    const changed = await health[action](userId, feedId);
+    if (!changed) {
       return c.json({ error: "feed not found" }, 404);
     }
 
-    const db = getDb(c.env.DB);
-    try {
-      if (action === "deactivate") {
-        if (row.deactivatedAt == null) {
-          await db
-            .update(feeds)
-            .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
-            .where(eq(feeds.id, feedId));
-        }
-      } else if (row.deactivatedAt != null) {
-        await db
-          .update(feeds)
-          .set({
-            deactivatedAt: null,
-            deactivatedReason: null,
-            consecutiveErrors: 0,
-            lastError: null,
-            checkIntervalMinutes: 30,
-          })
-          .where(eq(feeds.id, feedId));
-      }
-    } catch (err) {
-      logger.error(
-        `feed ${action} failed`,
-        err instanceof Error ? err : { err: String(err) },
-      );
-      return c.json({ error: `failed to ${action} feed` }, 500);
-    }
-
     logger.info(`feed ${action}d`, { feedId });
-    const updated = await activity.getFeedRow(userId, feedId);
+    const lifecycle = createSubscriptionLifecycle(c.env.DB, {
+      publish: () => {},
+    });
+    const updated = await lifecycle.get(userId, feedId);
+    if (!updated) {
+      return c.json({ error: "feed not found" }, 404);
+    }
     const response: FeedDetailResponse = {
-      ...updated!,
-      backloadComplete: updated!.lastSuccessfulAt != null,
+      ...toFeedListItem(updated),
+      backloadComplete: updated.initialBackloadCompletedAt !== null,
     };
     return c.json(response);
   });
 }
+
+// ---------------------------------------------------------------------------
+// GET /app/api/feeds/:feedId/attempts — paginated polling evidence
+// ---------------------------------------------------------------------------
+
+const ATTEMPTS_PAGE_LIMIT = 25;
+const ATTEMPTS_PAGE_MAX = 50;
+
+handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
+  const userId = c.get("userId");
+  const { feedId } = c.req.param();
+
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, {
+    publish: () => {},
+  });
+  const subscription = await lifecycle.get(userId, feedId);
+  if (!subscription) {
+    return c.json({ error: "feed not found" }, 404);
+  }
+
+  const rawLimit = Number(c.req.query("limit") ?? ATTEMPTS_PAGE_LIMIT);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), ATTEMPTS_PAGE_MAX)
+      : ATTEMPTS_PAGE_LIMIT;
+  const rawCursor = c.req.query("cursor");
+  const cursor = rawCursor ? decodeCursor(rawCursor) : null;
+  if (rawCursor && !cursor) {
+    return c.json({ error: "invalid cursor" }, 400);
+  }
+
+  const history = createFeedHistory(c.env.DB);
+  const [{ rows, nextCursor }, streaks, groups, total] = await Promise.all([
+    history.listAttempts(feedId, cursor, limit),
+    history.streaks(feedId),
+    history.problemGroups(feedId, Date.now()),
+    history.countAttempts(feedId),
+  ]);
+  const itemMap = await history.attemptItems(rows.map((row) => row.id));
+  const attempts: FeedAttempt[] = rows.map((row) => ({
+    id: row.id,
+    cycleRunId: row.cycleRunId,
+    startedAt: row.startedAt,
+    finishedAt: row.completedAt,
+    durationMs:
+      row.completedAt === null ? null : row.completedAt - row.startedAt,
+    status: (
+      row.outcome === "new_items" || row.outcome === "unchanged"
+        ? "ok"
+        : row.outcome === "failed"
+          ? "error"
+          : (row.outcome ?? "in_progress")
+    ) as AttemptStatus,
+    httpStatus: row.httpStatus,
+    errorKind: row.errorClass,
+    errorMessage: row.diagnostic,
+    parserState: row.parserStatus,
+    itemsAdded: row.newItems,
+    items: itemMap.get(row.id) ?? [],
+  }));
+
+  const response: FeedAttemptsResponse = {
+    attempts,
+    nextCursor: nextCursor ? encodeCursor(nextCursor) : null,
+    streaks,
+    problemGroups: { windowDays: PROBLEM_WINDOW_DAYS, groups },
+    historyState:
+      total > 0
+        ? "ok"
+        : subscription.lastSuccessfulPollAt !== null
+          ? "legacy"
+          : "empty",
+    retentionDays: ATTEMPT_RETENTION_DAYS,
+    generatedAt: Date.now(),
+  };
+  return c.json(response);
+});
 
 // ---------------------------------------------------------------------------
 // POST /app/api/import — OPML upload; reports imported/duplicates/failed URLs
