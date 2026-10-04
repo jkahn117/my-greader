@@ -46,6 +46,7 @@ export type FeedToCheck = {
 export type FeedPollResult =
   | { feedId: string; feedTitle: string; status: "ok"; newItems: number }
   | { feedId: string; feedTitle: string; status: "not_modified" }
+  | { feedId: string; feedTitle: string; status: "skipped" }
   | { feedId: string; feedTitle: string; status: "error"; error: string };
 
 export type PollEvent =
@@ -104,6 +105,17 @@ export function createFeedPoller(
     };
     if (feed.etag) headers["If-None-Match"] = feed.etag;
     if (feed.lastModified) headers["If-Modified-Since"] = feed.lastModified;
+
+    // In-flight fence: feeds are selected at cycle start; a manual
+    // deactivation since then must win over this check.
+    const current = await d
+      .select({ deactivatedAt: feeds.deactivatedAt })
+      .from(feeds)
+      .where(eq(feeds.id, feed.id))
+      .get();
+    if (current?.deactivatedAt != null) {
+      return { feedId: feed.id, feedTitle, status: "skipped" };
+    }
 
     let response: Response;
     try {

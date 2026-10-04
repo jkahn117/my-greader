@@ -320,15 +320,20 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // Final step — write cycle summary to D1 + emit Pipeline metrics
     // ------------------------------------------------------------------
 
-    const newArticles = allResults.reduce(
+    // Skipped results (deactivated mid-cycle) count as neither success
+    // nor failure — only attempted feeds enter the cycle summary.
+    const attempted = allResults.filter((r) => r.status !== "skipped");
+    const newArticles = attempted.reduce(
       (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
       0,
     );
-    const failedFeeds = allResults.filter((r) => r.status === "error").length;
+    const failedFeeds = attempted.filter((r) => r.status === "error").length;
 
     const detail = allResults.map((r) => {
       if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
       if (r.status === "not_modified") return `${r.feedTitle}: no change`;
+      if (r.status === "skipped")
+        return `${r.feedTitle}: skipped (deactivated)`;
       return `${r.feedTitle}: error — ${r.error}`;
     });
 
@@ -352,7 +357,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             ranAt: now,
             activeFeeds: totalActiveFeeds,
             dueFeeds: dueFeeds.length,
-            checkedFeeds: allResults.length,
+            checkedFeeds: attempted.length,
             newItems: newArticles,
             failedFeeds,
           })

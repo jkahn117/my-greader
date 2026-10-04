@@ -41,6 +41,9 @@ export function classifyFeedStatus(sub: {
 export interface Activity {
   overviewSummary(userId: string, now: number): Promise<OverviewSummary>;
   listFeedRows(userId: string): Promise<FeedListItem[]>;
+  /** Single subscription row; null when the user has no subscription
+   *  for the feed — the same guard mutations rely on. */
+  getFeedRow(userId: string, feedId: string): Promise<FeedListItem | null>;
 }
 
 /** Returns the activity read model backed by D1. */
@@ -118,51 +121,92 @@ export function createActivity(dbBinding: D1Database): Activity {
      *  last successful check, last new item, and next eligibility are
      *  separate facts, never merged into a single "last seen". */
     async listFeedRows(userId) {
-      const rows = await d
-        .select({
-          feedId: feeds.id,
-          subscriptionId: subscriptions.id,
-          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-          feedUrl: feeds.feedUrl,
-          htmlUrl: feeds.htmlUrl,
-          folder: subscriptions.folder,
-          deactivatedAt: feeds.deactivatedAt,
-          deactivatedReason: feeds.deactivatedReason,
-          lastFetchedAt: feeds.lastFetchedAt,
-          lastSuccessfulAt: feeds.lastSuccessfulAt,
-          lastStatus: feeds.lastStatus,
-          lastNewItemAt: feeds.lastNewItemAt,
-          consecutiveErrors: feeds.consecutiveErrors,
-          lastError: feeds.lastError,
-          checkIntervalMinutes: feeds.checkIntervalMinutes,
-        })
-        .from(subscriptions)
-        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-        .where(eq(subscriptions.userId, userId))
-        .orderBy(subscriptions.folder, feeds.title);
-
-      return rows.map((r) => ({
-        feedId: r.feedId,
-        subscriptionId: r.subscriptionId,
-        title: r.title ?? null,
-        feedUrl: r.feedUrl,
-        htmlUrl: r.htmlUrl,
-        folder: r.folder,
-        status: classifyFeedStatus(r),
-        lastSuccessfulAt: r.lastSuccessfulAt,
-        lastCheckedAt: r.lastFetchedAt,
-        nextCheckAt:
-          r.lastFetchedAt != null
-            ? r.lastFetchedAt + r.checkIntervalMinutes * 60_000
-            : null,
-        lastNewItemAt: r.lastNewItemAt,
-        consecutiveErrors: r.consecutiveErrors,
-        lastError: r.lastError,
-        checkIntervalMinutes: r.checkIntervalMinutes,
-        deactivatedAt: r.deactivatedAt,
-        deactivatedReason: r.deactivatedReason,
-        legacyUncertain: r.deactivatedAt != null && r.deactivatedReason == null,
-      }));
+      const rows = await feedRowsQuery(d, userId).orderBy(
+        subscriptions.folder,
+        feeds.title,
+      );
+      return rows.map(toFeedListItem);
     },
+
+    async getFeedRow(userId, feedId) {
+      const row = await feedRowsQuery(d, userId, feedId).get();
+      return row ? toFeedListItem(row) : null;
+    },
+  };
+}
+
+/** Shared subscription↔feed selection behind list and detail reads. */
+function feedRowsQuery(
+  d: ReturnType<typeof getDb>,
+  userId: string,
+  feedId?: string,
+) {
+  return d
+    .select({
+      feedId: feeds.id,
+      subscriptionId: subscriptions.id,
+      title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
+      feedUrl: feeds.feedUrl,
+      htmlUrl: feeds.htmlUrl,
+      folder: subscriptions.folder,
+      deactivatedAt: feeds.deactivatedAt,
+      deactivatedReason: feeds.deactivatedReason,
+      lastFetchedAt: feeds.lastFetchedAt,
+      lastSuccessfulAt: feeds.lastSuccessfulAt,
+      lastStatus: feeds.lastStatus,
+      lastNewItemAt: feeds.lastNewItemAt,
+      consecutiveErrors: feeds.consecutiveErrors,
+      lastError: feeds.lastError,
+      checkIntervalMinutes: feeds.checkIntervalMinutes,
+    })
+    .from(subscriptions)
+    .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        feedId != null ? eq(feeds.id, feedId) : undefined,
+      ),
+    );
+}
+
+/** Project one joined subscription+feed row into the API shape. */
+function toFeedListItem(r: {
+  feedId: string;
+  subscriptionId: string;
+  title: string | null;
+  feedUrl: string;
+  htmlUrl: string | null;
+  folder: string | null;
+  deactivatedAt: number | null;
+  deactivatedReason: string | null;
+  lastFetchedAt: number | null;
+  lastSuccessfulAt: number | null;
+  lastStatus: string | null;
+  lastNewItemAt: number | null;
+  consecutiveErrors: number;
+  lastError: string | null;
+  checkIntervalMinutes: number;
+}): FeedListItem {
+  return {
+    feedId: r.feedId,
+    subscriptionId: r.subscriptionId,
+    title: r.title ?? null,
+    feedUrl: r.feedUrl,
+    htmlUrl: r.htmlUrl,
+    folder: r.folder,
+    status: classifyFeedStatus(r),
+    lastSuccessfulAt: r.lastSuccessfulAt,
+    lastCheckedAt: r.lastFetchedAt,
+    nextCheckAt:
+      r.lastFetchedAt != null
+        ? r.lastFetchedAt + r.checkIntervalMinutes * 60_000
+        : null,
+    lastNewItemAt: r.lastNewItemAt,
+    consecutiveErrors: r.consecutiveErrors,
+    lastError: r.lastError,
+    checkIntervalMinutes: r.checkIntervalMinutes,
+    deactivatedAt: r.deactivatedAt,
+    deactivatedReason: r.deactivatedReason,
+    legacyUncertain: r.deactivatedAt != null && r.deactivatedReason == null,
   };
 }
