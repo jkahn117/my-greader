@@ -15,8 +15,7 @@ import type {
 
 import type { Variables } from "../types/context";
 
-// Access-page JSON API for the React client; shares the token lifecycle with
-// the legacy htmx handler in tokens.tsx. Responses never include token
+// Access-page JSON API for the React client. Responses never include token
 // hashes, and only the POST response carries the raw value.
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
