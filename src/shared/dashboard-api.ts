@@ -240,3 +240,50 @@ export interface GenerateTokenResponse {
 export interface RevokeTokenResponse {
   token: ApiTokenSummary;
 }
+
+/** Time windows offered by the Reading page, in display-timezone days. */
+export const READING_WINDOWS = [7, 14, 30] as const;
+export type ReadingWindowDays = (typeof READING_WINDOWS)[number];
+
+/** One display-timezone calendar day in the Reading daily series. */
+export interface ReadingDay {
+  /** YYYY-MM-DD in the display timezone. */
+  date: string;
+  count: number;
+  /** True for the current day, which is still accumulating receipts. */
+  partial: boolean;
+}
+
+/** One subscribed feed's marked-read count within the window. */
+export interface ReadingFeedRow {
+  feedId: string;
+  title: string | null;
+  feedUrl: string;
+  deactivated: boolean;
+  count: number;
+}
+
+/** GET /app/api/reading?days=7|14|30 — marked-read metrics for the user's
+ *  current subscriptions. Counts are current read=true Item State grouped by
+ *  the latest server receipt of a mark-read (`read_at`), not reading time. */
+export interface ReadingResponse {
+  days: ReadingWindowDays;
+  /** IANA timezone defining day boundaries (DISPLAY_TIMEZONE). */
+  timezone: string;
+  /** Inclusive epoch-ms start (local midnight of the first day). */
+  windowStart: number;
+  /** Exclusive epoch-ms end (local midnight after the last day). */
+  windowEnd: number;
+  /** Equals the sum of `daily` and of `byFeed`. */
+  markedRead: number;
+  /** Every day in the window, oldest first; missing days are zero. */
+  daily: ReadingDay[];
+  /** Feeds with at least one marked-read item in the window, highest first. */
+  byFeed: ReadingFeedRow[];
+  subscriptionCount: number;
+  /** Currently starred items in the user's subscriptions — not windowed. */
+  starredCount: number;
+  /** ITEM_RETENTION_DAYS: unstarred items (and their state) are purged after this. */
+  retentionDays: number;
+  generatedAt: number;
+}

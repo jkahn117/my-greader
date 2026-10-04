@@ -11,6 +11,11 @@ import {
 } from "../feed/history";
 import { countEligibleFeeds, createFeedHealth } from "../feed/poll";
 import {
+  createReadingMetrics,
+  isValidTimezone,
+  zonedDays,
+} from "../feed/reading";
+import {
   createSubscriptionLifecycle,
   type SubRow,
 } from "../feed/subscriptions";
@@ -26,8 +31,11 @@ import type {
   ImportResponse,
   OverviewPanelsResponse,
   OverviewResponse,
+  ReadingResponse,
+  ReadingWindowDays,
   SyncResponse,
 } from "../shared/dashboard-api";
+import { READING_WINDOWS } from "../shared/dashboard-api";
 
 import type { Variables } from "../types/context";
 
@@ -348,6 +356,84 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
     generatedAt: Date.now(),
   };
   return c.json(response);
+});
+
+// ---------------------------------------------------------------------------
+// GET /app/api/reading?days=7|14|30 — marked-read metrics over whole
+// display-timezone days, scoped to the user's current subscriptions.
+// ---------------------------------------------------------------------------
+
+const ReadingQuery = v.object({
+  days: v.optional(
+    v.picklist(READING_WINDOWS.map(String) as [string, ...string[]]),
+    "7",
+  ),
+});
+
+handler.get("/app/api/reading", async (c) => {
+  const userId = c.get("userId");
+  const logger = createLogger({ path: "/app/api/reading", userId });
+
+  if (!c.env.DB) {
+    return c.json({ error: "database unavailable" }, 503);
+  }
+
+  const parsed = v.safeParse(ReadingQuery, c.req.query());
+  if (!parsed.success) {
+    return c.json(
+      { error: `days must be one of ${READING_WINDOWS.join(", ")}` },
+      400,
+    );
+  }
+  const days = Number(parsed.output.days) as ReadingWindowDays;
+
+  const vars = c.env as unknown as Record<string, string>;
+  let timezone = vars.DISPLAY_TIMEZONE || "UTC";
+  if (!isValidTimezone(timezone)) {
+    logger.warn("invalid DISPLAY_TIMEZONE — falling back to UTC", {
+      timezone,
+    });
+    timezone = "UTC";
+  }
+  const retentionDays = parseInt(vars.ITEM_RETENTION_DAYS ?? "30", 10);
+
+  try {
+    const now = Date.now();
+    const window = zonedDays(now, days, timezone);
+    const summary = await createReadingMetrics(c.env.DB).summary(
+      userId,
+      window,
+    );
+    const lastDate = window[window.length - 1].date;
+
+    const response: ReadingResponse = {
+      days,
+      timezone,
+      windowStart: window[0].start,
+      windowEnd: window[window.length - 1].end,
+      markedRead: summary.daily.reduce((sum, d) => sum + d.count, 0),
+      daily: summary.daily.map((d) => ({
+        ...d,
+        partial: d.date === lastDate,
+      })),
+      byFeed: summary.byFeed,
+      subscriptionCount: summary.subscriptionCount,
+      starredCount: summary.starredCount,
+      retentionDays,
+      generatedAt: now,
+    };
+    logger.info("reading metrics served", {
+      days,
+      markedRead: response.markedRead,
+    });
+    return c.json(response);
+  } catch (err) {
+    logger.error(
+      "reading metrics failed",
+      err instanceof Error ? err : { err: String(err) },
+    );
+    return c.json({ error: "failed to load reading metrics" }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------
