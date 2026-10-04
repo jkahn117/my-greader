@@ -73,6 +73,10 @@ See [`docs/greader-api.md`](greader-api.md) for endpoint details.
 TanStack Router routes under basepath `/app`, shadcn components in
 `components/ui/`).  It consumes `/app/api/*` via plain `fetch` in route
 loaders; response types are shared in `src/shared/dashboard-api.ts`.
+Access (`/app/access`) uses `/app/api/tokens` (`src/handlers/tokens_api.ts`);
+the token lifecycle (hashing, one-time raw value, User-scoped revocation,
+hourly last-used resolution) lives in `src/lib/api-tokens.ts` and is shared
+with the legacy htmx token handler and `tokenMiddleware`.
 `vite build` emits the client to `dist/client` (the wrangler `assets`
 directory) and the Worker to `dist/my_greader`.  Per-file
 `@jsxImportSource react` pragmas keep `tsc` honest while the server side

@@ -1,10 +1,13 @@
 import { Hono } from "hono";
-import { and, desc, eq, isNull } from "drizzle-orm";
 import * as v from "valibot";
 import { getDb } from "../lib/db";
 import { createLogger } from "../lib/logger";
-import { sha256 } from "../lib/crypto";
-import { apiTokens } from "../db/schema";
+import {
+  TokenNameSchema,
+  generateApiToken,
+  listActiveApiTokens,
+  revokeApiToken,
+} from "../lib/api-tokens";
 import { App } from "../views/app";
 import { AccessTab, TokenList, TokenReveal } from "../views/access";
 
@@ -22,11 +25,7 @@ handler.get("/app/access", async (c) => {
   const db = getDb(c.env.DB);
   const logger = createLogger({ path: "/app/access", userId });
 
-  const tokens = await db
-    .select()
-    .from(apiTokens)
-    .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
-    .orderBy(desc(apiTokens.createdAt));
+  const tokens = await listActiveApiTokens(db, userId);
 
   logger.info("access tab loaded", { tokenCount: tokens.length });
 
@@ -42,7 +41,7 @@ handler.get("/app/access", async (c) => {
 // ---------------------------------------------------------------------------
 
 const generateSchema = v.object({
-  name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(100)),
+  name: TokenNameSchema,
 });
 
 handler.post("/tokens/generate", async (c) => {
@@ -60,31 +59,18 @@ handler.post("/tokens/generate", async (c) => {
     );
   }
 
-  // Generate a 32-byte random token encoded as 64-char hex
-  const rawBytes = crypto.getRandomValues(new Uint8Array(32));
-  const rawToken = Array.from(rawBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const hash = await sha256(rawToken);
-  const id = crypto.randomUUID();
-
   const db = getDb(c.env.DB);
-  await db.insert(apiTokens).values({
-    id,
+  const { row, rawToken } = await generateApiToken(
+    db,
     userId,
-    name: parsed.output.name,
-    tokenHash: hash,
-    createdAt: Date.now(),
-  });
+    parsed.output.name,
+  );
+  const id = row.id;
 
   logger.info("token generated", { tokenId: id, name: parsed.output.name });
 
   // Re-fetch the updated list for OOB swap
-  const updatedTokens = await db
-    .select()
-    .from(apiTokens)
-    .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
-    .orderBy(desc(apiTokens.createdAt));
+  const updatedTokens = await listActiveApiTokens(db, userId);
 
   // Return: token reveal (goes into #generate-result) + OOB update of token list tbody
   return c.html(
@@ -105,16 +91,7 @@ handler.delete("/tokens/:id", async (c) => {
   const logger = createLogger({ path: `/tokens/${id}`, userId });
   const db = getDb(c.env.DB);
 
-  await db
-    .update(apiTokens)
-    .set({ revokedAt: Date.now() })
-    .where(
-      and(
-        eq(apiTokens.id, id),
-        eq(apiTokens.userId, userId),
-        isNull(apiTokens.revokedAt),
-      ),
-    );
+  await revokeApiToken(db, userId, id);
 
   logger.info("token revoked", { tokenId: id });
 

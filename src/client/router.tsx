@@ -9,6 +9,7 @@ import type {
   FeedDetailResponse,
   FeedsResponse,
   OverviewResponse,
+  TokensResponse,
 } from "../shared/dashboard-api";
 import { apiGet, ApiError } from "./lib/api";
 import { Shell } from "./components/shell";
@@ -23,6 +24,7 @@ import {
   FeedDetailPage,
   FeedDetailPending,
 } from "./routes/feed-detail";
+import { AccessError, AccessPage, AccessPending } from "./routes/access";
 import { PlaceholderPage } from "./routes/placeholder";
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -96,12 +98,17 @@ const readingRoute = createRoute({
 const accessRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/access",
-  component: () => (
-    <PlaceholderPage
-      title="Access"
-      body="API token management is being migrated to React."
+  pendingComponent: AccessPending,
+  errorComponent: ({ error }) => (
+    <AccessError
+      status={error instanceof ApiError ? error.status : undefined}
     />
   ),
+  loader: () => apiGet<TokensResponse>("/app/api/tokens"),
+  component: function Access() {
+    const data = accessRoute.useLoaderData();
+    return <AccessPage data={data} />;
+  },
 });
 
 const routeTree = rootRoute.addChildren([

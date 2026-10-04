@@ -15,7 +15,7 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
                          │                                                       │
   Browser (you)    ──────┤  /app/*   Management UI (React SPA + /app/api/*) │
                          │   auth: Cloudflare Access JWT                        │
-  Cloudflare Access      │   /app/tokens  — generate / revoke API tokens       │
+  Cloudflare Access      │   /app/access  — generate / revoke API tokens       │
   (SSO / email OTP) ─────┤   /app/metrics — dashboard (see below)              │
                          │                                                       │
                          │  Cron  */30 * * * *  ──► FeedPollingWorkflow        │
@@ -81,7 +81,7 @@ In Current: **Settings → Sync → FreshRSS**
 ```
 Server URL:  https://<your-worker-domain>
 Username:    <your email>
-Password:    <API token generated from /app/tokens>
+Password:    <API token generated on /app/access>
 ```
 
 Current treats this Worker as a FreshRSS instance. It speaks the standard GReader protocol — no FreshRSS installation required.
