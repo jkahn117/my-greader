@@ -202,3 +202,41 @@ export interface SyncResponse {
   forced: boolean;
   instanceId: string;
 }
+
+/** One API Token as listed on Access. Never carries the hash or raw value. */
+export interface ApiTokenSummary {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** Coarse last-observed GReader use (refreshed at most hourly); null = never. */
+  lastUsedAt: number | null;
+  /** null = active. */
+  revokedAt: number | null;
+}
+
+/** How GReader clients connect to this deployment (FreshRSS dialect). */
+export interface ConnectionInfo {
+  mode: "FreshRSS";
+  serverUrl: string;
+  username: string;
+}
+
+/** GET /app/api/tokens — the User's tokens plus connection instructions. */
+export interface TokensResponse {
+  tokens: ApiTokenSummary[];
+  connection: ConnectionInfo;
+  /** Granularity of `lastUsedAt` in minutes. */
+  lastUsedResolutionMinutes: number;
+  generatedAt: number;
+}
+
+/** POST /app/api/tokens — the only response that ever contains `rawToken`. */
+export interface GenerateTokenResponse {
+  token: ApiTokenSummary;
+  rawToken: string;
+}
+
+/** DELETE /app/api/tokens/:id — the revoked token. */
+export interface RevokeTokenResponse {
+  token: ApiTokenSummary;
+}

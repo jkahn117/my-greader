@@ -46,3 +46,15 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+/** DELETE a dashboard resource; throws ApiError on non-2xx. */
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `request failed: ${res.status}`);
+  }
+  return (await res.json()) as T;
+}

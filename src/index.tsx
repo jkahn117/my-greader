@@ -4,6 +4,7 @@ import { accessMiddleware } from "./middleware/access";
 import { observabilityMiddleware } from "./middleware/observability";
 import { greader } from "./handlers/greader";
 import { dashboardHandler } from "./handlers/dashboard";
+import { tokensApiHandler } from "./handlers/tokens_api";
 import { tokensHandler } from "./handlers/tokens";
 import { feedsUiHandler } from "./handlers/feeds_ui";
 import { importHandler } from "./handlers/import";
@@ -43,6 +44,7 @@ app.use("/import", accessMiddleware);
 
 // Dashboard JSON API for the React management client (under /app/api/*)
 app.route("/", dashboardHandler);
+app.route("/", tokensApiHandler); // /app/api/tokens
 
 app.route("/", metricsHandler); // GET /app/metrics
 app.route("/", timelineHandler); // GET /app/timeline

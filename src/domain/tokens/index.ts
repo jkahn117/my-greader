@@ -10,7 +10,7 @@ import { apiTokens, users } from "../../db/schema";
 import { sha256 } from "../../lib/crypto";
 import { getDb } from "../../lib/db";
 
-const USAGE_WRITE_INTERVAL_MS = 60 * 60 * 1000;
+export const API_TOKEN_USAGE_WRITE_INTERVAL_MS = 60 * 60 * 1000;
 const REVOKED_TOKEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface ApiTokenSummary {
@@ -18,6 +18,7 @@ export interface ApiTokenSummary {
   name: string;
   createdAt: number;
   lastUsedAt: number | null;
+  revokedAt: number | null;
 }
 
 export interface ActiveApiToken {
@@ -37,6 +38,7 @@ export interface ApiTokenLifecycle {
   recordUsage(token: ActiveApiToken): Promise<void>;
   revoke(userId: string, tokenId: string): Promise<boolean>;
   listActive(userId: string): Promise<ApiTokenSummary[]>;
+  listAll(userId: string): Promise<ApiTokenSummary[]>;
   purgeRevoked(): Promise<number>;
 }
 
@@ -53,6 +55,7 @@ export function createApiTokenLifecycle(
     recordUsage,
     revoke,
     listActive,
+    listAll,
     purgeRevoked,
   };
 
@@ -111,7 +114,10 @@ export function createApiTokenLifecycle(
           isNull(apiTokens.revokedAt),
           or(
             isNull(apiTokens.lastUsedAt),
-            lte(apiTokens.lastUsedAt, now - USAGE_WRITE_INTERVAL_MS),
+            lte(
+              apiTokens.lastUsedAt,
+              now - API_TOKEN_USAGE_WRITE_INTERVAL_MS,
+            ),
           ),
         ),
       );
@@ -141,9 +147,25 @@ export function createApiTokenLifecycle(
         name: apiTokens.name,
         createdAt: apiTokens.createdAt,
         lastUsedAt: apiTokens.lastUsedAt,
+        revokedAt: apiTokens.revokedAt,
       })
       .from(apiTokens)
       .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
+      .orderBy(desc(apiTokens.createdAt));
+  }
+
+  /** Lists active and recently revoked tokens for the management UI. */
+  async function listAll(userId: string): Promise<ApiTokenSummary[]> {
+    return db
+      .select({
+        id: apiTokens.id,
+        name: apiTokens.name,
+        createdAt: apiTokens.createdAt,
+        lastUsedAt: apiTokens.lastUsedAt,
+        revokedAt: apiTokens.revokedAt,
+      })
+      .from(apiTokens)
+      .where(eq(apiTokens.userId, userId))
       .orderBy(desc(apiTokens.createdAt));
   }
 
