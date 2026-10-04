@@ -200,6 +200,105 @@ describe("POST /app/api/import", () => {
   });
 });
 
+describe("feed detail + deactivation", () => {
+  it("returns current-state detail for an owned feed", async () => {
+    const feedId = await seedFeedAndSub({
+      feedUrl: "https://ok.example.com/feed",
+      title: "OK",
+      lastFetchedAt: Date.now() - 30_000,
+      lastSuccessfulAt: Date.now() - 30_000,
+      lastStatus: "ok",
+    });
+    const res = await fetchApi(`/app/api/feeds/${feedId}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      feedId: string;
+      backloadComplete: boolean;
+    };
+    expect(body.feedId).toBe(feedId);
+    expect(body.backloadComplete).toBe(true);
+  });
+
+  it("rejects reads and mutations for feeds the user doesn't own", async () => {
+    await seedUser("other-user", "other@localhost");
+    const theirs = await seedFeedAndSub({
+      userId: "other-user",
+      feedUrl: "https://theirs.example.com/feed",
+      title: "Theirs",
+    });
+    for (const method of ["GET", "POST"]) {
+      const res = await fetchApi(
+        `/app/api/feeds/${theirs}${method === "POST" ? "/deactivate" : ""}`,
+        { method },
+      );
+      expect(res.status, `${method}`).toBe(404);
+    }
+  });
+
+  it("reports each deactivation reason plus legacy-uncertain", async () => {
+    const now = Date.now();
+    const cases: Array<[string | null, boolean]> = [
+      ["transient", false],
+      ["permanent", false],
+      ["manual", false],
+      [null, true], // pre-migration deactivation
+    ];
+    for (const [reason, legacy] of cases) {
+      const feedId = await seedFeedAndSub({
+        feedUrl: `https://${reason ?? "legacy"}.example.com/feed`,
+        title: `R-${reason ?? "legacy"}`,
+        deactivatedAt: now,
+        deactivatedReason: reason,
+      });
+      const res = await fetchApi(`/app/api/feeds/${feedId}`);
+      const body = (await res.json()) as {
+        deactivatedReason: string | null;
+        legacyUncertain: boolean;
+      };
+      expect(body.deactivatedReason).toBe(reason);
+      expect(body.legacyUncertain).toBe(legacy);
+    }
+  });
+
+  it("deactivates and reactivates an owned feed", async () => {
+    const feedId = await seedFeedAndSub({
+      feedUrl: "https://toggle.example.com/feed",
+      title: "Toggle",
+    });
+
+    const off = await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
+      method: "POST",
+    });
+    expect(off.status).toBe(200);
+    const offBody = (await off.json()) as {
+      deactivatedReason: string | null;
+      status: string;
+    };
+    expect(offBody.deactivatedReason).toBe("manual");
+    expect(offBody.status).toBe("deactivated");
+
+    const on = await fetchApi(`/app/api/feeds/${feedId}/reactivate`, {
+      method: "POST",
+    });
+    expect(on.status).toBe(200);
+    const onBody = (await on.json()) as {
+      deactivatedAt: number | null;
+      deactivatedReason: string | null;
+      consecutiveErrors: number;
+    };
+    expect(onBody.deactivatedAt).toBeNull();
+    expect(onBody.deactivatedReason).toBeNull();
+    expect(onBody.consecutiveErrors).toBe(0);
+  });
+
+  it("returns 404 when mutating a nonexistent feed", async () => {
+    const res = await fetchApi(`/app/api/feeds/nope/deactivate`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("POST /app/api/feeds/sync", () => {
   it("normal sync respects due-time eligibility", async () => {
     const now = Date.now();

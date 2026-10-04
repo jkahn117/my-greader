@@ -70,6 +70,13 @@ export interface FeedsResponse {
   generatedAt: number;
 }
 
+/** GET /app/api/feeds/:feedId — current-state detail for one subscription. */
+export interface FeedDetailResponse extends FeedListItem {
+  /** True once the feed has completed at least one successful check —
+   *  the initial ingest is done; false while it's still pending. */
+  backloadComplete: boolean;
+}
+
 /** POST /app/api/import — OPML import outcome. */
 export interface ImportResponse {
   imported: number;

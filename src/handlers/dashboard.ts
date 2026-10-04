@@ -6,7 +6,11 @@ import { countEligibleFeeds } from "../feed/poll";
 import { createSubscriptionLifecycle } from "../feed/subscriptions";
 import { parseOpml } from "../lib/opml";
 import { triggerFeedPollingWorkflow } from "./cron";
+import { getDb } from "../lib/db";
+import { eq } from "drizzle-orm";
+import { feeds } from "../db/schema";
 import type {
+  FeedDetailResponse,
   FeedsResponse,
   ImportResponse,
   OverviewResponse,
@@ -112,6 +116,96 @@ handler.get("/app/api/feeds", async (c) => {
     return c.json({ error: "failed to load feeds" }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /app/api/feeds/:feedId — current-state detail for one subscription
+// ---------------------------------------------------------------------------
+
+handler.get("/app/api/feeds/:feedId", async (c) => {
+  const userId = c.get("userId");
+  const { feedId } = c.req.param();
+  const logger = createLogger({ path: "/app/api/feeds/:feedId", userId });
+
+  if (!c.env.DB) {
+    return c.json({ error: "database unavailable" }, 503);
+  }
+
+  const activity = createActivity(c.env.DB);
+  const row = await activity.getFeedRow(userId, feedId);
+  if (!row) {
+    logger.info("feed detail rejected — not subscribed", { feedId });
+    return c.json({ error: "feed not found" }, 404);
+  }
+
+  const response: FeedDetailResponse = {
+    ...row,
+    backloadComplete: row.lastSuccessfulAt != null,
+  };
+  return c.json(response);
+});
+
+// ---------------------------------------------------------------------------
+// POST /app/api/feeds/:feedId/deactivate|reactivate — manual state change
+// under the existing polling policy (deactivated feeds are never selected).
+// ---------------------------------------------------------------------------
+
+for (const action of ["deactivate", "reactivate"] as const) {
+  handler.post(`/app/api/feeds/:feedId/${action}`, async (c) => {
+    const userId = c.get("userId");
+    const { feedId } = c.req.param();
+    const logger = createLogger({
+      path: `/app/api/feeds/:feedId/${action}`,
+      userId,
+    });
+
+    if (!c.env.DB) {
+      return c.json({ error: "database unavailable" }, 503);
+    }
+
+    const activity = createActivity(c.env.DB);
+    const row = await activity.getFeedRow(userId, feedId);
+    if (!row) {
+      return c.json({ error: "feed not found" }, 404);
+    }
+
+    const db = getDb(c.env.DB);
+    try {
+      if (action === "deactivate") {
+        if (row.deactivatedAt == null) {
+          await db
+            .update(feeds)
+            .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
+            .where(eq(feeds.id, feedId));
+        }
+      } else if (row.deactivatedAt != null) {
+        await db
+          .update(feeds)
+          .set({
+            deactivatedAt: null,
+            deactivatedReason: null,
+            consecutiveErrors: 0,
+            lastError: null,
+            checkIntervalMinutes: 30,
+          })
+          .where(eq(feeds.id, feedId));
+      }
+    } catch (err) {
+      logger.error(
+        `feed ${action} failed`,
+        err instanceof Error ? err : { err: String(err) },
+      );
+      return c.json({ error: `failed to ${action} feed` }, 500);
+    }
+
+    logger.info(`feed ${action}d`, { feedId });
+    const updated = await activity.getFeedRow(userId, feedId);
+    const response: FeedDetailResponse = {
+      ...updated!,
+      backloadComplete: updated!.lastSuccessfulAt != null,
+    };
+    return c.json(response);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // POST /app/api/import — OPML upload; reports imported/duplicates/failed URLs

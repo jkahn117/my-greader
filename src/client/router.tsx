@@ -5,7 +5,11 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
-import type { FeedsResponse, OverviewResponse } from "../shared/dashboard-api";
+import type {
+  FeedDetailResponse,
+  FeedsResponse,
+  OverviewResponse,
+} from "../shared/dashboard-api";
 import { apiGet, ApiError } from "./lib/api";
 import { Shell } from "./components/shell";
 import {
@@ -14,6 +18,11 @@ import {
   OverviewPending,
 } from "./routes/overview";
 import { FeedsError, FeedsPage, FeedsPending } from "./routes/feeds";
+import {
+  FeedDetailError,
+  FeedDetailPage,
+  FeedDetailPending,
+} from "./routes/feed-detail";
 import { PlaceholderPage } from "./routes/placeholder";
 
 const rootRoute = createRootRoute({ component: Shell });
@@ -59,14 +68,17 @@ const feedsRoute = createRoute({
 const feedDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/feeds/$feedId",
+  pendingComponent: FeedDetailPending,
+  errorComponent: ({ error }) => (
+    <FeedDetailError
+      status={error instanceof ApiError ? error.status : undefined}
+    />
+  ),
+  loader: ({ params }) =>
+    apiGet<FeedDetailResponse>(`/app/api/feeds/${params.feedId}`),
   component: function FeedDetail() {
-    const { feedId } = feedDetailRoute.useParams();
-    return (
-      <PlaceholderPage
-        title="Feed detail"
-        body={`Feed ${feedId} — the diagnosis and management view is being migrated to React.`}
-      />
-    );
+    const data = feedDetailRoute.useLoaderData();
+    return <FeedDetailPage key={data.feedId} data={data} />;
   },
 });
 

@@ -173,6 +173,24 @@ describe("FeedPoller", () => {
     ...overrides,
   });
 
+  it("skips a feed deactivated after selection (in-flight fence)", async () => {
+    const transport = mockTransport(RSS_FEED);
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://example.com/feed.xml");
+    const db = getDb(env.DB);
+    await db
+      .update(feeds)
+      .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
+      .where(eq(feeds.id, feedId));
+
+    const result = await poller.poll(feedRow({ id: feedId }));
+
+    expect(result.status).toBe("skipped");
+    expect(transport.get).not.toHaveBeenCalled();
+  });
+
   it("parses RSS and stores items", async () => {
     const transport = mockTransport(RSS_FEED);
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
