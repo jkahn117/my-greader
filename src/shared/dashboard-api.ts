@@ -77,6 +77,62 @@ export interface FeedDetailResponse extends FeedListItem {
   backloadComplete: boolean;
 }
 
+/** Terminal outcome of one recorded feed check; `in_progress` is derived
+ *  from a missing status (row written at attempt start). */
+export type AttemptStatus =
+  | "ok"
+  | "not_modified"
+  | "rate_limited"
+  | "error"
+  | "skipped"
+  | "in_progress";
+
+/** One attempt row in GET /app/api/feeds/:feedId/attempts. */
+export interface FeedAttempt {
+  id: string;
+  cycleRunId: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+  durationMs: number | null;
+  status: AttemptStatus;
+  httpStatus: number | null;
+  /** http | network | parse | null */
+  errorKind: string | null;
+  errorMessage: string | null;
+  /** success | fallback | failure | not_attempted */
+  parserState: string | null;
+  itemsAdded: number | null;
+  /** Items durably attributed to this attempt (items.attempt_id). */
+  items: { id: string; title: string | null; url: string | null }[];
+}
+
+/** GET /app/api/feeds/:feedId/attempts — paginated attempt history. */
+export interface FeedAttemptsResponse {
+  attempts: FeedAttempt[];
+  /** Opaque cursor for the next page; null when history is exhausted. */
+  nextCursor: string | null;
+  /** Streaks over retained terminal checked attempts; `lowerBound` when
+   *  the scan hit its bound with older rows remaining. */
+  streaks: {
+    problem: { count: number; lowerBound: boolean };
+    rateLimited: { count: number; lowerBound: boolean };
+  };
+  /** Error attempts grouped by kind over the labeled window. */
+  problemGroups: {
+    windowDays: number;
+    groups: {
+      kind: string;
+      count: number;
+      lastAt: number;
+      lastMessage: string | null;
+    }[];
+  };
+  /** legacy = feed checked before attempt tracking; empty = never checked. */
+  historyState: "ok" | "legacy" | "empty";
+  retentionDays: number;
+  generatedAt: number;
+}
+
 /** POST /app/api/import — OPML import outcome. */
 export interface ImportResponse {
   imported: number;

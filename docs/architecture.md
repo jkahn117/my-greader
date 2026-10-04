@@ -23,6 +23,7 @@ protocol concerns and delegate.
 | `analytics.ts` | Analytics Engine SQL queries, physical column layout, row mapping, degradation | None — read adapter |
 | `activity.ts` | Bounded dashboard projections (overview totals, subscription workspace rows) scoped to the authenticated user | None — read model |
 | `eligibility.ts` | Due-feed selection shared by the polling Workflow and manual sync (`force` drops due time only) | None — read model |
+| `history.ts` | Per-feed attempt evidence: cursor pagination, terminal-check streaks, problem grouping, attributed items | None — read model |
 
 These modules accept D1 directly (no repository adapter) because there is only
 one store implementation.
@@ -35,13 +36,20 @@ the concrete logger and metrics implementations.
 
 - **Shared:** `feeds` (canonical), `items` (article content, trimmed to 50KB)
 - **Per-user:** `subscriptions`, `item_state` (read/starred), `api_tokens`
-- **Operational:** `cycle_runs` (polling cycle summary)
+- **Operational:** `cycle_runs` (polling cycle summary), `feed_attempts` (per-check evidence, ~90-day retention)
 
 `feeds` carries check-state columns (`last_fetched_at`,
 `last_successful_at`, `last_status`, `check_interval_minutes`,
 `consecutive_errors`, `last_error`, `deactivated_at`,
 `deactivated_reason`) so the dashboard can present health, eligibility,
 and deactivation facts without reconstructing them from item timestamps.
+
+`feed_attempts` records one row per check attempt (in-progress at start,
+finalized with status/httpStatus/errorKind/parserState/itemsAdded on
+completion). Items link back via `items.attempt_id` — attribution is the
+durable attempt reference, never timestamp reconstruction. `cycle_run_id`
+is the polling workflow's instance id. The workflow purges attempts older
+than ~90 days at the end of each cycle.
 
 See the D1 Drizzle schema in `src/db/schema.ts` for column details.
 

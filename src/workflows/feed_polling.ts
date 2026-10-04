@@ -3,11 +3,11 @@ import {
   WorkflowEvent,
   WorkflowStep,
 } from "cloudflare:workers";
-import { eq, isNull, sql } from "drizzle-orm";
+import { eq, isNull, lt, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
-import { feeds, subscriptions, cycleRuns } from "../db/schema";
+import { feedAttempts, feeds, subscriptions, cycleRuns } from "../db/schema";
 import { dueFeedsQuery } from "../feed/eligibility";
 import {
   createFeedPoller,
@@ -24,6 +24,9 @@ type Params = { force?: boolean };
 // Sequential steps each get their own fresh subrequest budget (free plan: 50).
 // Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
 const FEEDS_PER_STEP = 20;
+
+// Per-feed attempt evidence retention window (~90 days).
+const ATTEMPT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // asDisposable
@@ -100,7 +103,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     try {
-      await this.#poll(step, event.payload?.force ?? false);
+      await this.#poll(step, event.payload?.force ?? false, event.instanceId);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -127,7 +130,11 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(step: WorkflowStep, force: boolean): Promise<void> {
+  async #poll(
+    step: WorkflowStep,
+    force: boolean,
+    runId: string,
+  ): Promise<void> {
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
     // ------------------------------------------------------------------
@@ -278,7 +285,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             );
 
             const settled = await Promise.allSettled(
-              batch.map((feed) => poller.poll(feed)),
+              batch.map((feed) => poller.poll(feed, runId)),
             );
 
             await metrics.flush();
@@ -349,11 +356,13 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         const now = Date.now();
 
         // Write per-cycle row to D1 so the metrics dashboard can query it
-        // without depending on Analytics Engine or an external API.
+        // without depending on Analytics Engine or an external API. The
+        // workflow instance id doubles as the cycle-run id so feed
+        // attempts can link back durably.
         await db
           .insert(cycleRuns)
           .values({
-            id: String(now),
+            id: runId,
             ranAt: now,
             activeFeeds: totalActiveFeeds,
             dueFeeds: dueFeeds.length,
@@ -362,6 +371,11 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             failedFeeds,
           })
           .onConflictDoNothing(); // guard against duplicate step execution
+
+        // Retain ~90 days of per-feed attempt evidence.
+        await db
+          .delete(feedAttempts)
+          .where(lt(feedAttempts.startedAt, now - ATTEMPT_RETENTION_MS));
 
         // Pipeline write for long-term analytics — batched with flush
         metrics.recordCycle({

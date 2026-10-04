@@ -3,6 +3,13 @@ import * as v from "valibot";
 import { createLogger } from "../lib/logger";
 import { createActivity } from "../feed/activity";
 import { selectDueFeeds } from "../feed/eligibility";
+import {
+  ATTEMPT_RETENTION_DAYS,
+  PROBLEM_WINDOW_DAYS,
+  createFeedHistory,
+  decodeCursor,
+  encodeCursor,
+} from "../feed/history";
 import { createSubscriptionLifecycle } from "../feed/subscriptions";
 import { parseOpml } from "../lib/opml";
 import { triggerFeedPollingWorkflow } from "./cron";
@@ -10,6 +17,9 @@ import { getDb } from "../lib/db";
 import { eq } from "drizzle-orm";
 import { feeds } from "../db/schema";
 import type {
+  AttemptStatus,
+  FeedAttempt,
+  FeedAttemptsResponse,
   FeedDetailResponse,
   FeedsResponse,
   ImportResponse,
@@ -179,6 +189,87 @@ for (const action of ["deactivate", "reactivate"] as const) {
     return c.json(response);
   });
 }
+
+// ---------------------------------------------------------------------------
+// GET /app/api/feeds/:feedId/attempts — bounded, cursor-paginated evidence
+// history for one subscribed feed.
+// ---------------------------------------------------------------------------
+
+const ATTEMPTS_PAGE_LIMIT = 25;
+const ATTEMPTS_PAGE_MAX = 50;
+
+handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
+  const userId = c.get("userId");
+  const { feedId } = c.req.param();
+  const logger = createLogger({
+    path: "/app/api/feeds/:feedId/attempts",
+    userId,
+  });
+
+  if (!c.env.DB) {
+    return c.json({ error: "database unavailable" }, 503);
+  }
+
+  const activity = createActivity(c.env.DB);
+  const row = await activity.getFeedRow(userId, feedId);
+  if (!row) {
+    return c.json({ error: "feed not found" }, 404);
+  }
+
+  const rawLimit = Number(c.req.query("limit") ?? ATTEMPTS_PAGE_LIMIT);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), ATTEMPTS_PAGE_MAX)
+      : ATTEMPTS_PAGE_LIMIT;
+
+  const rawCursor = c.req.query("cursor");
+  const cursor = rawCursor ? decodeCursor(rawCursor) : null;
+  if (rawCursor && !cursor) {
+    return c.json({ error: "invalid cursor" }, 400);
+  }
+
+  const history = createFeedHistory(c.env.DB);
+  const [{ rows, nextCursor }, streaks, groups, total] = await Promise.all([
+    history.listAttempts(feedId, cursor, limit),
+    history.streaks(feedId),
+    history.problemGroups(feedId, Date.now()),
+    history.countAttempts(feedId),
+  ]);
+
+  const itemMap = await history.attemptItems(rows.map((r) => r.id));
+  const attempts: FeedAttempt[] = rows.map((r) => ({
+    id: r.id,
+    cycleRunId: r.cycleRunId,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    durationMs: r.durationMs,
+    status: (r.status ?? "in_progress") as AttemptStatus,
+    httpStatus: r.httpStatus,
+    errorKind: r.errorKind,
+    errorMessage: r.errorMessage,
+    parserState: r.parserState,
+    itemsAdded: r.itemsAdded,
+    items: itemMap.get(r.id) ?? [],
+  }));
+
+  logger.info("feed attempts served", {
+    feedId,
+    returned: attempts.length,
+    total,
+  });
+
+  const response: FeedAttemptsResponse = {
+    attempts,
+    nextCursor: nextCursor ? encodeCursor(nextCursor) : null,
+    streaks,
+    problemGroups: { windowDays: PROBLEM_WINDOW_DAYS, groups },
+    historyState:
+      total > 0 ? "ok" : row.lastCheckedAt != null ? "legacy" : "empty",
+    retentionDays: ATTEMPT_RETENTION_DAYS,
+    generatedAt: Date.now(),
+  };
+  return c.json(response);
+});
 
 // ---------------------------------------------------------------------------
 // POST /app/api/import — OPML upload; reports imported/duplicates/failed URLs

@@ -55,3 +55,45 @@ test("unsubscribed feed detail shows not-found", async ({ page }) => {
   await page.goto("/app/feeds/does-not-exist");
   await expect(page.getByText("Feed not found")).toBeVisible();
 });
+
+test("attempt history shows outcomes, expansion, and copy control", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/app/feeds/e2e-feed-active");
+  await expect(page.getByText("Attempt history")).toBeVisible();
+  await expect(
+    page.getByLabel("Attempt outcome timeline"),
+  ).toBeVisible();
+
+  // Outcome badges and streak from seeded attempts (newest first).
+  await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Rate limited", { exact: true })).toBeVisible();
+  await expect(page.getByText("New items", { exact: true })).toBeVisible();
+  await expect(page.getByText("Problem streak: 1")).toBeVisible();
+
+  // Expand the newest attempt — diagnostics and copy control appear.
+  await page
+    .getByRole("button", { name: /Failed/ })
+    .first()
+    .click();
+  await expect(page.getByText("HTTP status")).toBeVisible();
+  await expect(page.getByText("HTTP 500")).toBeVisible();
+  await expect(page.getByText("Parser")).toBeVisible();
+
+  const copy = page.getByRole("button", { name: "Copy ID" });
+  await copy.click();
+  await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+});
+
+test("attempt expansion is keyboard operable", async ({ page }) => {
+  await page.goto("/app/feeds/e2e-feed-active");
+  const row = page.getByRole("button", { name: /New items/ });
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Items stored")).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "First Article" }),
+  ).toBeVisible();
+});

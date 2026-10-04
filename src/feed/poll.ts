@@ -16,7 +16,7 @@ import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
 import { extractReadableContent } from "../lib/readability";
 import { parseFeedLenient } from "../lib/feed-parser-fallback";
-import { feeds, items } from "../db/schema";
+import { feedAttempts, feeds, items } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
 const TRANSIENT_ERROR_THRESHOLD = 5;
@@ -77,7 +77,7 @@ export interface PollObserver {
 }
 
 export interface FeedPoller {
-  poll(feed: FeedToCheck): Promise<FeedPollResult>;
+  poll(feed: FeedToCheck, cycleRunId?: string): Promise<FeedPollResult>;
 }
 
 // Returns a poller that fetches and stores one feed at a time.
@@ -94,7 +94,10 @@ export function createFeedPoller(
 
   return { poll };
 
-  async function poll(feed: FeedToCheck): Promise<FeedPollResult> {
+  async function poll(
+    feed: FeedToCheck,
+    cycleRunId?: string,
+  ): Promise<FeedPollResult> {
     const start = now();
     const feedTitle = feed.title ?? feed.feedUrl;
 
@@ -107,14 +110,57 @@ export function createFeedPoller(
     if (feed.lastModified) headers["If-Modified-Since"] = feed.lastModified;
 
     // In-flight fence: feeds are selected at cycle start; a manual
-    // deactivation since then must win over this check.
+    // deactivation since then must win over this check. Recorded as a
+    // terminal 'skipped' attempt so history stays honest.
     const current = await d
       .select({ deactivatedAt: feeds.deactivatedAt })
       .from(feeds)
       .where(eq(feeds.id, feed.id))
       .get();
     if (current?.deactivatedAt != null) {
+      const attemptId = crypto.randomUUID();
+      await d.insert(feedAttempts).values({
+        id: attemptId,
+        feedId: feed.id,
+        cycleRunId: cycleRunId ?? null,
+        startedAt: start,
+        finishedAt: now(),
+        status: "skipped",
+        parserState: "not_attempted",
+      });
       return { feedId: feed.id, feedTitle, status: "skipped" };
+    }
+
+    // In-progress attempt row; finalized on every exit path below.
+    const attemptId = crypto.randomUUID();
+    await d.insert(feedAttempts).values({
+      id: attemptId,
+      feedId: feed.id,
+      cycleRunId: cycleRunId ?? null,
+      startedAt: start,
+    });
+
+    async function finishAttempt(fields: {
+      status: string;
+      httpStatus?: number;
+      errorKind?: string;
+      errorMessage?: string;
+      parserState: string;
+      itemsAdded?: number;
+    }): Promise<void> {
+      await d
+        .update(feedAttempts)
+        .set({
+          finishedAt: now(),
+          durationMs: now() - start,
+          httpStatus: fields.httpStatus ?? null,
+          errorKind: fields.errorKind ?? null,
+          errorMessage: fields.errorMessage ?? null,
+          parserState: fields.parserState,
+          itemsAdded: fields.itemsAdded ?? null,
+          status: fields.status,
+        })
+        .where(eq(feedAttempts.id, attemptId));
     }
 
     let response: Response;
@@ -122,6 +168,12 @@ export function createFeedPoller(
       response = await transport.get(feed.feedUrl, headers);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
+      await finishAttempt({
+        status: "error",
+        errorKind: "network",
+        errorMessage,
+        parserState: "not_attempted",
+      });
       await recordError(feed, errorMessage, "transient");
       observe.publish({
         kind: "feedFetchFailed",
@@ -150,6 +202,12 @@ export function createFeedPoller(
           checkIntervalMinutes: newInterval,
         })
         .where(eq(feeds.id, feed.id));
+      await finishAttempt({
+        status: "not_modified",
+        httpStatus: 304,
+        parserState: "not_attempted",
+        itemsAdded: 0,
+      });
       observe.publish({
         kind: "feedNotModified",
         feedId: feed.id,
@@ -179,6 +237,12 @@ export function createFeedPoller(
         }
       }
       const errorMessage = "HTTP 429 (rate limited)";
+      await finishAttempt({
+        status: "rate_limited",
+        httpStatus: 429,
+        errorMessage,
+        parserState: "not_attempted",
+      });
       await d
         .update(feeds)
         .set({
@@ -205,6 +269,13 @@ export function createFeedPoller(
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}`;
+      await finishAttempt({
+        status: "error",
+        httpStatus: response.status,
+        errorKind: "http",
+        errorMessage,
+        parserState: "not_attempted",
+      });
       await recordError(feed, errorMessage, errorClass);
       observe.publish({
         kind: "feedFetchFailed",
@@ -237,6 +308,13 @@ export function createFeedPoller(
         parsed = fallback;
         parseStatus = "fallback";
       } else {
+        await finishAttempt({
+          status: "error",
+          httpStatus: response.status,
+          errorKind: "parse",
+          errorMessage: parserError,
+          parserState: "failure",
+        });
         await recordError(feed, parserError, "transient");
         observe.publish({
           kind: "feedParseFailed",
@@ -285,6 +363,7 @@ export function createFeedPoller(
             author: item.creator ?? item.author ?? null,
             publishedAt: item.isoDate ? new Date(item.isoDate).getTime() : time,
             fetchedAt: time,
+            attemptId,
           };
         }),
       )
@@ -342,6 +421,13 @@ export function createFeedPoller(
         ...(newLastModified != null ? { lastModified: newLastModified } : {}),
       })
       .where(eq(feeds.id, feed.id));
+
+    await finishAttempt({
+      status: "ok",
+      httpStatus: response.status,
+      parserState: parseStatus,
+      itemsAdded: newItems,
+    });
 
     observe.publish({
       kind: "feedPolled",
