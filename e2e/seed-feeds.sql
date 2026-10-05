@@ -11,14 +11,14 @@ INSERT INTO users (id, email, created_at) VALUES ('dev-user-id', 'dev@localhost'
 
 INSERT INTO feeds (id, feed_url, title, consecutive_errors, last_error, last_successful_poll_at, initial_backload_completed_at, check_interval_minutes)
 VALUES
-  ('e2e-feed-active', 'https://alpha.example.com/feed.xml', 'Alpha News', 0, NULL, 1000, 1000, 240),
+  ('e2e-feed-active', 'https://alpha.example.com/feed.xml', 'Alpha News', 0, NULL, unixepoch() * 1000 - 21600000, unixepoch() * 1000 - 21600000, 240),
   ('e2e-feed-failing', 'https://beta.example.com/feed.xml', 'Beta Blog', 3, 'HTTP 500', NULL, NULL, 240),
   ('e2e-feed-dead', 'https://gamma.example.com/feed.xml', 'Gamma Gazette', 0, NULL, NULL, NULL, 240),
-  ('e2e-feed-limited', 'https://delta.example.com/feed.xml', 'Delta Daily', 0, NULL, 1000, 1000, 240),
-  ('e2e-feed-paused', 'https://epsilon.example.com/feed.xml', 'Epsilon Echo', 0, NULL, 1000, 1000, 240);
+  ('e2e-feed-limited', 'https://delta.example.com/feed.xml', 'Delta Daily', 0, NULL, unixepoch() * 1000 - 90000000, unixepoch() * 1000 - 90000000, 240),
+  ('e2e-feed-paused', 'https://epsilon.example.com/feed.xml', 'Epsilon Echo', 0, NULL, unixepoch() * 1000 - 259200000, unixepoch() * 1000 - 259200000, 240);
 
-UPDATE feeds SET deactivated_at = 2000, deactivation_reason = 'legacy_unknown' WHERE id = 'e2e-feed-dead';
-UPDATE feeds SET deactivated_at = 2000, deactivation_reason = 'manual' WHERE id = 'e2e-feed-paused';
+UPDATE feeds SET deactivated_at = unixepoch() * 1000 - 604800000, deactivation_reason = 'legacy_unknown' WHERE id = 'e2e-feed-dead';
+UPDATE feeds SET deactivated_at = unixepoch() * 1000 - 172800000, deactivation_reason = 'manual' WHERE id = 'e2e-feed-paused';
 
 INSERT INTO subscriptions (id, user_id, feed_id, folder) VALUES
   ('e2e-sub-1', 'dev-user-id', 'e2e-feed-active', 'Tech'),
@@ -31,9 +31,9 @@ INSERT INTO cycle_runs (id, ran_at, started_at, completed_at, checked_feeds, sel
   ('e2e-run-1', unixepoch() * 1000, unixepoch() * 1000 - 1000, unixepoch() * 1000, 1, 1, 'completed', 'completed', 'scheduled');
 
 INSERT INTO feed_poll_attempts (id, feed_id, cycle_run_id, started_at, completed_at, outcome, http_status, error_class, diagnostic, parser_status, new_items) VALUES
-  ('e2e-att-1', 'e2e-feed-active', 'e2e-run-1', 1000, 1200, 'new_items', 200, NULL, NULL, 'success', 2),
-  ('e2e-att-2', 'e2e-feed-active', 'e2e-run-1', 2000, 2300, 'rate_limited', 429, NULL, 'HTTP 429 (rate limited)', 'not_attempted', 0),
-  ('e2e-att-3', 'e2e-feed-active', 'e2e-run-1', 3000, 3400, 'failed', 500, 'http', 'HTTP 500', 'not_attempted', 0),
+  ('e2e-att-1', 'e2e-feed-active', 'e2e-run-1', unixepoch() * 1000 - 21600000, unixepoch() * 1000 - 21599800, 'new_items', 200, NULL, NULL, 'success', 2),
+  ('e2e-att-2', 'e2e-feed-active', 'e2e-run-1', unixepoch() * 1000 - 14400000, unixepoch() * 1000 - 14399800, 'rate_limited', 429, NULL, 'HTTP 429 (rate limited)', 'not_attempted', 0),
+  ('e2e-att-3', 'e2e-feed-active', 'e2e-run-1', unixepoch() * 1000 - 7200000, unixepoch() * 1000 - 7199600, 'failed', 500, 'http', 'HTTP 500', 'not_attempted', 0),
   ('e2e-att-4', 'e2e-feed-limited', 'e2e-run-1', unixepoch() * 1000 - 3600000, unixepoch() * 1000 - 3599800, 'rate_limited', 429, NULL, 'HTTP 429 (rate limited)', 'not_attempted', 0);
 
 INSERT INTO items (id, feed_id, title, url, first_ingestion_attempt_id) VALUES
