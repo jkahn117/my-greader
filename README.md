@@ -120,7 +120,7 @@ pnpm wrangler d1 migrations apply rss-reader --local
 pnpm dev
 ```
 
-Local development uses `DEV_MODE=true` from the sample file to bypass Access JWT verification. Never set `DEV_MODE` in production. Run `pnpm dev:css` in a separate terminal for CSS watch mode.
+`pnpm dev` supplies `DEV_MODE=true` through a serve-only Vite override to bypass Access JWT verification locally. Production builds do not include this override. Never set `DEV_MODE` in production. Run `pnpm dev:css` in a separate terminal for CSS watch mode.
 
 ## Checks and useful commands
 
@@ -133,7 +133,7 @@ pnpm check      # all of the above
 pnpm test:browser # Playwright acceptance tests against the local Vite server
 ```
 
-Browser tests require local migrations and `.dev.vars` with the development auth bypass; Vitest applies migrations in its own isolated D1 stores. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
+Browser tests automatically apply migrations in the isolated `.wrangler/e2e` store and supply local-only authentication overrides. Vitest applies migrations in its own isolated D1 stores. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
 
 Other commands: `pnpm cf-typegen` regenerates Wrangler binding types, `pnpm studio` opens Drizzle Studio for local D1, and `pnpm format` formats TypeScript files.
 

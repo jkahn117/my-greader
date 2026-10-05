@@ -79,7 +79,7 @@ The logout URL is derived from the incoming request's host — no additional con
 
 ### Local development
 
-Set `DEV_MODE=true` in `.dev.vars` to bypass JWT verification. The middleware injects a
+`pnpm dev` supplies `DEV_MODE=true` in a serve-only Vite override to bypass JWT verification locally. The middleware injects a
 hardcoded dev user (`dev-user-id` / `dev@localhost`) without checking for a JWT header.
 This path is gated on `DEV_MODE === 'true'` and never executes in production.
 

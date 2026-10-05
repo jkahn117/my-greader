@@ -15,7 +15,9 @@ export default defineConfig(({ command, mode }) => ({
               vars: { DEV_MODE: "true", ANALYTICS_ENABLED: "false" },
             },
           }
-        : {},
+        : command === "serve" && mode === "development"
+          ? { config: { vars: { DEV_MODE: "true" } } }
+          : {},
     ),
     react(),
   ],

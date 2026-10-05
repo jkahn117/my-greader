@@ -20,6 +20,7 @@ const NAV_ITEMS = [
  */
 export function Shell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const dashboardPath = pathname.replace(/^\/app(?=\/|$)/, "");
 
   return (
     <div className="min-h-screen bg-background">
@@ -42,7 +43,7 @@ export function Shell() {
                 <NavigationMenuItem key={item.to}>
                   <NavigationMenuLink
                     asChild
-                    active={pathname.startsWith(item.to)}
+                    active={dashboardPath.startsWith(item.to)}
                   >
                     <Link to={item.to}>{item.label}</Link>
                   </NavigationMenuLink>
