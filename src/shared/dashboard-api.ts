@@ -194,11 +194,15 @@ export interface FeedAttemptsResponse {
     problem: { count: number; lowerBound: boolean };
     rateLimited: { count: number; lowerBound: boolean };
   };
-  /** Error attempts grouped by kind over the labeled window. */
+  /** Problem checks (failed + rate-limited) over the labeled window, grouped
+   *  by recorded evidence; highest count first. */
   problemGroups: {
     windowDays: number;
     groups: {
+      /** rate_limited | http | network | parse | unknown */
       kind: string;
+      /** Structured HTTP status when one was recorded. */
+      httpStatus: number | null;
       count: number;
       lastAt: number;
       lastMessage: string | null;
