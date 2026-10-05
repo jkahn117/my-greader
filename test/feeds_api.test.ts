@@ -76,9 +76,7 @@ async function seedFeedAndSub(opts: {
     initialBackloadCompletedAt:
       opts.lastSuccessfulAt == null ? null : opts.lastSuccessfulAt,
     nextPollAt:
-      opts.lastFetchedAt == null
-        ? null
-        : opts.lastFetchedAt + 240 * 60 * 1000,
+      opts.lastFetchedAt == null ? null : opts.lastFetchedAt + 240 * 60 * 1000,
     checkIntervalMinutes: 240,
   });
   await db.insert(subscriptions).values({
@@ -122,6 +120,37 @@ beforeEach(async () => {
 });
 
 describe("GET /app/api/feeds", () => {
+  it.each(["rate_limited", "error"])(
+    "keeps %s detail and control projections consistent with list",
+    async (lastStatus) => {
+      const feedId = await seedFeedAndSub({
+        feedUrl: "https://example.com/status",
+        title: "Status",
+        lastSuccessfulAt: 1000,
+        lastFetchedAt: 2000,
+        lastStatus,
+      });
+      const list = (await (
+        await fetchApi("/app/api/feeds")
+      ).json()) as FeedsResponse;
+      const detail = await (await fetchApi(`/app/api/feeds/${feedId}`)).json();
+      expect(detail).toMatchObject({
+        status: list.feeds[0].status,
+        lastCheckedAt: 2000,
+        lastSuccessfulAt: 1000,
+      });
+      const controlled = await (
+        await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
+          method: "POST",
+        })
+      ).json();
+      expect(controlled).toMatchObject({
+        status: "deactivated",
+        lastCheckedAt: 2000,
+      });
+    },
+  );
+
   it("returns only the authenticated user's subscriptions", async () => {
     const mine = await seedFeedAndSub({
       feedUrl: "https://mine.example.com/feed",

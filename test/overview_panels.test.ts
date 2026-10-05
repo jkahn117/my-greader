@@ -27,10 +27,14 @@ import type { OverviewPanelsResponse } from "../src/shared/dashboard-api";
 const BASE = "http://localhost";
 // Endpoint tests use UTC; direct projections also cover Los Angeles DST.
 
-async function fetchPanels(): Promise<OverviewPanelsResponse> {
+async function fetchPanels(timezone = "UTC"): Promise<OverviewPanelsResponse> {
   const req = new Request(`${BASE}/app/api/overview/panels`);
   const ctx = createExecutionContext();
-  const res = await worker.fetch(req, env, ctx);
+  const res = await worker.fetch(
+    req,
+    { ...env, DISPLAY_TIMEZONE: timezone } as Env,
+    ctx,
+  );
   await waitOnExecutionContext(ctx);
   expect(res.status).toBe(200);
   return (await res.json()) as OverviewPanelsResponse;
@@ -70,7 +74,12 @@ async function seedAttempt(
 ) {
   const db = getDb(env.DB);
   const cycleRunId = `cycle-${feedId}-${startedAt}`;
-  await db.insert(cycleRuns).values({ id: cycleRunId, ranAt: startedAt });
+  await db.insert(cycleRuns).values({
+    id: cycleRunId,
+    ranAt: startedAt,
+    status: status === null ? "running" : "completed",
+    outcome: status === null ? null : "completed",
+  });
   await db.insert(feedAttempts).values({
     id: crypto.randomUUID(),
     cycleRunId,
@@ -164,6 +173,10 @@ describe("GET /app/api/overview/panels", () => {
     expect((await fetchPanels()).feedHealth.failed).toBe(1);
   });
 
+  it("keeps core panels available with an invalid display timezone", async () => {
+    expect((await fetchPanels("invalid-zone")).reading.daily).toHaveLength(7);
+  });
+
   it("fills sparse days with zero and buckets by display timezone", async () => {
     const feedId = await seedFeed({});
     const now = Date.now();
@@ -208,6 +221,10 @@ describe("GET /app/api/overview/panels", () => {
     expect(body.reading.total).toBe(1);
     expect(body.reading.topFeeds).toHaveLength(1);
     expect(body.reading.topFeeds[0].feedId).toBe(mine);
+    expect(
+      (await createActivityReader(env.DB).overviewSummary("dev-user-id"))
+        .markedReadLast7Days,
+    ).toBe(1);
   });
 
   it("unread transitions clear prior read timing", async () => {
@@ -265,6 +282,8 @@ describe("GET /app/api/overview/panels", () => {
     const db = getDb(env.DB);
     // missing: no cycle rows
     expect((await fetchPanels()).cycle.state).toBe("missing");
+    await db.insert(cycleRuns).values({ id: "legacy", ranAt: 500 });
+    expect((await fetchPanels()).cycle.state).toBe("unknown");
 
     await db.insert(cycleRuns).values({
       id: "r1",

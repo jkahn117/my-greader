@@ -93,7 +93,9 @@ handler.get("/app/api/overview", async (c) => {
   try {
     const activity = createActivityReader(c.env.DB);
     const summary = await activity.overviewSummary(userId);
-    const timezone = c.env.DISPLAY_TIMEZONE || "UTC";
+    const timezone = isValidTimezone(c.env.DISPLAY_TIMEZONE || "UTC")
+      ? c.env.DISPLAY_TIMEZONE || "UTC"
+      : "UTC";
 
     const response: OverviewResponse = {
       ...summary,
@@ -125,7 +127,9 @@ handler.get("/app/api/overview/panels", async (c) => {
     return c.json({ error: "database unavailable" }, 503);
   }
 
-  const timezone = c.env.DISPLAY_TIMEZONE || "UTC";
+  const timezone = isValidTimezone(c.env.DISPLAY_TIMEZONE || "UTC")
+    ? c.env.DISPLAY_TIMEZONE || "UTC"
+    : "UTC";
 
   const activity = createActivityReader(c.env.DB);
   let panels: Awaited<ReturnType<typeof activity.overviewPanels>>;
@@ -247,7 +251,8 @@ handler.get("/app/api/feeds/:feedId", async (c) => {
     return c.json({ error: "feed not found" }, 404);
   }
 
-  const row = toFeedListItem(subscription);
+  const latest = await createFeedHistory(c.env.DB).latestAttempts([feedId]);
+  const row = toFeedListItem(subscription, latest.get(feedId));
   const response: FeedDetailResponse = {
     ...row,
     backloadComplete: subscription.initialBackloadCompletedAt !== null,
@@ -287,8 +292,9 @@ for (const action of ["deactivate", "reactivate"] as const) {
     if (!updated) {
       return c.json({ error: "feed not found" }, 404);
     }
+    const latest = await createFeedHistory(c.env.DB).latestAttempts([feedId]);
     const response: FeedDetailResponse = {
-      ...toFeedListItem(updated),
+      ...toFeedListItem(updated, latest.get(feedId)),
       backloadComplete: updated.initialBackloadCompletedAt !== null,
     };
     return c.json(response);
@@ -340,13 +346,11 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
     finishedAt: row.completedAt,
     durationMs:
       row.completedAt === null ? null : row.completedAt - row.startedAt,
-    status: (
-      row.outcome === "new_items" || row.outcome === "unchanged"
-        ? "ok"
-        : row.outcome === "failed"
-          ? "error"
-          : (row.outcome ?? "in_progress")
-    ) as AttemptStatus,
+    status: (row.outcome === "new_items" || row.outcome === "unchanged"
+      ? "ok"
+      : row.outcome === "failed"
+        ? "error"
+        : (row.outcome ?? "in_progress")) as AttemptStatus,
     httpStatus: row.httpStatus,
     errorKind: row.errorClass,
     errorMessage: row.diagnostic,

@@ -66,14 +66,26 @@ function offsetMs(ms: number, timezone: string): number {
   return wall - Math.floor(ms / 1000) * 1000;
 }
 
-/** Epoch ms of local midnight for a YYYY-MM-DD date; the second offset
- *  lookup corrects for days whose offset differs from the UTC-midnight guess
- *  (DST transitions). */
+/** First instant of a local date, including days with skipped or repeated midnight. */
 function zonedMidnight(date: string, timezone: string): number {
   const [y, m, d] = date.split("-").map(Number);
   const guess = Date.UTC(y, m - 1, d);
-  const first = guess - offsetMs(guess, timezone);
-  return guess - offsetMs(first, timezone);
+  const approximate = guess - offsetMs(guess, timezone);
+  const format = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  // Find the date transition rather than requiring midnight to exist.
+  let low = approximate - 36 * 60 * 60 * 1000;
+  let high = approximate + 36 * 60 * 60 * 1000;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (format.format(middle) < date) low = middle;
+    else high = middle;
+  }
+  return high;
 }
 
 function shiftDate(date: string, days: number): string {

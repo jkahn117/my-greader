@@ -146,7 +146,7 @@ export interface OverviewPanels {
     missing: number;
   };
   cycle: {
-    state: "running" | "completed" | "empty" | "missing";
+    state: "running" | "completed" | "empty" | "missing" | "unknown";
     ranAt: number | null;
     checkedFeeds: number | null;
   };
@@ -224,6 +224,14 @@ export function createActivityReader(
       db
         .select({ count: sql<number>`count(*)` })
         .from(itemState)
+        .innerJoin(items, eq(itemState.itemId, items.id))
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.feedId, items.feedId),
+            eq(subscriptions.userId, itemState.userId),
+          ),
+        )
         .where(
           and(
             eq(itemState.userId, userId),
@@ -429,19 +437,21 @@ export function createActivityReader(
     const latestCycle = cycleRow[0];
     const cycle: OverviewPanels["cycle"] = !latestCycle
       ? { state: "missing", ranAt: null, checkedFeeds: null }
-      : latestCycle.status === "running"
-        ? {
-            state: "running",
-            ranAt: latestCycle.ranAt,
-            checkedFeeds: latestCycle.checkedFeeds,
-          }
-        : latestCycle.outcome === "empty"
-          ? { state: "empty", ranAt: latestCycle.ranAt, checkedFeeds: 0 }
-          : {
-              state: "completed",
+      : latestCycle.status === null
+        ? { state: "unknown", ranAt: latestCycle.ranAt, checkedFeeds: null }
+        : latestCycle.status === "running"
+          ? {
+              state: "running",
               ranAt: latestCycle.ranAt,
               checkedFeeds: latestCycle.checkedFeeds,
-            };
+            }
+          : latestCycle.outcome === "empty"
+            ? { state: "empty", ranAt: latestCycle.ranAt, checkedFeeds: 0 }
+            : {
+                state: "completed",
+                ranAt: latestCycle.ranAt,
+                checkedFeeds: latestCycle.checkedFeeds,
+              };
 
     return {
       reading: {

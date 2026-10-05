@@ -49,6 +49,8 @@ function ReadingChart({
 
 function cycleLabel(cycle: OverviewPanelsResponse["cycle"]): string {
   switch (cycle.state) {
+    case "unknown":
+      return "Last recorded cycle has no lifecycle information";
     case "running":
       return "A polling cycle is running now";
     case "completed":

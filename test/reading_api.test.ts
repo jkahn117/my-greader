@@ -9,6 +9,7 @@ import {
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { zonedDays } from "../src/feed/reading";
 import { getDb } from "../src/lib/db";
 import {
   apiTokens,
@@ -150,6 +151,17 @@ beforeEach(async () => {
 });
 
 describe("GET /app/api/reading", () => {
+  it("starts a midnight-gap date at its first existing local instant", () => {
+    const days = zonedDays(
+      Date.parse("2026-09-06T12:00:00Z"),
+      2,
+      "America/Santiago",
+    );
+    expect(days[1].start).toBe(Date.parse("2026-09-06T04:00:00Z"));
+    expect(days[0].end).toBe(days[1].start);
+    expect(days[1].end - days[1].start).toBe(23 * HOUR_MS);
+  });
+
   it("validates the window and defaults to 7 days", async () => {
     const empty = await reading();
     expect(empty.days).toBe(7);

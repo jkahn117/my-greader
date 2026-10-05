@@ -55,7 +55,7 @@ export interface FeedHealthData {
 
 /** Latest polling-cycle lifecycle. */
 export interface CycleData {
-  state: "running" | "completed" | "empty" | "missing";
+  state: "running" | "completed" | "empty" | "missing" | "unknown";
   ranAt: number | null;
   checkedFeeds: number | null;
 }
