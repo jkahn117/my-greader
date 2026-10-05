@@ -74,7 +74,10 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           ),
         })
         .from(feedPollAttempts)
-        .where(inArray(feedPollAttempts.feedId, feedIds))
+        // One JSON parameter avoids D1's binding limit for large subscription lists.
+        .where(
+          sql`${feedPollAttempts.feedId} in (select value from json_each(${JSON.stringify(feedIds)}))`,
+        )
         .groupBy(feedPollAttempts.feedId)
         .as("latest_per_feed");
       const rows = await db

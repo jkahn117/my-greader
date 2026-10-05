@@ -171,6 +171,13 @@ describe("GET /app/api/overview/panels", () => {
       "failed",
     );
     expect((await fetchPanels()).feedHealth.failed).toBe(1);
+    const manyFeedIds = [
+      feedId,
+      ...Array.from({ length: 150 }, (_, i) => `missing-${i}`),
+    ];
+    expect(
+      (await history.latestAttempts(manyFeedIds)).get(feedId)?.outcome,
+    ).toBe("failed");
   });
 
   it("keeps core panels available with an invalid display timezone", async () => {
