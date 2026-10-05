@@ -3,15 +3,13 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { sha256 } from "../lib/crypto";
 import { apiTokens, users } from "../db/schema";
-import { LAST_USED_RESOLUTION_MS } from "../lib/api-tokens";
 
 /**
  * GReader API token middleware.
  *
  * Validates the `Authorization: GoogleLogin auth=<token>` header by hashing
- * the raw token and looking it up in `api_tokens`. Refreshes `last_used_at`
- * at most hourly (LAST_USED_RESOLUTION_MS) so the Access tab can show coarse
- * activity without a D1 write on every GReader request.
+ * the raw token and looking it up in `api_tokens`. Updates `last_used_at` on
+ * every authenticated request so the Access tab can show meaningful activity.
  */
 export async function tokenMiddleware(c: Context, next: Next) {
   const auth = c.req.header("Authorization") ?? "";
@@ -39,10 +37,7 @@ export async function tokenMiddleware(c: Context, next: Next) {
 
   if (!tokenRow) return c.text("Unauthorized", 401);
 
-  if (
-    !tokenRow.lastUsedAt ||
-    Date.now() - tokenRow.lastUsedAt > LAST_USED_RESOLUTION_MS
-  ) {
+  if (!tokenRow.lastUsedAt || Date.now() - tokenRow.lastUsedAt > 3_600_000) {
     await db
       .update(apiTokens)
       .set({ lastUsedAt: Date.now() })

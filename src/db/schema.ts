@@ -1,5 +1,4 @@
 import {
-  index,
   integer,
   primaryKey,
   sqliteTable,
@@ -21,10 +20,7 @@ export const feeds = sqliteTable("feeds", {
   feedUrl: text("feed_url").unique().notNull(),
   htmlUrl: text("html_url"),
   title: text("title"),
-  lastFetchedAt: integer("last_fetched_at"), // most recent check attempt
-  lastSuccessfulAt: integer("last_successful_at"), // most recent check that completed (200 or 304)
-  lastStatus: text("last_status"), // outcome of the most recent check: ok | not_modified | rate_limited | error
-  deactivatedReason: text("deactivated_reason"), // transient | permanent | manual; NULL = deactivated before reasons existed (legacy uncertain)
+  lastFetchedAt: integer("last_fetched_at"),
   etag: text("etag"), // for conditional HTTP requests
   lastModified: text("last_modified"), // for conditional HTTP requests
   consecutiveErrors: integer("consecutive_errors").notNull().default(0),
@@ -63,33 +59,7 @@ export const items = sqliteTable("items", {
   author: text("author"),
   publishedAt: integer("published_at"),
   fetchedAt: integer("fetched_at"),
-  attemptId: text("attempt_id"), // durable link to the feed_attempt that stored this item
 });
-
-// Per-check evidence for one feed — written by the poller, retained ~90 days.
-// finishedAt/status NULL = attempt still in progress.
-export const feedAttempts = sqliteTable(
-  "feed_attempts",
-  {
-    id: text("id").primaryKey(),
-    feedId: text("feed_id")
-      .notNull()
-      .references(() => feeds.id),
-    cycleRunId: text("cycle_run_id"), // workflow instance id of the cycle that ran this check
-    startedAt: integer("started_at").notNull(),
-    finishedAt: integer("finished_at"),
-    status: text("status"), // ok | not_modified | rate_limited | error | skipped
-    httpStatus: integer("http_status"),
-    errorKind: text("error_kind"), // http | network | parse
-    errorMessage: text("error_message"),
-    parserState: text("parser_state"), // success | fallback | failure | not_attempted
-    itemsAdded: integer("items_added"),
-    durationMs: integer("duration_ms"),
-  },
-  (t) => [
-    index("feed_attempts_feed_started_idx").on(t.feedId, t.startedAt, t.id),
-  ],
-);
 
 // Per-user read and starred state
 export const itemState = sqliteTable(
