@@ -1,10 +1,7 @@
 import { Hono } from "hono";
-import { and, eq, isNotNull } from "drizzle-orm";
 import * as v from "valibot";
-import { getDb } from "../../lib/db";
 import { createLogger } from "../../lib/logger";
 import { createMetrics } from "../../lib/metrics";
-import { subscriptions } from "../../db/schema";
 import {
   createSubscriptionLifecycle,
   type SubObserver,
@@ -52,21 +49,20 @@ subs.get("/reader/api/0/tag/list", async (c) => {
     path: "/reader/api/0/tag/list",
     userId: c.get("userId"),
   });
-  const db = getDb(c.env.DB);
-  const userId = c.get("userId");
+  const lifecycle = createSubscriptionLifecycle(c.env.DB, {
+    publish: () => {},
+  });
+  const folders = new Set(
+    (await lifecycle.list(c.get("userId")))
+      .map((subscription) => subscription.folder)
+      .filter((folder): folder is string => folder != null),
+  );
 
-  const folderRows = await db
-    .selectDistinct({ folder: subscriptions.folder })
-    .from(subscriptions)
-    .where(
-      and(eq(subscriptions.userId, userId), isNotNull(subscriptions.folder)),
-    );
-
-  logger.info("tag/list", { folders: folderRows.length });
+  logger.info("tag/list", { folders: folders.size });
 
   const tags = [
     { id: "user/-/state/com.google/starred" },
-    ...folderRows.map((r) => ({ id: `user/-/label/${r.folder}` })),
+    ...[...folders].map((folder) => ({ id: `user/-/label/${folder}` })),
   ];
 
   return c.json({ tags });

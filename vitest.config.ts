@@ -1,25 +1,11 @@
-import path from 'node:path'
-import { defineConfig } from 'vitest/config'
-import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers'
+import { defineConfig, mergeConfig } from "vitest/config";
+import { createWorkersTestConfig } from "./vitest.shared";
 
-export default defineConfig(async () => {
-  const migrations = await readD1Migrations(path.join(__dirname, 'drizzle'))
-
-  return {
-    plugins: [
-      cloudflareTest({
-        wrangler: { configPath: './wrangler.jsonc' },
-        miniflare: {
-          // Pass migrations to the Workers runtime so setup.ts can apply them
-          bindings: {
-            TEST_MIGRATIONS: JSON.stringify(migrations),
-            DEV_MODE: "true",
-          },
-        },
-      }),
-    ],
+export default defineConfig(async () =>
+  mergeConfig(await createWorkersTestConfig({ developmentAuth: true }), {
     test: {
-      setupFiles: ["./test/setup.ts"],
+      include: ["test/**/*.test.ts"],
+      exclude: ["test/**/*.production.test.ts"],
     },
-  }
-})
+  }),
+);

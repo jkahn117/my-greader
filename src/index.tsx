@@ -3,11 +3,8 @@ import { tokenMiddleware } from "./middleware/token";
 import { accessMiddleware } from "./middleware/access";
 import { observabilityMiddleware } from "./middleware/observability";
 import { greader } from "./handlers/greader";
-import { tokensHandler } from "./handlers/tokens";
-import { feedsUiHandler } from "./handlers/feeds_ui";
-import { importHandler } from "./handlers/import";
-import { metricsHandler } from "./handlers/metrics";
-import { timelineHandler } from "./handlers/timeline";
+import { dashboardHandler } from "./handlers/dashboard";
+import { tokensApiHandler } from "./handlers/tokens_api";
 import { scheduled } from "./handlers/cron";
 import { FeedPollingWorkflow } from "./workflows/feed_polling";
 import type { Variables } from "./types/context";
@@ -34,14 +31,13 @@ app.route("/api/greader.php", greader);
 // Management UI (Cloudflare Access protected)
 // ---------------------------------------------------------------------------
 
-// All management UI routes require a valid Cloudflare Access JWT
+// The whole React dashboard (pages and JSON API) requires a valid
+// Cloudflare Access JWT.
 app.use("/app/*", accessMiddleware);
-app.use("/tokens/*", accessMiddleware);
-app.use("/feeds/*", accessMiddleware);
-app.use("/import", accessMiddleware);
 
-app.route("/", metricsHandler); // GET /app/metrics
-app.route("/", timelineHandler); // GET /app/timeline
+// Dashboard JSON API for the React management client (under /app/api/*)
+app.route("/", dashboardHandler);
+app.route("/", tokensApiHandler); // /app/api/tokens
 
 // Logout: redirect to Cloudflare Access logout endpoint on the same domain
 app.get("/auth/logout", (c) => {
@@ -49,13 +45,9 @@ app.get("/auth/logout", (c) => {
   return c.redirect(`${protocol}//${host}/cdn-cgi/access/logout`);
 });
 
-// /app → redirect to default tab (metrics)
-app.get("/app", (c) => c.redirect("/app/metrics"));
-
-// Management UI routes
-app.route("/", tokensHandler); // GET /app/access, POST /tokens/generate, DELETE /tokens/:id
-app.route("/", feedsUiHandler); // GET /app/feeds
-app.route("/", importHandler); // POST /import
+// /app → React client's default route (client routes resolve via the
+// static-asset SPA fallback in wrangler.jsonc)
+app.get("/app", (c) => c.redirect("/app/overview"));
 
 app.get("/", (c) => c.redirect("/app"));
 

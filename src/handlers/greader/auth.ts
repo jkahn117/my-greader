@@ -1,10 +1,7 @@
 import { Hono } from "hono";
-import { and, eq, isNull } from "drizzle-orm";
 import * as v from "valibot";
-import { getDb } from "../../lib/db";
+import { createApiTokenLifecycle } from "../../domain/tokens";
 import { createLogger } from "../../lib/logger";
-import { sha256 } from "../../lib/crypto";
-import { apiTokens } from "../../db/schema";
 import type { Variables } from "./helpers";
 
 const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -23,12 +20,22 @@ export const clientLoginSchema = v.object({
 });
 
 auth.post("/accounts/ClientLogin", async (c) => {
-  const logger = createLogger({ path: "/accounts/ClientLogin" });
+  const logger = createLogger().child({
+    rayId: c.req.header("cf-ray"),
+    path: c.req.path,
+  });
 
   // Rate limit by client IP — 5 attempts per 60s (see wrangler.jsonc)
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (c.env.LOGIN_RATE_LIMITER) {
-    const { success } = await c.env.LOGIN_RATE_LIMITER.limit({ key: ip });
+    let success: boolean;
+    try {
+      ({ success } = await c.env.LOGIN_RATE_LIMITER.limit({ key: ip }));
+    } catch {
+      // Fail closed without exposing platform exception details to clients or logs.
+      logger.error("ClientLogin rate limiter unavailable", { ip });
+      return c.text("Authentication unavailable", 503);
+    }
     if (!success) {
       logger.warn("ClientLogin rate limited", { ip });
       return c.text("Rate limited", 429);
@@ -45,15 +52,10 @@ auth.post("/accounts/ClientLogin", async (c) => {
 
   const { Passwd } = parsed.output;
 
-  const db = getDb(c.env.DB);
-  const hash = await sha256(Passwd);
-  const row = await db
-    .select({ id: apiTokens.id })
-    .from(apiTokens)
-    .where(and(eq(apiTokens.tokenHash, hash), isNull(apiTokens.revokedAt)))
-    .get();
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
+  const token = await tokenLifecycle.findActive(Passwd);
 
-  if (!row) {
+  if (!token) {
     logger.warn("ClientLogin failed — token not found or revoked");
     return c.text("BadAuthentication", 403);
   }

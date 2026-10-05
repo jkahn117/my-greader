@@ -2,43 +2,25 @@
 
 A personal RSS aggregator on Cloudflare Workers exposing a Google Reader-compatible API.
 
-- **Package manager**: pnpm (never npm/yarn)
-- **Quality gate**: `pnpm lint` (oxlint) — run after any code change
-- **Tests**: `pnpm test` (vitest with Cloudflare Workers pool) — live in `test/`
+## Working rules
 
-## Core Tenets
+- Use pnpm for package management.
+- After any code change, run `pnpm lint`. Run `pnpm test` to verify behavior changes.
+- Preserve Google Reader API compatibility. Existing clients depend on its protocol behavior.
+- Log feed failures with enough context for users to troubleshoot. Expose diagnostics in the dashboard where practical.
+- For architecture changes, update `docs/architecture.md`. For deployment changes, update `README.md`.
 
-- Google Reader API must match expectation. Clients depend on a known implementation, we cannot modify.
-- Understanding feed errors or issues is vital. These should be, at minimum, logged in an easily discoverable manner so that the user can troubleshoot. Secondarily, expose via Dashboard.
-- Docs need to stay up-to-date. A change that impacts architecture should include an update to `docs/architecture.md`; a change to deployment should end up in `README.md`.
+## Before working
 
-## Architecture
+- Domain behavior: read [domain guidance](docs/agents/domain.md) before exploring or changing behavior, or naming concepts in issues, specs, proposals, or tests. It governs terminology and ADR use.
+- Code changes: read [coding style](docs/agents/style.md) for TypeScript, validation, logging, CSS, and comments.
+- Module boundaries or data flow: read [architecture](docs/architecture.md) for module ownership, persistence, polling, metrics, and observability boundaries.
+- Stack or client integration: read [architecture overview](docs/agents/architecture-overview.md) for platform choices and Current's FreshRSS connection mode.
+- Issues and specs: read [issue tracker guidance](docs/agents/issue-tracker.md) before fetching, publishing, or triaging GitHub work.
 
-Feed-level business logic lives in four deep modules under `src/feed/`, each
-behind a small factory interface.  Handlers and the Workflow become thin
-adapters that parse protocol concerns and delegate.
+## Task references
 
-| Module | Responsibility |
-|--------|---------------|
-| `poll.ts` | Fetch, parse, store items; interval backoff; error/deactivation |
-| `subscriptions.ts` | Canonical feed upsert; subscribe/unsubscribe/edit; list/get |
-| `stream.ts` | GReader stream scope resolution; paginated queries; feed-ID lookup |
-| `analytics.ts` | Analytics Engine read adapter (SQL, column layout, row mapping) |
-
-Modules accept D1 directly (no repository adapter — single store).  Observability
-tooling (`@workers-powertools`) never crosses the module seams; observer interfaces
-carry domain event payloads.
-
-See [`docs/architecture.md`](docs/architecture.md) for the full overview.
-
-## Project conventions
-
-- [Coding style](docs/agents/style.md) — TypeScript, Valibot, logging, commenting
-- [Architecture overview](docs/agents/architecture-overview.md) — stack, deep-module design
-
-## Reference docs
-
-- [Architecture](docs/architecture.md) — stack, data model, deep modules, polling, metrics, auth
-- [Auth flow](docs/auth-flow.md) — Cloudflare Access JWT + API token lifecycle
-- [GReader API](docs/greader-api.md) — endpoint list, FreshRSS compatibility
-- [Decisions](docs/decisions.md) — rationale for key technical choices
+- Authentication: read [auth flow](docs/auth-flow.md) when changing Access JWT verification or the API Token lifecycle.
+- API compatibility: read [GReader API](docs/reference/greader-api.md) when implementing or reviewing endpoints or client behavior.
+- Design decisions: consult the [ADR index](docs/decisions.md) before revisiting a technical choice.
+- Deployment: read [README.md](README.md) before changing configuration or deployment procedures.

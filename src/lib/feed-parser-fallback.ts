@@ -1,5 +1,23 @@
 import { parseHTML } from "linkedom";
 
+// linkedom's declarations refer to the browser Element type, while Workers
+// intentionally supplies a smaller global Element declaration. Keep the DOM
+// operations used by this parser local instead of adding the browser DOM lib.
+interface FeedNode {
+  readonly nodeType: number;
+  readonly textContent: string | null;
+  readonly nextSibling: FeedNode | null;
+}
+
+interface FeedElement extends FeedNode {
+  readonly childNodes: Iterable<FeedNode>;
+  readonly children: Iterable<FeedElement>;
+  readonly localName: string;
+  getAttribute(name: string): string | null;
+  querySelector(selector: string): FeedElement | null;
+  querySelectorAll(selector: string): Iterable<FeedElement>;
+}
+
 // Lenient feed parser for malformed XML/HTML feeds.
 // Uses linkedom (an HTML parser, far more tolerant than xml2js used by
 // rss-parser) to extract feed items when the primary parser fails.
@@ -29,28 +47,53 @@ export interface FallbackFeed {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function text(parent: Element, selector: string): string | null {
-  const el = parent.querySelector(selector);
-  return el?.textContent?.trim() ?? null;
+/** Recovers ordinary text and CDATA converted to comments by the HTML parser. */
+function elementText(element: FeedElement): string | null {
+  const ordinaryText = element.textContent?.trim();
+  if (ordinaryText) return ordinaryText;
+  for (const child of element.childNodes) {
+    if (child.nodeType !== 8) continue;
+    const commentText = child.textContent?.trim() ?? "";
+    const cdata = /^\[CDATA\[([\s\S]*)\]\]$/.exec(commentText);
+    if (cdata?.[1]) return cdata[1];
+  }
+  return null;
 }
 
-function textByName(parent: Element, localName: string): string | null {
-  const lower = localName.toLowerCase();
-  for (const child of parent.children) {
-    if (child.localName.toLowerCase() === lower) {
-      return child.textContent?.trim() ?? null;
-    }
+function text(parent: FeedElement, selector: string): string | null {
+  const element = parent.querySelector(selector);
+  if (!element) return null;
+  const value = elementText(element);
+  if (value || selector !== "link") return value;
+
+  // HTML parsing treats RSS <link> as a void element, leaving its value in the
+  // following text node. Recover that standard RSS representation.
+  let sibling = element.nextSibling;
+  while (sibling?.nodeType === 3) {
+    const siblingText = sibling.textContent?.trim();
+    if (siblingText) return siblingText;
+    sibling = sibling.nextSibling;
   }
-  // Also check deeply nested (e.g. Atom author/name)
-  for (const child of parent.children) {
-    const found = child.querySelector(localName);
-    if (found) return found.textContent?.trim() ?? null;
+  return null;
+}
+
+/** Finds namespaced elements without treating their colon as a CSS pseudo-class. */
+function textByName(parent: FeedElement, localName: string): string | null {
+  const lower = localName.toLowerCase();
+  const pending = [...parent.children];
+  while (pending.length > 0) {
+    const child = pending.shift();
+    if (!child) continue;
+    if (child.localName.toLowerCase() === lower) {
+      return elementText(child);
+    }
+    pending.push(...child.children);
   }
   return null;
 }
 
 function attr(
-  parent: Element,
+  parent: FeedElement,
   selector: string,
   attrName: string,
 ): string | null {
@@ -62,7 +105,7 @@ function attr(
 // RSS 2.0 extraction
 // ---------------------------------------------------------------------------
 
-function parseRssItems(root: Element): FallbackFeedItem[] {
+function parseRssItems(root: FeedElement): FallbackFeedItem[] {
   const items: FallbackFeedItem[] = [];
   const itemEls = root.querySelectorAll("channel > item, item");
   for (const el of itemEls) {
@@ -89,7 +132,7 @@ function parseRssItems(root: Element): FallbackFeedItem[] {
 // Atom 1.0 extraction
 // ---------------------------------------------------------------------------
 
-function parseAtomEntries(root: Element): FallbackFeedItem[] {
+function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
   const entries: FallbackFeedItem[] = [];
   const entryEls = root.querySelectorAll("feed > entry, entry");
   for (const el of entryEls) {
@@ -123,7 +166,7 @@ function parseAtomEntries(root: Element): FallbackFeedItem[] {
 export function parseFeedLenient(xml: string): FallbackFeed | null {
   try {
     const { document } = parseHTML(`<html><body>${xml}</body></html>`);
-    const body = document.body;
+    const body = document.body as unknown as FeedElement;
 
     // Detect format: RSS has <channel>, Atom has <feed>
     const hasRss = body.querySelector("rss, channel, item");

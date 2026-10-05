@@ -3,5 +3,6 @@
   "options": {
     "reportUnusedDisableDirectives": "error"
   },
-  "plugins": ["typescript"]
+  "plugins": ["typescript"],
+  "jsPlugins": ["@shadcn/lint"]
 }

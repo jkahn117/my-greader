@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Sanitized Field Notes</title>
+    <link>https://feeds.example.test/notes/</link>
+    <description>Representative namespace and encoding cases</description>
+    <item>
+      <title>Research &amp; Development</title>
+      <link>../articles/alpha</link>
+      <guid isPermaLink="false">observed-alpha-id</guid>
+      <dc:creator>Ava Example</dc:creator>
+      <pubDate>Tue, 02 Apr 2024 10:30:00 GMT</pubDate>
+      <description>Short summary.</description>
+      <content:encoded><![CDATA[<p>Full &amp; rich story.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Duplicate should not replace the first Item</title>
+      <link>https://feeds.example.test/articles/duplicate</link>
+      <guid isPermaLink="false">observed-alpha-id</guid>
+      <pubDate>Tue, 02 Apr 2024 11:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Link identity with an invalid date</title>
+      <link>/articles/link-identity</link>
+      <pubDate>not-a-real-date</pubDate>
+      <description>Caf&#233; &amp; tea</description>
+    </item>
+    <item>
+      <title>No stable identity</title>
+      <description>This Item is intentionally skipped.</description>
+    </item>
+  </channel>
+</rss>

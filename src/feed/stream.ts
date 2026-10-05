@@ -2,9 +2,9 @@
  * Stream query module — owns GReader stream scope resolution and
  * paginated item queries.
  *
- * `createStreamModule(dbBinding)` returns resolveScope, queryPage,
- * queryByIds, and resolveFeedRef.  Also exports parseStreamId,
- * StreamType, ItemRow, and toGReaderItem for response shaping.
+ * `createStreamModule(dbBinding)` returns paginated scope queries and
+ * ID lookups. It also exports StreamScope, ItemRow, and toGReaderItem
+ * for adapters.
  *
  * GReader handlers become thin adapters: parse HTTP params, call
  * this module, and map results to the JSON wire format.
@@ -17,18 +17,11 @@ import type { ContinuationCursor } from "../lib/crypto";
 import { feeds, items, itemState, subscriptions } from "../db/schema";
 import type { items as itemsTable } from "../db/schema";
 
-export type StreamType = "feed" | "folder" | "all" | "starred";
+export type StreamType = "feed" | "folder" | "all" | "starred" | "unsupported";
 
-export function parseStreamId(s: string): {
+export interface StreamScope {
   type: StreamType;
   value: string | null;
-} {
-  if (s.startsWith("feed/")) return { type: "feed", value: s.slice(5) };
-  if (s.startsWith("user/-/label/"))
-    return { type: "folder", value: s.slice("user/-/label/".length) };
-  if (s === "user/-/state/com.google/starred")
-    return { type: "starred", value: null };
-  return { type: "all", value: null };
 }
 
 export type ItemRow = {
@@ -68,7 +61,7 @@ export function toGReaderItem(r: ItemRow) {
 }
 
 export interface ScopeParams {
-  streamId: ReturnType<typeof parseStreamId>;
+  scope: StreamScope;
   userId: string;
   excludeRead: boolean;
   newerThan: number | null;
@@ -82,13 +75,7 @@ export interface PageResult {
 }
 
 export interface StreamModule {
-  resolveScope(params: ScopeParams): Promise<SQL<unknown>[]>;
-  resolveFeedRef(ref: string): Promise<{ id: string; feedUrl: string } | null>;
-  queryPage(params: {
-    conditions: SQL<unknown>[];
-    userId: string;
-    limit: number;
-  }): Promise<PageResult>;
+  queryPage(params: ScopeParams & { limit: number }): Promise<PageResult>;
   queryByIds(params: { ids: string[]; userId: string }): Promise<ItemRow[]>;
 }
 
@@ -99,6 +86,7 @@ export interface StreamModule {
 export function createStreamModule(dbBinding: D1Database): StreamModule {
   const d = getDb(dbBinding);
 
+  /** Resolves the Feed ID and URL forms accepted by GReader clients. */
   async function resolveFeedRef(ref: string) {
     return d
       .select({ id: feeds.id, feedUrl: feeds.feedUrl })
@@ -108,17 +96,20 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
       .then((r) => r ?? null);
   }
 
+  /** Builds private query conditions from a User-scoped Stream request. */
   async function resolveScope(params: ScopeParams): Promise<SQL<unknown>[]> {
-    const { streamId, userId, excludeRead, newerThan, cursor } = params;
+    const { scope, userId, excludeRead, newerThan, cursor } = params;
     const conditions: SQL<unknown>[] = [eq(subscriptions.userId, userId)];
 
-    if (streamId.type === "feed") {
-      const feed = await resolveFeedRef(streamId.value!);
-      if (feed) conditions.push(eq(items.feedId, feed.id));
-    } else if (streamId.type === "folder") {
-      conditions.push(eq(subscriptions.folder, streamId.value!));
-    } else if (streamId.type === "starred") {
+    if (scope.type === "feed") {
+      const feed = await resolveFeedRef(scope.value!);
+      conditions.push(feed ? eq(items.feedId, feed.id) : sql`0 = 1`);
+    } else if (scope.type === "folder") {
+      conditions.push(eq(subscriptions.folder, scope.value!));
+    } else if (scope.type === "starred") {
       conditions.push(eq(itemState.isStarred, 1));
+    } else if (scope.type === "unsupported") {
+      conditions.push(sql`0 = 1`);
     }
 
     if (excludeRead) {
@@ -148,12 +139,12 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     return conditions;
   }
 
-  async function queryPage(params: {
-    conditions: SQL<unknown>[];
-    userId: string;
-    limit: number;
-  }): Promise<PageResult> {
-    const { conditions, userId, limit } = params;
+  /** Returns one ordered page while keeping scope predicates inside the module. */
+  async function queryPage(
+    params: ScopeParams & { limit: number },
+  ): Promise<PageResult> {
+    const { userId, limit } = params;
+    const conditions = await resolveScope(params);
 
     const rows: ItemRow[] = await d
       .select({
@@ -186,6 +177,7 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     return { page, hasMore, ...(continuation ? { continuation } : {}) };
   }
 
+  /** Looks up requested Items while enforcing the User's Subscriptions. */
   async function queryByIds(params: {
     ids: string[];
     userId: string;
@@ -211,5 +203,5 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
       .where(and(eq(subscriptions.userId, userId), inArray(items.id, ids)));
   }
 
-  return { resolveScope, resolveFeedRef, queryPage, queryByIds };
+  return { queryPage, queryByIds };
 }

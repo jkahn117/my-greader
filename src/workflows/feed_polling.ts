@@ -3,25 +3,23 @@ import {
   WorkflowEvent,
   WorkflowStep,
 } from "cloudflare:workers";
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
-import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
-import { feeds, subscriptions, cycleRuns } from "../db/schema";
 import {
   createFeedPoller,
+  createPollingCycleManager,
   type FeedPollResult,
   type FeedTransport,
   type PollObserver,
+  type PollTriggerReason,
 } from "../feed/poll";
 
-// No per-run parameters needed — the Workflow always fetches all due feeds
-type Params = Record<string, never>;
+type Params = { triggerReason: PollTriggerReason };
 
-// Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
-// Sequential steps each get their own fresh subrequest budget (free plan: 50).
-// Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
-const FEEDS_PER_STEP = 20;
+// Each Feed uses up to four subrequests: attempt start/replay check, HTTP,
+// atomic D1 completion, and committed-result read. Eight concurrent Feeds stay
+// below the 50-subrequest budget with headroom for metrics delivery.
+const FEEDS_PER_STEP = 8;
 
 // ---------------------------------------------------------------------------
 // asDisposable
@@ -66,21 +64,21 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 //
 // Why Workflows instead of a plain cron handler?
 // A single Worker invocation on the free plan has a budget of 50 subrequests.
-// Each feed fetch costs ~2 (1 HTTP GET + 1 D1 batch write). A plain cron
-// handler would hit the limit after ~25 feeds. Workflows solve this because
+// Each Feed poll uses several D1 and HTTP subrequests. A plain cron handler
+// would hit the invocation limit. Workflows solve this because
 // each sequential step.do() runs in its own fresh Worker invocation with its
 // own fresh 50-subrequest budget. There is no limit on the number of steps.
 //
 // Batching strategy:
 //   - Feeds within a batch are fetched concurrently (Promise.allSettled) to
 //     minimise wall time. Concurrent fetches within one step share that step's
-//     budget, so batch size = floor(50 / 2) - safety margin = 20.
+//     budget, so the batch size leaves room for up to four subrequests per Feed.
 //   - Batches are processed sequentially (one step.do per batch), each in a
 //     fresh invocation, so total feed count is not constrained by subrequests.
 //
 // Error handling:
 //   - Individual feed failures are caught inside Promise.allSettled and
-//     returned as FeedPollResult { status: "error" }. They do not fail the step.
+//     returned as a terminal FeedPollResult. They do not fail the step.
 //   - Step-level failures (e.g. D1 outage, binding error) will be retried by
 //     the Workflow runtime before propagating.
 //   - run() wraps everything in a try/catch that logs the full error message
@@ -89,334 +87,297 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
 
 export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
   async run(event: WorkflowEvent<Params>, step: WorkflowStep): Promise<void> {
-    // withRpcContext enriches all log entries for this Workflow run with the
-    // correlation ID, agent name, and instance ID (no Request is available).
-    using _ctx = logger.withRpcContext({
-      correlationId: event.instanceId,
-      agent: "FeedPollingWorkflow",
-      instanceId: event.instanceId,
+    return runFeedPollingWorkflow(this.env, event, step);
+  }
+}
+
+/** Runs the Workflow adapter through an exported seam shared with local tests. */
+export async function runFeedPollingWorkflow(
+  env: Env,
+  event: WorkflowEvent<Params>,
+  step: WorkflowStep,
+): Promise<void> {
+  using _ctx = logger.withRpcContext({
+    correlationId: event.instanceId,
+    agent: "FeedPollingWorkflow",
+    instanceId: event.instanceId,
+    extra: { cycleRunId: event.instanceId },
+  });
+
+  try {
+    await pollWorkflow(
+      env,
+      step,
+      event.payload.triggerReason,
+      event.instanceId,
+    );
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    logger.error("feed polling workflow failed", {
+      error: errorMessage,
+      stack,
     });
 
     try {
-      await this.#poll(step);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack : undefined;
-      // logger.error flushes the buffer — all buffered DEBUG/INFO logs emitted
-      // before this point are now visible in structured logs alongside the error.
-      logger.error("feed polling workflow failed", {
-        error: errorMessage,
-        stack,
-      });
-
-      try {
-        using analytics = asDisposable(this.env.ANALYTICS);
-        const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (this.env.ANALYTICS_ENABLED as string) !== "false",
-        );
-        metrics.recordCycleError({ error: errorMessage });
-        await metrics.flush();
-      } catch {
-        // Don't mask the original error if metrics emission itself fails
-      }
-
-      throw err;
-    }
-  }
-
-  async #poll(step: WorkflowStep): Promise<void> {
-    // ------------------------------------------------------------------
-    // Step 1 — query feeds that are due for a check
-    // ------------------------------------------------------------------
-
-    const { dueFeeds, totalActiveFeeds } = await step.do(
-      "get-due-feeds",
-      async () => {
-        try {
-          using d1 = asDisposable(this.env.DB);
-          const db = getDb(d1);
-          const now = Date.now();
-
-          const [due, activeCount] = await db.batch([
-            db
-              .selectDistinct({
-                id: feeds.id,
-                feedUrl: feeds.feedUrl,
-                title: feeds.title,
-                htmlUrl: feeds.htmlUrl,
-                etag: feeds.etag,
-                lastModified: feeds.lastModified,
-                lastFetchedAt: feeds.lastFetchedAt,
-                consecutiveErrors: feeds.consecutiveErrors,
-                checkIntervalMinutes: feeds.checkIntervalMinutes,
-                lastNewItemAt: feeds.lastNewItemAt,
-              })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(
-                and(
-                  isNull(feeds.deactivatedAt),
-                  or(
-                    isNull(feeds.lastFetchedAt),
-                    lte(
-                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                      now,
-                    ),
-                  ),
-                ),
-              )
-              .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
-
-            db
-              .select({ count: sql<number>`count(*)` })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(isNull(feeds.deactivatedAt)),
-          ]);
-
-          return {
-            dueFeeds: due,
-            totalActiveFeeds: Number(activeCount[0]?.count ?? 0),
-          };
-        } catch (err) {
-          logger.error("get-due-feeds step failed", {
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
-          throw err;
-        }
-      },
-    );
-
-    logger.info("feed polling cycle starting", {
-      totalActiveFeeds,
-      dueFeeds: dueFeeds.length,
-    });
-
-    if (dueFeeds.length === 0) {
-      logger.info("no feeds due, skipping cycle");
-      return;
-    }
-
-    // ------------------------------------------------------------------
-    // Steps 2…N — one step per batch of FEEDS_PER_STEP feeds.
-    // Within each step, feeds are fetched concurrently to minimise wall time.
-    // Sequential steps each run in a fresh Worker invocation with a new budget.
-    // ------------------------------------------------------------------
-
-    const allResults: FeedPollResult[] = [];
-
-    for (let i = 0; i < dueFeeds.length; i += FEEDS_PER_STEP) {
-      const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
-      const batchIndex = Math.floor(i / FEEDS_PER_STEP);
-
-      const batchResults = await step.do(
-        `fetch-batch-${batchIndex}`,
-        async () => {
-          try {
-            using d1 = asDisposable(this.env.DB);
-            using analytics = asDisposable(this.env.ANALYTICS);
-            const metrics = createMetrics(
-              analytics as unknown as Env["ANALYTICS"],
-              (this.env.ANALYTICS_ENABLED as string) !== "false",
-            );
-
-            const transport: FeedTransport = {
-              get(url, headers) {
-                return fetch(url, {
-                  headers,
-                  signal: AbortSignal.timeout(15000),
-                });
-              },
-            };
-
-            const observer: PollObserver = {
-              publish(event) {
-                switch (event.kind) {
-                  case "feedPolled":
-                    logger.info("feed polled", {
-                      feedId: event.feedId,
-                      newItems: event.newItems,
-                      durationMs: event.durationMs,
-                      parseStatus: event.parseStatus,
-                    });
-                    metrics.recordParse({
-                      feedId: event.feedId,
-                      status:
-                        event.parseStatus === "fallback"
-                          ? ParseStatus.FALLBACK
-                          : ParseStatus.SUCCESS,
-                      durationMs: event.durationMs,
-                      articleCount: event.newItems,
-                    });
-                    break;
-                  case "feedNotModified":
-                    break;
-                  case "feedRateLimited":
-                    logger.warn("feed rate limited", {
-                      feedId: event.feedId,
-                      backoffMinutes: event.backoffMinutes,
-                    });
-                    metrics.recordFetchError({
-                      feedId: event.feedId,
-                      httpStatus: 429,
-                    });
-                    break;
-                  case "feedFetchFailed":
-                    logger.warn("feed fetch failed", {
-                      feedId: event.feedId,
-                      status: event.status,
-                      error: event.error,
-                    });
-                    if (event.status) {
-                      metrics.recordFetchError({
-                        feedId: event.feedId,
-                        httpStatus: event.status,
-                      });
-                    }
-                    break;
-                  case "feedParseFailed":
-                    logger.warn("feed parse failed", {
-                      feedId: event.feedId,
-                      error: event.error,
-                    });
-                    metrics.recordParse({
-                      feedId: event.feedId,
-                      status: ParseStatus.FAILURE,
-                      durationMs: 0,
-                      error: event.error,
-                    });
-                    break;
-                  case "feedDeactivated":
-                    logger.warn("feed deactivated after repeated errors", {
-                      feedId: event.feedId,
-                      consecutiveErrors: event.consecutiveErrors,
-                    });
-                    break;
-                }
-              },
-            };
-
-            const poller = createFeedPoller(d1, transport, observer, () =>
-              Date.now(),
-            );
-
-            const settled = await Promise.allSettled(
-              batch.map((feed) => poller.poll(feed)),
-            );
-
-            await metrics.flush();
-
-            return settled.map((s, j): FeedPollResult => {
-              if (s.status === "fulfilled") return s.value;
-              return {
-                feedId: batch[j].id,
-                feedTitle: batch[j].title ?? batch[j].feedUrl,
-                status: "error",
-                error: String(s.reason),
-              };
-            });
-          } catch (err) {
-            logger.error(`fetch-batch-${batchIndex} step failed`, {
-              batchIndex,
-              batchSize: batch.length,
-              error: err instanceof Error ? err.message : String(err),
-              stack: err instanceof Error ? err.stack : undefined,
-            });
-            throw err;
-          }
-        },
+      using analytics = asDisposable(env.ANALYTICS);
+      const metrics = createMetrics(
+        analytics as unknown as Env["ANALYTICS"],
+        (env.ANALYTICS_ENABLED as string) !== "false",
       );
-
-      for (const r of batchResults) {
-        if (r.status === "error") {
-          logger.error("feed fetch failed", {
-            feedId: r.feedId,
-            feedTitle: r.feedTitle,
-            error: r.error,
-          });
-        }
-        allResults.push(r);
-      }
+      metrics.recordCycleError({ error: errorMessage });
+      await metrics.flush();
+    } catch {
+      // Do not mask the domain or infrastructure failure with metrics delivery.
     }
 
-    // ------------------------------------------------------------------
-    // Final step — write cycle summary to D1 + emit Pipeline metrics
-    // ------------------------------------------------------------------
+    throw err;
+  }
+}
 
-    const newArticles = allResults.reduce(
-      (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
-      0,
-    );
-    const failedFeeds = allResults.filter((r) => r.status === "error").length;
+/** Coordinates selection and step placement while FeedPoller owns Feed policy. */
+async function pollWorkflow(
+  env: Env,
+  step: WorkflowStep,
+  triggerReason: PollTriggerReason,
+  cycleRunId: string,
+): Promise<void> {
+  // ------------------------------------------------------------------
+  // Step 1 — query feeds that are due for a check (or all active feeds when forced)
+  // ------------------------------------------------------------------
 
-    const detail = allResults.map((r) => {
-      if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
-      if (r.status === "not_modified") return `${r.feedTitle}: no change`;
-      return `${r.feedTitle}: error — ${r.error}`;
-    });
+  const force = triggerReason === "forced";
+  const stepName = force ? "get-all-active-feeds" : "get-due-feeds";
 
-    await step.do("record-cycle", async () => {
+  const { feeds: dueFeeds, totalActiveFeeds } = await step.do(
+    stepName,
+    async () => {
       try {
-        using d1 = asDisposable(this.env.DB);
-        using analytics = asDisposable(this.env.ANALYTICS);
-        const db = getDb(d1);
-        const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (this.env.ANALYTICS_ENABLED as string) !== "false",
-        );
-        const now = Date.now();
-
-        // Write per-cycle row to D1 so the metrics dashboard can query it
-        // without depending on Analytics Engine or an external API.
-        await db
-          .insert(cycleRuns)
-          .values({
-            id: String(now),
-            ranAt: now,
-            activeFeeds: totalActiveFeeds,
-            dueFeeds: dueFeeds.length,
-            checkedFeeds: allResults.length,
-            newItems: newArticles,
-            failedFeeds,
-          })
-          .onConflictDoNothing(); // guard against duplicate step execution
-
-        // Pipeline write for long-term analytics — batched with flush
-        metrics.recordCycle({
-          totalActiveFeeds,
-          dueFeeds: dueFeeds.length,
-          checkedFeeds: allResults.length,
-          newArticles,
-          failedFeeds,
-        });
-        await metrics.flush();
+        using d1 = asDisposable(env.DB);
+        const cycles = createPollingCycleManager(d1, () => Date.now());
+        return await cycles.begin(cycleRunId, triggerReason);
       } catch (err) {
-        logger.error("record-cycle step failed", {
+        logger.error("get-due-feeds step failed", {
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
         });
         throw err;
       }
+    },
+  );
 
-      return {
-        totalActiveFeeds,
-        dueFeeds: dueFeeds.length,
-        checkedFeeds: allResults.length,
-        newArticles,
-        failedFeeds,
-        feeds: detail,
-      };
-    });
+  logger.info("feed polling cycle starting", {
+    cycleRunId,
+    totalActiveFeeds,
+    dueFeeds: dueFeeds.length,
+  });
 
-    logger.info("feed polling cycle complete", {
-      totalActiveFeeds,
-      dueFeeds: dueFeeds.length,
-      checkedFeeds: allResults.length,
-      newArticles,
-      failedFeeds,
-      feeds: detail,
+  if (dueFeeds.length === 0) {
+    logger.info("no feeds due, skipping cycle", { cycleRunId });
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // Steps 2…N — one step per batch of FEEDS_PER_STEP feeds.
+  // Within each step, feeds are fetched concurrently to minimise wall time.
+  // Sequential steps each run in a fresh Worker invocation with a new budget.
+  // ------------------------------------------------------------------
+
+  for (let i = 0; i < dueFeeds.length; i += FEEDS_PER_STEP) {
+    const batch = dueFeeds.slice(i, i + FEEDS_PER_STEP);
+    const batchIndex = Math.floor(i / FEEDS_PER_STEP);
+
+    await step.do(`fetch-batch-${batchIndex}`, async () => {
+      try {
+        using d1 = asDisposable(env.DB);
+        using analytics = asDisposable(env.ANALYTICS);
+        const metrics = createMetrics(
+          analytics as unknown as Env["ANALYTICS"],
+          (env.ANALYTICS_ENABLED as string) !== "false",
+        );
+
+        const transport: FeedTransport = {
+          get(url, headers) {
+            return fetch(url, {
+              headers,
+              signal: AbortSignal.timeout(15000),
+            });
+          },
+        };
+
+        const observer: PollObserver = {
+          publish(event) {
+            switch (event.kind) {
+              case "feedPolled":
+                metrics.recordParse({
+                  feedId: event.feedId,
+                  status:
+                    event.parseStatus === "fallback"
+                      ? ParseStatus.FALLBACK
+                      : ParseStatus.SUCCESS,
+                  durationMs: event.durationMs,
+                  articleCount: event.newItems,
+                });
+                break;
+              case "feedNotModified":
+                break;
+              case "feedRateLimited":
+                metrics.recordFetchError({
+                  feedId: event.feedId,
+                  httpStatus: 429,
+                });
+                break;
+              case "feedFetchFailed":
+                if (event.status) {
+                  metrics.recordFetchError({
+                    feedId: event.feedId,
+                    httpStatus: event.status,
+                  });
+                }
+                break;
+              case "feedParseFailed":
+                metrics.recordParse({
+                  feedId: event.feedId,
+                  status: ParseStatus.FAILURE,
+                  durationMs: 0,
+                  error: event.error,
+                });
+                break;
+              case "feedDeactivated":
+                break;
+            }
+          },
+        };
+
+        const poller = createFeedPoller(d1, transport, observer, () =>
+          Date.now(),
+        );
+
+        const settled = await Promise.allSettled(
+          batch.map((feed) =>
+            poller.poll(feed, {
+              cycleRunId,
+              attemptId: attemptIdFor(cycleRunId, feed.id),
+            }),
+          ),
+        );
+
+        try {
+          await metrics.flush();
+        } catch (err) {
+          logger.warn("Feed metrics delivery failed", {
+            cycleRunId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        for (const result of settled) {
+          if (result.status === "fulfilled") {
+            logAttemptResult(cycleRunId, result.value);
+          }
+        }
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        if (rejected) throw rejected.reason;
+      } catch (err) {
+        logger.error(`fetch-batch-${batchIndex} step failed`, {
+          batchIndex,
+          batchSize: batch.length,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+        throw err;
+      }
     });
   }
+
+  // ------------------------------------------------------------------
+  // Final step: reconcile the durable Cycle Run, then emit optional metrics.
+  // ------------------------------------------------------------------
+
+  const summary = await step.do("record-cycle", async () => {
+    try {
+      using d1 = asDisposable(env.DB);
+      using analytics = asDisposable(env.ANALYTICS);
+      const metrics = createMetrics(
+        analytics as unknown as Env["ANALYTICS"],
+        (env.ANALYTICS_ENABLED as string) !== "false",
+      );
+      const cycles = createPollingCycleManager(d1, () => Date.now());
+      const summary = await cycles.complete(
+        cycleRunId,
+        dueFeeds.length,
+        totalActiveFeeds,
+      );
+
+      metrics.recordCycle({
+        totalActiveFeeds,
+        dueFeeds: dueFeeds.length,
+        checkedFeeds: summary.checkedFeeds,
+        newArticles: summary.newItems,
+        failedFeeds: summary.failedFeeds,
+      });
+      try {
+        await metrics.flush();
+      } catch (err) {
+        logger.warn("Cycle metrics delivery failed", {
+          cycleRunId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return summary;
+    } catch (err) {
+      logger.error("record-cycle step failed", {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      throw err;
+    }
+  });
+
+  logger.info("feed polling cycle complete", {
+    cycleRunId,
+    totalActiveFeeds,
+    selectedFeeds: dueFeeds.length,
+    checkedFeeds: summary.checkedFeeds,
+    newArticles: summary.newItems,
+    failedFeeds: summary.failedFeeds,
+    skippedFeeds: summary.skippedFeeds,
+  });
+}
+
+/** Emits one searchable terminal log for every durable Feed attempt. */
+function logAttemptResult(cycleRunId: string, result: FeedPollResult): void {
+  const context = {
+    cycleRunId,
+    attemptId: attemptIdFor(cycleRunId, result.feedId),
+    feedId: result.feedId,
+    feedTitle: result.feedTitle,
+    outcome: result.outcome,
+  };
+  if (result.outcome === "failed") {
+    logger.error("feed polling attempt completed", {
+      ...context,
+      errorClass: result.errorClass,
+      error: result.error,
+    });
+    return;
+  }
+  if (result.outcome === "rate_limited") {
+    logger.warn("feed polling attempt completed", context);
+    return;
+  }
+  logger.info("feed polling attempt completed", {
+    ...context,
+    ...((result.outcome === "new_items" || result.outcome === "unchanged") && {
+      newItems: result.newItems,
+    }),
+  });
+}
+
+/** Builds the durable logical attempt ID reused by Workflow step retries. */
+function attemptIdFor(cycleRunId: string, feedId: string): string {
+  return `${cycleRunId}:${feedId}`;
 }

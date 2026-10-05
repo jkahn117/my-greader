@@ -11,7 +11,19 @@
     }
   },
   "assets": {
-    "directory": "./public"
+    // Built React client (vite build → dist/client). Requests that do not
+    // match a file asset serve index.html so client-side routes deep-link.
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    // Dashboard JSON API and GReader routes stay on the Worker.
+    "run_worker_first": [
+      "/",
+      "/app/api/*",
+      "/reader/*",
+      "/api/*",
+      "/accounts/*",
+      "/auth/*"
+    ]
   },
   "d1_databases": [
     {
@@ -24,7 +36,7 @@
   "triggers": {
     "crons": [
       "*/30 * * * *", // feed fetcher
-      "0 3 * * 1" // weekly article cleanup (Mondays 03:00 UTC)
+      "0 3 * * 1" // weekly Item and polling-history cleanup (Mondays 03:00 UTC)
     ]
   },
   "vars": {
@@ -37,8 +49,12 @@
     // Set to "false" to disable all Analytics Engine metric writes and AE SQL dashboard queries.
     "ANALYTICS_ENABLED": "true"
   },
+  "secrets": {
+    "required": ["CF_ACCESS_AUD", "CF_ACCESS_ISSUER"]
+  },
   // Secrets — set via: wrangler secret put <NAME>
   // CF_ACCESS_AUD  — Cloudflare Access audience tag (JWT verification)
+  // CF_ACCESS_ISSUER — Exact HTTPS Access team origin, without a trailing slash
   // CF_API_TOKEN   — Cloudflare API token (Account Analytics:Read) for AE SQL dashboard queries
   // Metrics are written to Workers Analytics Engine (fire-and-forget, no R2 accumulation).
   // The dashboard queries D1 directly; AE data supplements with aggregate time-series.
