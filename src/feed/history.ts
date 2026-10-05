@@ -90,13 +90,18 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
             eq(feedPollAttempts.feedId, latestPerFeed.feedId),
             eq(feedPollAttempts.startedAt, latestPerFeed.latestStartedAt),
           ),
-        );
-      return new Map(
-        rows.map((row) => [
-          row.feedId,
-          { outcome: row.outcome, startedAt: row.startedAt },
-        ]),
-      );
+        )
+        .orderBy(desc(feedPollAttempts.id));
+      const latest = new Map<string, LatestFeedAttempt>();
+      for (const row of rows) {
+        if (!latest.has(row.feedId)) {
+          latest.set(row.feedId, {
+            outcome: row.outcome,
+            startedAt: row.startedAt,
+          });
+        }
+      }
+      return latest;
     },
 
     async listAttempts(feedId, cursor, limit) {
@@ -225,10 +230,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
               gte(feedPollAttempts.startedAt, since),
             ),
           )
-          .orderBy(
-            desc(feedPollAttempts.startedAt),
-            desc(feedPollAttempts.id),
-          )
+          .orderBy(desc(feedPollAttempts.startedAt), desc(feedPollAttempts.id))
           .limit(1);
         result.push({
           kind: row.kind ?? "unknown",

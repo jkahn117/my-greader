@@ -11,6 +11,8 @@ import {
   desc,
   eq,
   gt,
+  gte,
+  lt,
   inArray,
   isNotNull,
   isNull,
@@ -29,6 +31,7 @@ import {
   type FeedAttemptParserStatus,
 } from "../db/schema";
 import { getDb } from "../lib/db";
+import { zonedDays } from "./reading";
 
 const TIMELINE_CYCLE_LIMIT = 20;
 const METRICS_CYCLE_LIMIT = 48;
@@ -216,10 +219,7 @@ export function createActivityReader(
         .from(items)
         .innerJoin(subscriptions, eq(items.feedId, subscriptions.feedId))
         .where(
-          and(
-            eq(subscriptions.userId, userId),
-            gt(items.fetchedAt, cutoffMs),
-          ),
+          and(eq(subscriptions.userId, userId), gt(items.fetchedAt, cutoffMs)),
         ),
       db
         .select({ count: sql<number>`count(*)` })
@@ -262,7 +262,9 @@ export function createActivityReader(
     timestamp: number,
     timezone: string,
   ): Promise<OverviewPanels> {
-    const cutoffMs = timestamp - METRICS_WINDOW_MS;
+    const days = zonedDays(timestamp, 7, timezone);
+    const cutoffMs = days[0].start;
+    const windowEnd = days[days.length - 1].end;
     const latestPerFeed = db
       .select({
         feedId: feedPollAttempts.feedId,
@@ -298,7 +300,8 @@ export function createActivityReader(
             eq(itemState.userId, userId),
             eq(itemState.isRead, 1),
             isNotNull(itemState.readAt),
-            gt(itemState.readAt, cutoffMs),
+            gte(itemState.readAt, cutoffMs),
+            lt(itemState.readAt, windowEnd),
           ),
         ),
       db
@@ -322,7 +325,8 @@ export function createActivityReader(
             eq(itemState.userId, userId),
             eq(itemState.isRead, 1),
             isNotNull(itemState.readAt),
-            gt(itemState.readAt, cutoffMs),
+            gte(itemState.readAt, cutoffMs),
+            lt(itemState.readAt, windowEnd),
           ),
         )
         .groupBy(items.feedId, subscriptions.title, feeds.title)
@@ -349,8 +353,13 @@ export function createActivityReader(
             eq(subscriptions.feedId, feedPollAttempts.feedId),
             eq(subscriptions.userId, userId),
           ),
-        ),
-      db.select().from(cycleRuns).orderBy(desc(cycleRuns.ranAt)).limit(1),
+        )
+        .orderBy(desc(feedPollAttempts.id)),
+      db
+        .select()
+        .from(cycleRuns)
+        .orderBy(desc(cycleRuns.ranAt), desc(cycleRuns.id))
+        .limit(1),
       db
         .select({
           feedId: feeds.id,
@@ -365,10 +374,7 @@ export function createActivityReader(
         .where(
           and(
             eq(subscriptions.userId, userId),
-            or(
-              isNotNull(feeds.deactivatedAt),
-              gt(feeds.consecutiveErrors, 0),
-            ),
+            or(isNotNull(feeds.deactivatedAt), gt(feeds.consecutiveErrors, 0)),
           ),
         )
         .limit(NEEDS_ATTENTION_LIMIT),
@@ -389,13 +395,10 @@ export function createActivityReader(
       const day = dayFormat.format(new Date(row.readAt!));
       readCounts.set(day, (readCounts.get(day) ?? 0) + 1);
     }
-    const daily: ReadingDay[] = [];
-    for (let offset = 6; offset >= 0; offset--) {
-      const day = dayFormat.format(
-        new Date(timestamp - offset * 24 * 60 * 60 * 1000),
-      );
-      daily.push({ date: day, count: readCounts.get(day) ?? 0 });
-    }
+    const daily: ReadingDay[] = days.map(({ date }) => ({
+      date,
+      count: readCounts.get(date) ?? 0,
+    }));
 
     const feedHealth: OverviewPanels["feedHealth"] = {
       successful: 0,

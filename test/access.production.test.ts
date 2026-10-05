@@ -60,7 +60,7 @@ async function request(
 ): Promise<Response> {
   const context = createExecutionContext();
   const response = await worker.fetch(
-    new Request("http://localhost/app/access", {
+    new Request("http://localhost/app/api/tokens", {
       headers: token === undefined ? {} : { "Cf-Access-Jwt-Assertion": token },
     }),
     bindings,

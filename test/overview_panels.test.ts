@@ -9,6 +9,8 @@ import {
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { createActivityReader } from "../src/feed/activity";
+import { createFeedHistory } from "../src/feed/history";
 import { getDb } from "../src/lib/db";
 import {
   cycleRuns,
@@ -23,7 +25,7 @@ import {
 import type { OverviewPanelsResponse } from "../src/shared/dashboard-api";
 
 const BASE = "http://localhost";
-// DISPLAY_TIMEZONE is bound to America/Los_Angeles in vitest.config.ts.
+// Endpoint tests use UTC; direct projections also cover Los Angeles DST.
 
 async function fetchPanels(): Promise<OverviewPanelsResponse> {
   const req = new Request(`${BASE}/app/api/overview/panels`);
@@ -75,17 +77,15 @@ async function seedAttempt(
     feedId,
     startedAt,
     completedAt: status == null ? null : startedAt + 100,
-    outcome: (
-      status === null
-        ? null
-        : status === "ok"
-          ? (itemsAdded ?? 0) > 0
-            ? "new_items"
-            : "unchanged"
-          : status === "error"
-            ? "failed"
-            : status
-    ) as FeedAttemptOutcome | null,
+    outcome: (status === null
+      ? null
+      : status === "ok"
+        ? (itemsAdded ?? 0) > 0
+          ? "new_items"
+          : "unchanged"
+        : status === "error"
+          ? "failed"
+          : status) as FeedAttemptOutcome | null,
     newItems: itemsAdded ?? 0,
   });
 }
@@ -117,6 +117,53 @@ beforeEach(async () => {
 });
 
 describe("GET /app/api/overview/panels", () => {
+  it("keeps calendar buckets and totals aligned through DST", async () => {
+    const feedId = await seedFeed({});
+    const timestamp = Date.parse("2024-03-12T07:30:00Z");
+    await markRead("dev-user-id", feedId, Date.parse("2024-03-06T08:00:00Z"));
+    await markRead("dev-user-id", feedId, Date.parse("2024-03-06T07:59:59Z"));
+    await markRead("dev-user-id", feedId, Date.parse("2024-03-10T08:00:00Z"));
+    const body = await createActivityReader(env.DB).overviewPanels(
+      "dev-user-id",
+      timestamp,
+      "America/Los_Angeles",
+    );
+    expect(body.reading.daily.map((day) => day.date)).toEqual([
+      "2024-03-06",
+      "2024-03-07",
+      "2024-03-08",
+      "2024-03-09",
+      "2024-03-10",
+      "2024-03-11",
+      "2024-03-12",
+    ]);
+    expect(body.reading.total).toBe(2);
+    expect(
+      body.reading.daily.reduce((total, day) => total + day.count, 0),
+    ).toBe(2);
+    expect(body.reading.topFeeds[0]?.count).toBe(2);
+  });
+
+  it("resolves tied latest attempts consistently with history pagination", async () => {
+    const feedId = await seedFeed({});
+    await seedAttempt(feedId, "ok", 1000, 2);
+    const db = getDb(env.DB);
+    await db.update(feedAttempts).set({ id: "a" });
+    await db.insert(feedAttempts).values({
+      id: "z",
+      cycleRunId: `cycle-${feedId}-1000`,
+      feedId,
+      startedAt: 1000,
+      completedAt: 1100,
+      outcome: "failed",
+    });
+    const history = createFeedHistory(env.DB);
+    expect((await history.latestAttempts([feedId])).get(feedId)?.outcome).toBe(
+      "failed",
+    );
+    expect((await fetchPanels()).feedHealth.failed).toBe(1);
+  });
+
   it("fills sparse days with zero and buckets by display timezone", async () => {
     const feedId = await seedFeed({});
     const now = Date.now();
@@ -210,8 +257,8 @@ describe("GET /app/api/overview/panels", () => {
       running: 1,
       missing: 1,
     });
-    // Any in-progress attempt means the cycle reads as running.
-    expect(body.cycle.state).toBe("running");
+    // Older unfinished attempts do not override the latest durable Cycle status.
+    expect(body.cycle.state).toBe("completed");
   });
 
   it("reports completed, empty, and missing cycle lifecycles", async () => {
@@ -219,29 +266,33 @@ describe("GET /app/api/overview/panels", () => {
     // missing: no cycle rows
     expect((await fetchPanels()).cycle.state).toBe("missing");
 
-    await db
-      .insert(cycleRuns)
-      .values({
-        id: "r1",
-        ranAt: 1000,
-        checkedFeeds: 0,
-        status: "completed",
-        outcome: "empty",
-      });
+    await db.insert(cycleRuns).values({
+      id: "r1",
+      ranAt: 1000,
+      checkedFeeds: 0,
+      status: "completed",
+      outcome: "empty",
+    });
     expect((await fetchPanels()).cycle.state).toBe("empty");
 
-    await db
-      .insert(cycleRuns)
-      .values({
-        id: "r2",
-        ranAt: 2000,
-        checkedFeeds: 4,
-        status: "completed",
-        outcome: "completed",
-      });
+    await db.insert(cycleRuns).values({
+      id: "r2",
+      ranAt: 2000,
+      checkedFeeds: 4,
+      status: "completed",
+      outcome: "completed",
+    });
     const body = await fetchPanels();
     expect(body.cycle.state).toBe("completed");
     expect(body.cycle.checkedFeeds).toBe(4);
+
+    await db.insert(cycleRuns).values({
+      id: "r3",
+      ranAt: 3000,
+      status: "running",
+      outcome: null,
+    });
+    expect((await fetchPanels()).cycle.state).toBe("running");
   });
 
   it("lists needs-attention feeds with links and ignores plain backoff", async () => {
