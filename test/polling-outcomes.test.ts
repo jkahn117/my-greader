@@ -878,6 +878,7 @@ describe("Cycle Run outcomes", () => {
       } as unknown as Env,
       {
         instanceId,
+        workflowName: "feed-polling",
         timestamp: new Date(1_735_732_800_000),
         payload: { triggerReason },
       },
@@ -1090,6 +1091,7 @@ describe("Cycle Run outcomes", () => {
       { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
       {
         instanceId: "skipped-cycle",
+        workflowName: "feed-polling",
         timestamp: new Date(now),
         payload: { triggerReason: "scheduled" },
       },
@@ -1159,6 +1161,7 @@ describe("Cycle Run outcomes", () => {
     } as WorkflowStep;
     const event = {
       instanceId: "retry-cycle",
+      workflowName: "feed-polling",
       timestamp: new Date(now),
       payload: { triggerReason: "scheduled" as const },
     };
@@ -1261,6 +1264,7 @@ describe("Cycle Run outcomes", () => {
       { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
       {
         instanceId: "terminal-log-cycle",
+        workflowName: "feed-polling",
         timestamp: new Date(now),
         payload: { triggerReason: "scheduled" },
       },
@@ -1352,6 +1356,7 @@ describe("Cycle Run outcomes", () => {
         { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
         {
           instanceId: "mixed-batch-cycle",
+          workflowName: "feed-polling",
           timestamp: new Date(now),
           payload: { triggerReason: "scheduled" },
         },
@@ -1401,6 +1406,7 @@ describe("Cycle Run outcomes", () => {
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     const event = {
       instanceId: "diagnostic-cycle",
+      workflowName: "feed-polling",
       timestamp: new Date(now),
       payload: { triggerReason: "scheduled" as const },
     };
@@ -1503,6 +1509,7 @@ describe("Cycle Run outcomes", () => {
         { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
         {
           instanceId: "interrupted-cycle",
+          workflowName: "feed-polling",
           timestamp: new Date(now),
           payload: { triggerReason: "scheduled" },
         },

@@ -171,6 +171,7 @@ beforeEach(async () => {
       create,
       get: unsupportedWorkflowOperation,
       createBatch: unsupportedWorkflowOperation,
+      deleteBatch: unsupportedWorkflowOperation,
     },
   };
 });
