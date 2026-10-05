@@ -40,7 +40,7 @@ beforeEach(async () => {
 
 describe("Access middleware (dev mode)", () => {
   it("auto-provisions dev user and grants access", async () => {
-    const res = await fetch("/app/access");
+    const res = await fetch("/app/api/tokens");
     expect(res.status).toBe(200);
 
     // Dev user should have been created
@@ -52,8 +52,8 @@ describe("Access middleware (dev mode)", () => {
   });
 
   it("is idempotent — multiple requests do not create duplicate users", async () => {
-    await fetch("/app/access");
-    await fetch("/app/access");
+    await fetch("/app/api/tokens");
+    await fetch("/app/api/tokens");
 
     const db = getDb(env.DB);
     const allUsers = await db.select().from(users).all();

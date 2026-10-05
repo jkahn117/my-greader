@@ -3,11 +3,12 @@ import {
   WorkflowEvent,
   WorkflowStep,
 } from "cloudflare:workers";
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { eq, isNull, lt, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { logger } from "../lib/logger";
 import { createMetrics, ParseStatus } from "../lib/metrics";
-import { feeds, subscriptions, cycleRuns } from "../db/schema";
+import { feedAttempts, feeds, subscriptions, cycleRuns } from "../db/schema";
+import { dueFeedsQuery } from "../feed/eligibility";
 import {
   createFeedPoller,
   type FeedPollResult,
@@ -15,13 +16,17 @@ import {
   type PollObserver,
 } from "../feed/poll";
 
-// No per-run parameters needed — the Workflow always fetches all due feeds
-type Params = Record<string, never>;
+// `force` bypasses due-time eligibility (manual forced sync); deactivated
+// and unsubscribed feeds stay excluded either way.
+type Params = { force?: boolean };
 
 // Each feed fetch costs 2 subrequests (1 HTTP + 1 D1 write).
 // Sequential steps each get their own fresh subrequest budget (free plan: 50).
 // Concurrent fan-out within a step shares the budget, so batch size = floor(50 / 2) - safety margin.
 const FEEDS_PER_STEP = 20;
+
+// Per-feed attempt evidence retention window (~90 days).
+const ATTEMPT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // asDisposable
@@ -98,7 +103,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     try {
-      await this.#poll(step);
+      await this.#poll(step, event.payload?.force ?? false, event.instanceId);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -125,7 +130,11 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     }
   }
 
-  async #poll(step: WorkflowStep): Promise<void> {
+  async #poll(
+    step: WorkflowStep,
+    force: boolean,
+    runId: string,
+  ): Promise<void> {
     // ------------------------------------------------------------------
     // Step 1 — query feeds that are due for a check
     // ------------------------------------------------------------------
@@ -139,34 +148,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
           const now = Date.now();
 
           const [due, activeCount] = await db.batch([
-            db
-              .selectDistinct({
-                id: feeds.id,
-                feedUrl: feeds.feedUrl,
-                title: feeds.title,
-                htmlUrl: feeds.htmlUrl,
-                etag: feeds.etag,
-                lastModified: feeds.lastModified,
-                lastFetchedAt: feeds.lastFetchedAt,
-                consecutiveErrors: feeds.consecutiveErrors,
-                checkIntervalMinutes: feeds.checkIntervalMinutes,
-                lastNewItemAt: feeds.lastNewItemAt,
-              })
-              .from(feeds)
-              .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
-              .where(
-                and(
-                  isNull(feeds.deactivatedAt),
-                  or(
-                    isNull(feeds.lastFetchedAt),
-                    lte(
-                      sql`${feeds.lastFetchedAt} + ${feeds.checkIntervalMinutes} * 60000`,
-                      now,
-                    ),
-                  ),
-                ),
-              )
-              .orderBy(asc(sql`coalesce(${feeds.lastFetchedAt}, 0)`)),
+            dueFeedsQuery(db, now, force),
 
             db
               .select({ count: sql<number>`count(*)` })
@@ -303,7 +285,7 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
             );
 
             const settled = await Promise.allSettled(
-              batch.map((feed) => poller.poll(feed)),
+              batch.map((feed) => poller.poll(feed, runId)),
             );
 
             await metrics.flush();
@@ -345,15 +327,20 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
     // Final step — write cycle summary to D1 + emit Pipeline metrics
     // ------------------------------------------------------------------
 
-    const newArticles = allResults.reduce(
+    // Skipped results (deactivated mid-cycle) count as neither success
+    // nor failure — only attempted feeds enter the cycle summary.
+    const attempted = allResults.filter((r) => r.status !== "skipped");
+    const newArticles = attempted.reduce(
       (sum, r) => sum + (r.status === "ok" ? r.newItems : 0),
       0,
     );
-    const failedFeeds = allResults.filter((r) => r.status === "error").length;
+    const failedFeeds = attempted.filter((r) => r.status === "error").length;
 
     const detail = allResults.map((r) => {
       if (r.status === "ok") return `${r.feedTitle}: +${r.newItems}`;
       if (r.status === "not_modified") return `${r.feedTitle}: no change`;
+      if (r.status === "skipped")
+        return `${r.feedTitle}: skipped (deactivated)`;
       return `${r.feedTitle}: error — ${r.error}`;
     });
 
@@ -369,19 +356,26 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
         const now = Date.now();
 
         // Write per-cycle row to D1 so the metrics dashboard can query it
-        // without depending on Analytics Engine or an external API.
+        // without depending on Analytics Engine or an external API. The
+        // workflow instance id doubles as the cycle-run id so feed
+        // attempts can link back durably.
         await db
           .insert(cycleRuns)
           .values({
-            id: String(now),
+            id: runId,
             ranAt: now,
             activeFeeds: totalActiveFeeds,
             dueFeeds: dueFeeds.length,
-            checkedFeeds: allResults.length,
+            checkedFeeds: attempted.length,
             newItems: newArticles,
             failedFeeds,
           })
           .onConflictDoNothing(); // guard against duplicate step execution
+
+        // Retain ~90 days of per-feed attempt evidence.
+        await db
+          .delete(feedAttempts)
+          .where(lt(feedAttempts.startedAt, now - ATTEMPT_RETENTION_MS));
 
         // Pipeline write for long-term analytics — batched with flush
         metrics.recordCycle({

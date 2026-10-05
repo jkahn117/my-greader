@@ -62,13 +62,16 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
 
 ### Generation
 
-1. Authenticated user visits `/app` (Access-protected)
+1. Authenticated user visits `/app/access` (Access-protected React page)
 2. Enters a token name (e.g. "Current on iPhone") and clicks Generate
-3. `POST /tokens/generate`:
+3. `POST /app/api/tokens` — uses `generateApiToken` in `src/lib/api-tokens.ts`:
    - Worker generates 32 cryptographically random bytes encoded as a 64-char hex string
    - SHA-256 hashes it and stores the hash in `api_tokens`
-   - Returns the **raw token once** in the htmx response fragment — never stored
-4. User copies raw token into Current's password field
+   - Returns the **raw token once** (`no-store` JSON) — never stored, logged,
+     or returned by any later read (`GET /app/api/tokens` exposes only
+     name, created, coarse last-used, and revocation state)
+4. User copies raw token into Current's password field (the page also shows
+   the FreshRSS connection settings: server URL = this origin, username = email)
 
 ### Usage (GReader ClientLogin)
 
@@ -81,15 +84,18 @@ Body: Email=user@example.com&Passwd=<raw-token>
 3. On match: returns Auth=<raw-token> (echoed back)
 4. All subsequent GReader requests use:
    Authorization: GoogleLogin auth=<raw-token>
-5. Each request: hash lookup + last_used_at update
+5. Each request: hash lookup; last_used_at is refreshed only when older than
+   an hour (LAST_USED_RESOLUTION_MS), so "last used" is coarse by design
 ```
 
 ### Revocation
 
-1. User visits `/app`, sees active tokens with name + last used date
-2. Clicks Revoke
-3. `DELETE /tokens/:id` sets `revoked_at = Date.now()` — ownership verified against `userId`
-4. htmx removes the row from the UI via `outerHTML` swap
+1. User visits `/app/access`, sees tokens with name, created, last used, and state
+2. Clicks Revoke, then confirms the named token inline
+3. `DELETE /app/api/tokens/:id` sets
+   `revoked_at = Date.now()` — ownership verified against `userId`; another
+   User's token id returns 404 and is untouched
+4. The route loader re-runs and the row shows as Revoked
 5. Any subsequent GReader request with that token receives `401 Unauthorized`
 
 ---
@@ -100,9 +106,10 @@ Body: Email=user@example.com&Passwd=<raw-token>
 |--------|------|------|---------|
 | GET | `/app` | Cloudflare Access | Token management UI (Access tab) |
 | GET | `/app/feeds` | Cloudflare Access | Feed management UI (Feed tab) |
-| POST | `/tokens/generate` | Cloudflare Access | Generate new API token |
-| DELETE | `/tokens/:id` | Cloudflare Access | Revoke token |
-| POST | `/import` | Cloudflare Access | OPML feed import |
+| GET | `/app/api/tokens` | Cloudflare Access | List tokens + connection info (JSON) |
+| POST | `/app/api/tokens` | Cloudflare Access | Generate new API token (JSON, raw value once) |
+| DELETE | `/app/api/tokens/:id` | Cloudflare Access | Revoke token (JSON) |
+| POST | `/app/api/import` | Cloudflare Access | OPML feed import |
 | GET | `/auth/logout` | None | Redirect to Access logout URL |
 | POST | `/accounts/ClientLogin` | None (validates token) | GReader auth entry point |
 | GET/POST | `/reader/*` | API token header | All GReader API endpoints |

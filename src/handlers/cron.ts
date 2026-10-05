@@ -15,7 +15,8 @@ export async function scheduled(
 ): Promise<void> {
   switch (event.cron) {
     case "*/30 * * * *":
-      return triggerFeedPollingWorkflow(env);
+      await triggerFeedPollingWorkflow(env);
+      return;
     case "0 3 * * 1":
       await purgeRevokedTokens(env);
       return purgeOldItems(env);
@@ -28,10 +29,19 @@ export async function scheduled(
 // Trigger the FeedPollingWorkflow — replaces the old inline fetchFeeds loop
 // ---------------------------------------------------------------------------
 
-export async function triggerFeedPollingWorkflow(env: Env): Promise<void> {
+export async function triggerFeedPollingWorkflow(
+  env: Env,
+  opts?: { force?: boolean },
+): Promise<string> {
   const logger = createLogger({ cron: "triggerFeedPollingWorkflow" });
-  const instance = await env.FEED_POLLING_WORKFLOW.create();
-  logger.info("feed polling workflow started", { instanceId: instance.id });
+  const instance = await env.FEED_POLLING_WORKFLOW.create({
+    params: { force: opts?.force === true },
+  });
+  logger.info("feed polling workflow started", {
+    instanceId: instance.id,
+    force: opts?.force === true,
+  });
+  return instance.id;
 }
 
 // ---------------------------------------------------------------------------

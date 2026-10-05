@@ -21,9 +21,12 @@ export interface SubRow {
   htmlUrl: string | null;
   folder: string | null;
   lastFetchedAt: number | null;
+  lastSuccessfulAt: number | null;
+  lastStatus: string | null;
   consecutiveErrors: number;
   lastError: string | null;
   deactivatedAt: number | null;
+  deactivatedReason: string | null;
   checkIntervalMinutes: number;
   lastNewItemAt: number | null;
 }
@@ -100,9 +103,12 @@ export function createSubscriptionLifecycle(
     htmlUrl: feeds.htmlUrl,
     folder: subscriptions.folder,
     lastFetchedAt: feeds.lastFetchedAt,
+    lastSuccessfulAt: feeds.lastSuccessfulAt,
+    lastStatus: feeds.lastStatus,
     consecutiveErrors: feeds.consecutiveErrors,
     lastError: feeds.lastError,
     deactivatedAt: feeds.deactivatedAt,
+    deactivatedReason: feeds.deactivatedReason,
     checkIntervalMinutes: feeds.checkIntervalMinutes,
     lastNewItemAt: feeds.lastNewItemAt,
   };

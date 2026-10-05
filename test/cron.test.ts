@@ -12,7 +12,7 @@ import {
 } from "../src/feed/poll";
 import { purgeOldItems } from "../src/handlers/cron";
 import { getDb } from "../src/lib/db";
-import { feeds, items, itemState, users } from "../src/db/schema";
+import { feedAttempts, feeds, items, itemState, users } from "../src/db/schema";
 import { deriveItemId } from "../src/lib/crypto";
 
 // ---------------------------------------------------------------------------
@@ -105,6 +105,7 @@ async function seedUser() {
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM item_state");
   await env.DB.exec("DELETE FROM subscriptions");
+  await env.DB.exec("DELETE FROM feed_attempts");
   await env.DB.exec("DELETE FROM items");
   await env.DB.exec("DELETE FROM feeds");
   await env.DB.exec("DELETE FROM users");
@@ -130,6 +131,29 @@ describe("FeedPoller", () => {
     ...overrides,
   });
 
+  it("skips a feed deactivated after selection (in-flight fence)", async () => {
+    const transport = mockTransport(RSS_FEED);
+    const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
+      Date.now(),
+    );
+    const feedId = await seedFeed("https://example.com/feed.xml");
+    const db = getDb(env.DB);
+    await db
+      .update(feeds)
+      .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
+      .where(eq(feeds.id, feedId));
+
+    const result = await poller.poll(feedRow({ id: feedId }));
+
+    expect(result.status).toBe("skipped");
+    expect(transport.get).not.toHaveBeenCalled();
+
+    const attempts = await db.select().from(feedAttempts).all();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe("skipped");
+    expect(attempts[0].feedId).toBe(feedId);
+  });
+
   it("parses RSS and stores items", async () => {
     const transport = mockTransport(RSS_FEED);
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
@@ -145,6 +169,14 @@ describe("FeedPoller", () => {
     expect(stored).toHaveLength(2);
     expect(stored.map((i) => i.title)).toContain("Article One");
     expect(stored.map((i) => i.title)).toContain("Article Two");
+
+    // The poll writes one terminal attempt row and items point back to it.
+    const attempts = await db.select().from(feedAttempts).all();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe("ok");
+    expect(attempts[0].itemsAdded).toBe(2);
+    expect(attempts[0].parserState).toBe("success");
+    expect(stored.every((i) => i.attemptId === attempts[0].id)).toBe(true);
   });
 
   it("parses Atom feeds", async () => {

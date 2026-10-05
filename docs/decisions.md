@@ -71,7 +71,13 @@ personal access tokens.
 
 ---
 
-## Why Hono + htmx (not a SPA)
+## Why Hono + htmx (not a SPA) — superseded
+
+> Superseded by issue #42: the dashboard grew per-user feed analytics and
+> client-side state (subscription workspace, attempt history, reading
+> metrics), so the management UI moved to a React SPA (Vite + TanStack
+> Router + shadcn) served from the same Worker's assets. Hono remains the
+> server router; the htmx UI was removed in issue #50.
 
 The management UI has two screens and a handful of interactions. Hono's JSX renderer runs
 server-side in the Worker with no client bundle. htmx handles dynamic interactions (token
@@ -84,9 +90,9 @@ complex client-side state.
 
 ## Why Workers static assets (not Pages)
 
-Since the UI is minimal (server-rendered HTML + vendored htmx.min.js + compiled CSS), there is no
-need for a separate static site deployment. Workers static assets serves `./public` directly
-alongside the Worker — single deployment, single wrangler.jsonc.
+The built React client (`dist/client`) and shared static files (`./public`) are served as
+Workers static assets alongside the Worker — single deployment, single wrangler.jsonc. The
+`not_found_handling: single-page-application` fallback serves `index.html` for client routes.
 
 ---
 
