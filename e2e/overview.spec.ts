@@ -20,10 +20,11 @@ test("overview summary cards appear in the required order", async ({
 }) => {
   await page.goto("/app/overview");
   const cards = page.locator("[data-slot='card']");
-  await expect(cards.nth(0)).toContainText("Feeds");
-  await expect(cards.nth(1)).toContainText("New items");
+  await expect(cards.nth(0)).toContainText("Your Feeds");
+  await expect(cards.nth(1)).toContainText("New Items");
   await expect(cards.nth(2)).toContainText("Items marked read");
-  await expect(cards.nth(3)).toContainText("Needs attention");
+  await expect(cards.nth(3)).toContainText("Feeds needing attention");
+  await expect(cards.nth(3)).toContainText("rate limited");
 });
 
 test("overview panels: reading, feed health, needs attention — names and values", async ({
@@ -45,8 +46,8 @@ test("overview panels: reading, feed health, needs attention — names and value
   await expect(health).toBeVisible();
   await expect(attention).toBeVisible();
 
-  // Reading panel: three items marked read in window; Alpha News tops the list.
-  await expect(reading).toContainText("Most marked read");
+  // Reading panel: violet chart + per-feed top list; Alpha News tops it.
+  await expect(reading).toContainText("Items marked read");
   await expect(
     reading.getByRole("link", { name: "Alpha News" }),
   ).toHaveAttribute("href", "/app/feeds/e2e-feed-active");
@@ -59,12 +60,19 @@ test("overview panels: reading, feed health, needs attention — names and value
   // Latest cycle lifecycle from the seeded run.
   await expect(health).toContainText("cycle completed");
 
-  // Needs attention links to feed detail; failing + deactivated seeds.
+  // Needs attention links to feed detail with kind pills; failing +
+  // rate-limited + auto-deactivated seeds, plus the paused footnote.
   const betaLink = attention.getByRole("link", { name: "Beta Blog" });
   await expect(betaLink).toHaveAttribute("href", "/app/feeds/e2e-feed-failing");
   await expect(
     attention.getByRole("link", { name: "Gamma Gazette" }),
   ).toBeVisible();
+  await expect(
+    attention.getByRole("link", { name: "Delta Daily" }),
+  ).toHaveAttribute("href", "/app/feeds/e2e-feed-limited");
+  await expect(attention).toContainText("Rate limited");
+  await expect(attention).toContainText("Auto-deactivated");
+  await expect(attention).toContainText("manually paused");
 });
 
 test("overview panels stack reading → health → attention on mobile", async ({
@@ -116,5 +124,6 @@ test("dashboard JSON endpoint is not intercepted by the SPA fallback", async ({
   expect(body).toHaveProperty("feedCount");
   expect(body).toHaveProperty("newItemsLast7Days");
   expect(body).toHaveProperty("markedReadLast7Days");
-  expect(body).toHaveProperty("feedsNeedingAttention");
+  expect(body).toHaveProperty("attention");
+  expect(body).toHaveProperty("latestCycle");
 });

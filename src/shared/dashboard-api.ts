@@ -6,6 +6,20 @@
  * physical rows or credentials.
  */
 
+/** Breakdown of feeds needing attention, by evidence kind. */
+export interface AttentionSummary {
+  /** Rate-limited + failing + auto-deactivated; excludes manual pauses. */
+  total: number;
+  /** Latest check was HTTP 429. */
+  rateLimited: number;
+  /** Active feed with a persisted error streak. */
+  failing: number;
+  /** Deactivated automatically or for an unknown/legacy reason. */
+  autoDeactivated: number;
+  /** Manually paused feeds — deliberately excluded from `total`. */
+  manuallyPaused: number;
+}
+
 /** GET /app/api/overview — summary card totals for the authenticated user. */
 export interface OverviewResponse {
   /** Total subscribed feeds (includes deactivated subscriptions). */
@@ -18,8 +32,10 @@ export interface OverviewResponse {
   newItemsLast7Days: number;
   /** Current read item_state rows whose latest read receipt was in the past 7 elapsed days. */
   markedReadLast7Days: number;
-  /** Feeds deactivated or with a non-zero persisted error streak. */
-  feedsNeedingAttention: number;
+  /** Attention counts, split by kind (see AttentionSummary). */
+  attention: AttentionSummary;
+  /** Latest polling-cycle lifecycle, for the page-level subtitle. */
+  latestCycle: CycleData;
   /** IANA timezone used for day-boundary display (DISPLAY_TIMEZONE). */
   timezone: string;
   /** Server time (epoch ms) when the response was generated. */
@@ -60,11 +76,16 @@ export interface CycleData {
   checkedFeeds: number | null;
 }
 
+/** Why a feed needs attention — drives the status pill, not color alone. */
+export type AttentionKind = "rate_limited" | "failing" | "auto_deactivated";
+
 /** One feed needing attention, linked to its detail page. */
 export interface AttentionFeed {
   feedId: string;
   title: string | null;
-  reason: string;
+  kind: AttentionKind;
+  /** Plain-language evidence line (status, streak, last error). */
+  detail: string;
 }
 
 /** GET /app/api/overview/panels — the panels beneath the summary cards. */
@@ -73,6 +94,8 @@ export interface OverviewPanelsResponse {
   feedHealth: FeedHealthData;
   cycle: CycleData;
   needsAttention: AttentionFeed[];
+  /** Manually paused feeds — a footnote, never counted as failures. */
+  manuallyPaused: number;
   /** Optional Analytics Engine projection — degrades independently. */
   analyticsEngine:
     | { status: "ok"; trend30d: { day: string; newArticles: number }[] }

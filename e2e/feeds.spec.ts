@@ -18,7 +18,7 @@ test("feeds workspace lists subscriptions and filters them", async ({
       .getByRole("cell", { name: "Failing", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("cell", { name: "Deactivated", exact: true }),
+    page.getByRole("cell", { name: "Deactivated", exact: true }).first(),
   ).toBeVisible();
 
   // search narrows the list

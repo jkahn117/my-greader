@@ -5,11 +5,11 @@
    Palette: blue for actions/ingestion, violet for reading, amber for
    actionable warnings, red for failures / automatic deactivation. */
 @theme {
-  /* Neutral background / surface colors */
-  --color-background:          oklch(1 0 0);
-  --color-foreground:          oklch(0.145 0 0);
+  /* Cool gray surfaces behind white cards (design rev05) */
+  --color-background:          oklch(0.955 0.005 256);
+  --color-foreground:          oklch(0.21 0.006 286);
   --color-card:                oklch(1 0 0);
-  --color-card-foreground:     oklch(0.145 0 0);
+  --color-card-foreground:     oklch(0.21 0.006 286);
 
   /* Muted / secondary surfaces */
   --color-muted:               oklch(0.97 0 0);
@@ -47,6 +47,12 @@
   /* Destructive / failure — red */
   --color-destructive:         oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
+
+  /* Graphite navigation rail */
+  --color-sidebar:             oklch(0.18 0.015 270);
+  --color-sidebar-foreground:  oklch(0.985 0 0);
+  --color-sidebar-muted:       oklch(0.75 0.01 270);
+  --color-sidebar-accent:      oklch(0.27 0.02 270);
 }
 
 /* Apply background + text defaults to the page */

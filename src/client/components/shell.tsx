@@ -1,60 +1,19 @@
 /** @jsxImportSource react */
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import {
-  NavigationMenu,
-  NavigationMenuItem,
-  NavigationMenuLink,
-  NavigationMenuList,
-} from "./ui/navigation-menu";
-
-const NAV_ITEMS = [
-  { to: "/overview", label: "Overview" },
-  { to: "/feeds", label: "Feeds" },
-  { to: "/reading", label: "Reading" },
-  { to: "/access", label: "Access" },
-] as const;
+import { Outlet } from "@tanstack/react-router";
+import { AppSidebar } from "./app-sidebar";
 
 /**
- * Management shell — header with primary navigation; the React client's
- * persistent frame for every dashboard route.
+ * Management shell — graphite navigation rail (design rev05) framing every
+ * dashboard route; ~1200px content column on cool gray surfaces.
  */
 export function Shell() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const dashboardPath = pathname.replace(/^\/app(?=\/|$)/, "");
-
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-3">
-          <a href="/app" className="text-base font-semibold text-foreground">
-            my-greader
-          </a>
-          <a
-            href="/auth/logout"
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
-            Log out
-          </a>
+      <AppSidebar />
+      <main className="lg:pl-60">
+        <div className="mx-auto max-w-[1200px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <Outlet />
         </div>
-        <nav aria-label="Dashboard" className="mx-auto max-w-5xl px-2 pb-1">
-          <NavigationMenu viewport={false}>
-            <NavigationMenuList>
-              {NAV_ITEMS.map((item) => (
-                <NavigationMenuItem key={item.to}>
-                  <NavigationMenuLink
-                    asChild
-                    active={dashboardPath.startsWith(item.to)}
-                  >
-                    <Link to={item.to}>{item.label}</Link>
-                  </NavigationMenuLink>
-                </NavigationMenuItem>
-              ))}
-            </NavigationMenuList>
-          </NavigationMenu>
-        </nav>
-      </header>
-      <main className="mx-auto max-w-5xl px-4 py-8">
-        <Outlet />
       </main>
     </div>
   );
