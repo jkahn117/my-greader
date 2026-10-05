@@ -51,8 +51,7 @@ handler.get("/app/api/tokens", async (c) => {
         serverUrl: new URL(c.req.url).origin,
         username: c.get("email"),
       },
-      lastUsedResolutionMinutes:
-        API_TOKEN_USAGE_WRITE_INTERVAL_MS / 60_000,
+      lastUsedResolutionMinutes: API_TOKEN_USAGE_WRITE_INTERVAL_MS / 60_000,
       generatedAt: Date.now(),
     };
     logger.info("tokens list served", { tokenCount: rows.length });
