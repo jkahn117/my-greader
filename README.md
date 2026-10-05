@@ -13,9 +13,9 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
   (FreshRSS mode)  ◄─────┤   stream/contents  ◄── D1 items + item_state        │
                          │   edit-tag (read)  ──► D1 item_state.read_at        │
                          │                                                       │
-  Browser (you)    ──────┤  /app/*   Management UI (React SPA + /app/api/*) │
+  Browser (you)    ──────┤  /app/*   Management UI (Hono + htmx + Tailwind)    │
                          │   auth: Cloudflare Access JWT                        │
-  Cloudflare Access      │   /app/access  — generate / revoke API tokens       │
+  Cloudflare Access      │   /app/tokens  — generate / revoke API tokens       │
   (SSO / email OTP) ─────┤   /app/metrics — dashboard (see below)              │
                          │                                                       │
                          │  Cron  */30 * * * *  ──► FeedPollingWorkflow        │
@@ -67,8 +67,8 @@ A personal RSS aggregator backend running on Cloudflare Workers. Exposes a Googl
 ## Stack
 
 - **Runtime**: Cloudflare Workers + D1 (SQLite) + Workflows + static assets
-- **Router**: Hono; client routing by TanStack Router
-- **UI**: React SPA (Vite + shadcn components) + Tailwind CSS v4
+- **Router**: Hono with JSX server-rendering
+- **UI**: htmx (vendored) + Tailwind CSS v4 — no React
 - **Feed parsing**: rss-parser
 - **Auth**: Cloudflare Access (management UI) + SHA-256 API tokens (GReader clients)
 - **Schema / migrations**: Drizzle ORM
@@ -81,7 +81,7 @@ In Current: **Settings → Sync → FreshRSS**
 ```
 Server URL:  https://<your-worker-domain>
 Username:    <your email>
-Password:    <API token generated on /app/access>
+Password:    <API token generated from /app/tokens>
 ```
 
 Current treats this Worker as a FreshRSS instance. It speaks the standard GReader protocol — no FreshRSS installation required.
@@ -221,12 +221,11 @@ pnpm deploy     # compile CSS + wrangler deploy
 
 | Script            | Description                                                      |
 | ----------------- | ---------------------------------------------------------------- |
-| `pnpm dev`        | Compile CSS, start local dev server (Worker + React client)      |
+| `pnpm dev`        | Compile CSS, start local Worker dev server                       |
 | `pnpm dev:css`    | Watch mode CSS compilation                                       |
-| `pnpm build`      | Compile CSS + client bundle (dist/client) + Worker (dist/my_greader) |
+| `pnpm build`      | Compile CSS + production Worker build (no deploy)                |
 | `pnpm deploy`     | Build + deploy to Cloudflare                                     |
-| `pnpm test`       | Run vitest suite (Worker request/D1 seam)                          |
-| `pnpm test:browser` | Run Playwright browser acceptance suite (starts dev server)   |
+| `pnpm test`       | Run vitest suite                                                 |
 | `pnpm cf-typegen` | Regenerate `worker-configuration.d.ts` from wrangler config      |
 | `pnpm studio`     | Open Drizzle Studio against local D1 (run `wrangler dev` first)  |
 | `pnpm format`     | Format TypeScript source files with Oxfmt                        |

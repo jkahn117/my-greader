@@ -4,8 +4,8 @@
 
 - **Runtime**: Cloudflare Workers with static assets (no Pages)
 - **Auth**: Cloudflare Access (JWT verification, no sessions/KV)
-- **Router**: Hono (worker) + TanStack Router (client)
-- **UI**: React SPA (Vite + shadcn components), Tailwind CSS v4
+- **Router**: Hono with JSX renderer
+- **UI**: htmx (vendored, no CDN), Tailwind CSS v4, shadcn-aesthetic via CSS (no React)
 - **Database**: Cloudflare D1 (SQLite), Drizzle ORM (schema + migrations + queries)
 - **Feed parsing**: rss-parser
 

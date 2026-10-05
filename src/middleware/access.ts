@@ -205,7 +205,7 @@ function b64urlToUtf8(b64url: string): string {
 }
 
 /** Decodes a base64url string to raw bytes */
-function b64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
+function b64urlToBytes(b64url: string): Uint8Array {
   const bytes = Uint8Array.from(
     atob(b64url.replace(/-/g, "+").replace(/_/g, "/")),
     (c) => c.charCodeAt(0),

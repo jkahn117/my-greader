@@ -8,7 +8,7 @@ Current connects to this backend using its **FreshRSS** sync option. In the app:
 Settings → Sync → FreshRSS
 Server URL: https://reader.yourdomain.com
 Username:   user@example.com
-Password:   <API token generated on /app/access>
+Password:   <API token generated from /tokens UI>
 ```
 
 Current does not know or care that FreshRSS is not actually running. It sends standard GReader API requests to the provided URL and this Worker responds with the expected shapes.
