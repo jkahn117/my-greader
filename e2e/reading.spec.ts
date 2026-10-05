@@ -1,16 +1,9 @@
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+import { seed } from "./seed";
 
-const seedFile = fileURLToPath(new URL("./seed-feeds.sql", import.meta.url));
+test.beforeEach(() => seed("seed-feeds.sql"));
 
-test.beforeAll(() => {
-  execSync(
-    `pnpm exec wrangler d1 execute rss-reader --local --file ${seedFile}`,
-    { stdio: "pipe", env: process.env },
-  );
-});
-
+// Scope per-Feed assertions to the reading metrics rather than navigation links.
 const feedTable = (page: import("@playwright/test").Page) =>
   page.getByRole("table", { name: "Marked read by feed" });
 
@@ -19,9 +12,10 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
 }) => {
   await page.goto("/app/reading");
   await expect(page.getByRole("heading", { name: "Reading" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "7 days" }),
-  ).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "7 days" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 
   const total = page.locator("[data-slot='card']").filter({
     hasText: "Items marked read",
@@ -75,9 +69,10 @@ test("time window control widens the window via the keyboard", async ({
 
   // unsupported windows fall back to the default
   await page.goto("/app/reading?days=99");
-  await expect(
-    page.getByRole("link", { name: "7 days" }),
-  ).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "7 days" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });
 
 test("per-feed rows link to the feed detail page", async ({ page }) => {

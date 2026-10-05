@@ -1,7 +1,7 @@
 -- Seed data for the Access (API token) browser tests.
 -- Deterministic: wipes the dev user's tokens first; touches only api_tokens.
 
-INSERT OR REPLACE INTO users (id, email, created_at) VALUES ('dev-user-id', 'dev@localhost', 0);
+INSERT INTO users (id, email, created_at) VALUES ('dev-user-id', 'dev@localhost', 0) ON CONFLICT DO NOTHING;
 DELETE FROM api_tokens WHERE user_id = 'dev-user-id';
 
 INSERT INTO api_tokens (id, user_id, name, token_hash, created_at, last_used_at, revoked_at) VALUES

@@ -1,31 +1,21 @@
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+import { seed } from "./seed";
 
-const seedFile = fileURLToPath(new URL("./seed-feeds.sql", import.meta.url));
-
-test.beforeAll(() => {
-  execSync(
-    `pnpm exec wrangler d1 execute rss-reader --local --file ${seedFile}`,
-    { stdio: "pipe", env: process.env },
-  );
-});
+test.beforeEach(() => seed("seed-feeds.sql"));
 
 test("feeds workspace lists subscriptions and filters them", async ({
   page,
 }) => {
   await page.goto("/app/feeds");
   await expect(page.getByRole("link", { name: "Alpha News" })).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Beta Blog" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "Gamma Gazette" }),
-  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Beta Blog" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Gamma Gazette" })).toBeVisible();
 
   // status labels present (not color alone)
   await expect(
-    page.getByRole("cell", { name: "Failing", exact: true }),
+    page
+      .getByRole("row", { name: /Beta Blog/ })
+      .getByRole("cell", { name: "Failing", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("cell", { name: "Deactivated", exact: true }),
@@ -41,9 +31,7 @@ test("feeds workspace lists subscriptions and filters them", async ({
   // status filter narrows further
   await page.getByLabel("Search subscriptions").fill("");
   await page.getByLabel("Filter by status").selectOption("deactivated");
-  await expect(
-    page.getByRole("link", { name: "Gamma Gazette" }),
-  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Gamma Gazette" })).toBeVisible();
   await expect(
     page.getByRole("link", { name: "Alpha News" }),
   ).not.toBeVisible();
@@ -71,7 +59,11 @@ test("OPML import reports outcomes", async ({ page }) => {
   </body></opml>`;
   await page
     .getByLabel("OPML file")
-    .setInputFiles({ name: "feeds.opml", mimeType: "text/xml", buffer: Buffer.from(opml) });
+    .setInputFiles({
+      name: "feeds.opml",
+      mimeType: "text/xml",
+      buffer: Buffer.from(opml),
+    });
   await page.getByRole("button", { name: "Import OPML" }).click();
   await expect(page.getByRole("status")).toContainText("1 imported");
   await expect(page.getByRole("status")).toContainText("1 duplicate");

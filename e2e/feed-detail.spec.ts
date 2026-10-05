@@ -1,22 +1,14 @@
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+import { seed } from "./seed";
 
-const seedFile = fileURLToPath(new URL("./seed-feeds.sql", import.meta.url));
+test.beforeEach(() => seed("seed-feeds.sql"));
 
-test.beforeAll(() => {
-  execSync(
-    `pnpm exec wrangler d1 execute rss-reader --local --file ${seedFile}`,
-    { stdio: "pipe", env: process.env },
-  );
-});
-
-test("feed detail loads directly and shows current state", async ({
-  page,
-}) => {
+test("feed detail loads directly and shows current state", async ({ page }) => {
   await page.goto("/app/feeds/e2e-feed-failing");
   await expect(page.getByRole("heading", { name: "Beta Blog" })).toBeVisible();
-  await expect(page.getByText("Failing", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("Failing", { exact: true }).first(),
+  ).toBeVisible();
   await expect(page.getByText("Consecutive errors")).toBeVisible();
   await expect(page.getByText("Backoff")).toBeVisible();
   await expect(page.getByText("Backload")).toBeVisible();
@@ -35,9 +27,7 @@ test("deactivated feed shows its reason state and reactivates", async ({
 
   await page.getByRole("button", { name: "Reactivate" }).click();
   await expect(page.getByRole("status")).toContainText("reactivated");
-  await expect(
-    page.getByRole("button", { name: "Deactivate" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Deactivate" })).toBeVisible();
 });
 
 test("deactivate is keyboard operable and refreshes state", async ({
@@ -63,9 +53,7 @@ test("attempt history shows outcomes, expansion, and copy control", async ({
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/app/feeds/e2e-feed-active");
   await expect(page.getByText("Attempt history")).toBeVisible();
-  await expect(
-    page.getByLabel("Attempt outcome timeline"),
-  ).toBeVisible();
+  await expect(page.getByLabel("Attempt outcome timeline")).toBeVisible();
 
   // Outcome badges and streak from seeded attempts (newest first).
   await expect(page.getByText("Failed", { exact: true })).toBeVisible();
@@ -93,7 +81,5 @@ test("attempt expansion is keyboard operable", async ({ page }) => {
   await row.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Items stored")).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: "First Article" }),
-  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "First Article" })).toBeVisible();
 });

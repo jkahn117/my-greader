@@ -1,16 +1,7 @@
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+import { seed } from "./seed";
 
-const seedFile = fileURLToPath(new URL("./seed-tokens.sql", import.meta.url));
-
-// Each test reseeds so generation/revocation never leak between tests.
-test.beforeEach(() => {
-  execSync(
-    `pnpm exec wrangler d1 execute rss-reader --local --file ${seedFile}`,
-    { stdio: "pipe", env: process.env },
-  );
-});
+test.beforeEach(() => seed("seed-tokens.sql"));
 
 test("lists tokens with state and shows connection instructions", async ({
   page,
@@ -156,9 +147,9 @@ test("revocation confirms the token by keyboard and leaves others", async ({
   );
 
   await page.reload();
-  await expect(
-    page.getByRole("row", { name: /Seeded Doomed/ }),
-  ).toContainText("Revoked");
+  await expect(page.getByRole("row", { name: /Seeded Doomed/ })).toContainText(
+    "Revoked",
+  );
   await expect(page.getByRole("row", { name: /Seeded Keeper/ })).toContainText(
     "Active",
   );

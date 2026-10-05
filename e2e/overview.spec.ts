@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { seed } from "./seed";
+
+test.beforeEach(() => seed("seed-feeds.sql"));
 
 test("nav exposes Overview, Feeds, Reading, Access and redirects /app", async ({
   page,
@@ -42,7 +45,7 @@ test("overview panels: reading, feed health, needs attention — names and value
   await expect(health).toBeVisible();
   await expect(attention).toBeVisible();
 
-  // Reading panel: one item marked read in window; Alpha News tops the list.
+  // Reading panel: three items marked read in window; Alpha News tops the list.
   await expect(reading).toContainText("Most marked read");
   await expect(
     reading.getByRole("link", { name: "Alpha News" }),
@@ -58,10 +61,7 @@ test("overview panels: reading, feed health, needs attention — names and value
 
   // Needs attention links to feed detail; failing + deactivated seeds.
   const betaLink = attention.getByRole("link", { name: "Beta Blog" });
-  await expect(betaLink).toHaveAttribute(
-    "href",
-    "/app/feeds/e2e-feed-failing",
-  );
+  await expect(betaLink).toHaveAttribute("href", "/app/feeds/e2e-feed-failing");
   await expect(
     attention.getByRole("link", { name: "Gamma Gazette" }),
   ).toBeVisible();
@@ -88,9 +88,22 @@ test("overview panels stack reading → health → attention on mobile", async (
 
 test("deep-link reload resolves a client route", async ({ page }) => {
   await page.goto("/app/reading");
-  await expect(
-    page.getByRole("heading", { name: "Reading" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reading" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Reading" })).toBeVisible();
+});
+
+test("dashboard stylesheet is served and applies the layout", async ({
+  page,
+  request,
+}) => {
+  const stylesheet = await request.get("/styles.css");
+  expect(stylesheet.ok()).toBeTruthy();
+  expect(stylesheet.headers()["content-type"]).toContain("text/css");
+  await page.goto("/app/overview");
+  const card = page.locator("[data-slot='card']").first();
+  await expect(card).toBeVisible();
+  await expect(card).toHaveCSS("display", "flex");
 });
 
 test("dashboard JSON endpoint is not intercepted by the SPA fallback", async ({
