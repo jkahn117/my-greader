@@ -10,11 +10,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
-  feedAttempts,
+  cycleRuns,
+  feedPollAttempts as feedAttempts,
   feeds,
   items,
   subscriptions,
   users,
+  type FeedAttemptErrorClass,
+  type FeedAttemptOutcome,
+  type FeedAttemptParserStatus,
 } from "../src/db/schema";
 import type { FeedAttemptsResponse } from "../src/shared/dashboard-api";
 
@@ -41,7 +45,7 @@ async function seedFeed(opts: {
     id: feedId,
     feedUrl: `https://${feedId}.example.com/feed.xml`,
     title: "Test Feed",
-    lastFetchedAt: opts.lastFetchedAt ?? null,
+    lastSuccessfulPollAt: opts.lastFetchedAt ?? null,
     checkIntervalMinutes: 240,
   });
   await db.insert(subscriptions).values({
@@ -69,27 +73,43 @@ async function seedAttempt(
 ) {
   const db = getDb(env.DB);
   const id = opts.id ?? crypto.randomUUID();
+  const cycleRunId = opts.cycleRunId ?? "run-1";
+  await db
+    .insert(cycleRuns)
+    .values({ id: cycleRunId, ranAt: opts.startedAt })
+    .onConflictDoNothing();
+  const status = opts.status === undefined ? "ok" : opts.status;
+  const outcome: FeedAttemptOutcome | null =
+    status === null || status === "in_progress"
+      ? null
+      : status === "ok"
+        ? (opts.itemsAdded ?? 0) > 0
+          ? "new_items"
+          : "unchanged"
+        : status === "error"
+          ? "failed"
+          : (status as FeedAttemptOutcome);
   await db.insert(feedAttempts).values({
     id,
     feedId,
-    cycleRunId: opts.cycleRunId ?? "run-1",
+    cycleRunId,
     startedAt: opts.startedAt,
-    finishedAt:
+    completedAt:
       opts.finishedAt === undefined ? opts.startedAt + 500 : opts.finishedAt,
-    status: opts.status === undefined ? "ok" : opts.status,
+    outcome,
     httpStatus: opts.httpStatus ?? 200,
-    errorKind: opts.errorKind ?? null,
-    errorMessage: opts.errorMessage ?? null,
-    parserState: opts.parserState ?? "success",
-    itemsAdded: opts.itemsAdded ?? null,
-    durationMs: 500,
+    errorClass: (opts.errorKind ?? null) as FeedAttemptErrorClass | null,
+    diagnostic: opts.errorMessage ?? null,
+    parserStatus: (opts.parserState ?? "success") as FeedAttemptParserStatus,
+    newItems: opts.itemsAdded ?? 0,
   });
   return id;
 }
 
 beforeEach(async () => {
-  await env.DB.exec("DELETE FROM feed_attempts");
   await env.DB.exec("DELETE FROM items");
+  await env.DB.exec("DELETE FROM feed_poll_attempts");
+  await env.DB.exec("DELETE FROM cycle_runs");
   await env.DB.exec("DELETE FROM subscriptions");
   await env.DB.exec("DELETE FROM feeds");
   await env.DB.exec("DELETE FROM users");
@@ -120,7 +140,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
       feedId,
       title: "Hello",
       url: "https://x.example/1",
-      attemptId: a1,
+      firstIngestionAttemptId: a1,
     });
 
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);

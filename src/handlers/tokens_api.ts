@@ -127,14 +127,20 @@ handler.delete("/app/api/tokens/:id", async (c) => {
 
   try {
     const lifecycle = createApiTokenLifecycle(c.env.DB);
-    const revoked = await lifecycle.revoke(userId, id);
-    if (!revoked) {
+    const existing = (await lifecycle.listAll(userId)).find(
+      (token) => token.id === id,
+    );
+    if (!existing) {
       logger.info("token revoke rejected, not found", { tokenId: id });
       return c.json({ error: "token not found" }, 404);
     }
-    const row = (await lifecycle.listAll(userId)).find(
-      (token) => token.id === id,
-    );
+    if (existing.revokedAt === null) {
+      await lifecycle.revoke(userId, id);
+    }
+    const row =
+      existing.revokedAt === null
+        ? (await lifecycle.listAll(userId)).find((token) => token.id === id)
+        : existing;
     if (!row) throw new Error("revoked token was not persisted");
     logger.info("token revoked", { tokenId: id });
     const response: RevokeTokenResponse = { token: toSummary(row) };

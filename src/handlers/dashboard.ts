@@ -8,6 +8,7 @@ import {
   createFeedHistory,
   decodeCursor,
   encodeCursor,
+  type LatestFeedAttempt,
 } from "../feed/history";
 import { countEligibleFeeds, createFeedHealth } from "../feed/poll";
 import {
@@ -41,7 +42,10 @@ import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-function toFeedListItem(subscription: SubRow): FeedListItem {
+function toFeedListItem(
+  subscription: SubRow,
+  latestAttempt?: LatestFeedAttempt,
+): FeedListItem {
   return {
     feedId: subscription.feedId,
     subscriptionId: subscription.id,
@@ -52,13 +56,17 @@ function toFeedListItem(subscription: SubRow): FeedListItem {
     status:
       subscription.deactivatedAt !== null
         ? "deactivated"
-        : subscription.lastSuccessfulPollAt === null
-          ? "new"
-          : subscription.consecutiveErrors > 0
+        : latestAttempt?.outcome === "rate_limited"
+          ? "rate_limited"
+          : latestAttempt?.outcome === "failed" ||
+              subscription.consecutiveErrors > 0
             ? "failing"
-            : "active",
+            : subscription.lastSuccessfulPollAt === null
+              ? "new"
+              : "active",
     lastSuccessfulAt: subscription.lastSuccessfulPollAt,
-    lastCheckedAt: subscription.lastSuccessfulPollAt,
+    lastCheckedAt:
+      latestAttempt?.startedAt ?? subscription.lastSuccessfulPollAt,
     nextCheckAt: subscription.nextPollAt,
     lastNewItemAt: subscription.lastNewItemDiscoveredAt,
     consecutiveErrors: subscription.consecutiveErrors,
@@ -138,7 +146,8 @@ handler.get("/app/api/overview/panels", async (c) => {
   };
   try {
     const cfApiToken = c.env.CF_API_TOKEN;
-    const aeEnabled = c.env.ANALYTICS_ENABLED !== "false" && !!cfApiToken;
+    const aeEnabled =
+      String(c.env.ANALYTICS_ENABLED) !== "false" && !!cfApiToken;
     if (aeEnabled) {
       const { createAnalyticsReader } = await import("../feed/analytics");
       const reader = createAnalyticsReader({
@@ -186,7 +195,12 @@ handler.get("/app/api/feeds", async (c) => {
       publish: () => {},
     });
     const subscriptions = await lifecycle.list(userId);
-    const feeds = subscriptions.map(toFeedListItem);
+    const latestAttempts = await createFeedHistory(c.env.DB).latestAttempts(
+      subscriptions.map((subscription) => subscription.feedId),
+    );
+    const feeds = subscriptions.map((subscription) =>
+      toFeedListItem(subscription, latestAttempts.get(subscription.feedId)),
+    );
     const folders = [
       ...new Set(
         feeds

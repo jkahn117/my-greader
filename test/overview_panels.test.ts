@@ -12,12 +12,13 @@ import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
   cycleRuns,
-  feedAttempts,
+  feedPollAttempts as feedAttempts,
   feeds,
   items,
   itemState,
   subscriptions,
   users,
+  type FeedAttemptOutcome,
 } from "../src/db/schema";
 import type { OverviewPanelsResponse } from "../src/shared/dashboard-api";
 
@@ -66,13 +67,26 @@ async function seedAttempt(
   itemsAdded: number | null = null,
 ) {
   const db = getDb(env.DB);
+  const cycleRunId = `cycle-${feedId}-${startedAt}`;
+  await db.insert(cycleRuns).values({ id: cycleRunId, ranAt: startedAt });
   await db.insert(feedAttempts).values({
     id: crypto.randomUUID(),
+    cycleRunId,
     feedId,
     startedAt,
-    finishedAt: status == null ? null : startedAt + 100,
-    status,
-    itemsAdded,
+    completedAt: status == null ? null : startedAt + 100,
+    outcome: (
+      status === null
+        ? null
+        : status === "ok"
+          ? (itemsAdded ?? 0) > 0
+            ? "new_items"
+            : "unchanged"
+          : status === "error"
+            ? "failed"
+            : status
+    ) as FeedAttemptOutcome | null,
+    newItems: itemsAdded ?? 0,
   });
 }
 
@@ -90,7 +104,7 @@ async function markRead(userId: string, feedId: string, readAt: number) {
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM item_state");
-  await env.DB.exec("DELETE FROM feed_attempts");
+  await env.DB.exec("DELETE FROM feed_poll_attempts");
   await env.DB.exec("DELETE FROM items");
   await env.DB.exec("DELETE FROM subscriptions");
   await env.DB.exec("DELETE FROM feeds");
@@ -207,12 +221,24 @@ describe("GET /app/api/overview/panels", () => {
 
     await db
       .insert(cycleRuns)
-      .values({ id: "r1", ranAt: 1000, checkedFeeds: 0 });
+      .values({
+        id: "r1",
+        ranAt: 1000,
+        checkedFeeds: 0,
+        status: "completed",
+        outcome: "empty",
+      });
     expect((await fetchPanels()).cycle.state).toBe("empty");
 
     await db
       .insert(cycleRuns)
-      .values({ id: "r2", ranAt: 2000, checkedFeeds: 4 });
+      .values({
+        id: "r2",
+        ranAt: 2000,
+        checkedFeeds: 4,
+        status: "completed",
+        outcome: "completed",
+      });
     const body = await fetchPanels();
     expect(body.cycle.state).toBe("completed");
     expect(body.cycle.checkedFeeds).toBe(4);

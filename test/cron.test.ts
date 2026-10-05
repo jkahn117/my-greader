@@ -182,12 +182,12 @@ describe("FeedPoller", () => {
     const db = getDb(env.DB);
     await db
       .update(feeds)
-      .set({ deactivatedAt: Date.now(), deactivatedReason: "manual" })
+      .set({ deactivatedAt: Date.now(), deactivationReason: "manual" })
       .where(eq(feeds.id, feedId));
 
-    const result = await poller.poll(feedRow({ id: feedId }));
+    const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
 
-    expect(result.status).toBe("skipped");
+    expect(result.outcome).toBe("skipped");
     expect(transport.get).not.toHaveBeenCalled();
   });
 

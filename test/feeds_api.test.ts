@@ -9,7 +9,14 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
-import { feeds, subscriptions, users } from "../src/db/schema";
+import {
+  cycleRuns,
+  feedPollAttempts,
+  feeds,
+  subscriptions,
+  users,
+  type FeedAttemptOutcome,
+} from "../src/db/schema";
 import type {
   FeedsResponse,
   ImportResponse,
@@ -54,11 +61,24 @@ async function seedFeedAndSub(opts: {
     title: opts.title,
     htmlUrl: `https://${new URL(opts.feedUrl).hostname}`,
     deactivatedAt: opts.deactivatedAt ?? null,
-    deactivatedReason: opts.deactivatedReason ?? null,
+    deactivationReason:
+      opts.deactivatedReason === "transient"
+        ? "automatic_transient"
+        : opts.deactivatedReason === "permanent"
+          ? "automatic_permanent"
+          : (opts.deactivatedReason as "manual" | null | undefined),
+    pollStateOrigin:
+      opts.deactivatedAt != null && opts.deactivatedReason == null
+        ? "legacy_uncertain"
+        : "explicit",
     consecutiveErrors: opts.consecutiveErrors ?? 0,
-    lastStatus: opts.lastStatus ?? null,
-    lastFetchedAt: opts.lastFetchedAt ?? null,
-    lastSuccessfulAt: opts.lastSuccessfulAt ?? null,
+    lastSuccessfulPollAt: opts.lastSuccessfulAt ?? null,
+    initialBackloadCompletedAt:
+      opts.lastSuccessfulAt == null ? null : opts.lastSuccessfulAt,
+    nextPollAt:
+      opts.lastFetchedAt == null
+        ? null
+        : opts.lastFetchedAt + 240 * 60 * 1000,
     checkIntervalMinutes: 240,
   });
   await db.insert(subscriptions).values({
@@ -67,10 +87,34 @@ async function seedFeedAndSub(opts: {
     feedId,
     folder: opts.folder ?? null,
   });
+  if (opts.lastStatus != null && opts.lastFetchedAt != null) {
+    const cycleRunId = `cycle-${feedId}`;
+    await db.insert(cycleRuns).values({
+      id: cycleRunId,
+      ranAt: opts.lastFetchedAt,
+    });
+    const outcome: FeedAttemptOutcome =
+      opts.lastStatus === "ok"
+        ? "unchanged"
+        : opts.lastStatus === "error"
+          ? "failed"
+          : (opts.lastStatus as FeedAttemptOutcome);
+    await db.insert(feedPollAttempts).values({
+      id: `attempt-${feedId}`,
+      cycleRunId,
+      feedId,
+      startedAt: opts.lastFetchedAt,
+      completedAt: opts.lastFetchedAt,
+      outcome,
+      errorClass: outcome === "failed" ? "http" : null,
+    });
+  }
   return feedId;
 }
 
 beforeEach(async () => {
+  await env.DB.exec("DELETE FROM feed_poll_attempts");
+  await env.DB.exec("DELETE FROM cycle_runs");
   await env.DB.exec("DELETE FROM subscriptions");
   await env.DB.exec("DELETE FROM feeds");
   await env.DB.exec("DELETE FROM users");
@@ -255,7 +299,13 @@ describe("feed detail + deactivation", () => {
         deactivatedReason: string | null;
         legacyUncertain: boolean;
       };
-      expect(body.deactivatedReason).toBe(reason);
+      expect(body.deactivatedReason).toBe(
+        reason === "transient"
+          ? "automatic_transient"
+          : reason === "permanent"
+            ? "automatic_permanent"
+            : reason,
+      );
       expect(body.legacyUncertain).toBe(legacy);
     }
   });

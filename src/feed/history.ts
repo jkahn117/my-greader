@@ -24,7 +24,13 @@ export function decodeCursor(raw: string): AttemptCursor | null {
 
 export type AttemptRow = typeof feedPollAttempts.$inferSelect;
 
+export interface LatestFeedAttempt {
+  outcome: AttemptRow["outcome"];
+  startedAt: number;
+}
+
 export interface FeedHistory {
+  latestAttempts(feedIds: string[]): Promise<Map<string, LatestFeedAttempt>>;
   listAttempts(
     feedId: string,
     cursor: AttemptCursor | null,
@@ -58,6 +64,41 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
   const db = getDb(dbBinding);
 
   return {
+    async latestAttempts(feedIds) {
+      if (feedIds.length === 0) return new Map();
+      const latestPerFeed = db
+        .select({
+          feedId: feedPollAttempts.feedId,
+          latestStartedAt: sql<number>`max(${feedPollAttempts.startedAt})`.as(
+            "latest_started_at",
+          ),
+        })
+        .from(feedPollAttempts)
+        .where(inArray(feedPollAttempts.feedId, feedIds))
+        .groupBy(feedPollAttempts.feedId)
+        .as("latest_per_feed");
+      const rows = await db
+        .select({
+          feedId: feedPollAttempts.feedId,
+          outcome: feedPollAttempts.outcome,
+          startedAt: feedPollAttempts.startedAt,
+        })
+        .from(feedPollAttempts)
+        .innerJoin(
+          latestPerFeed,
+          and(
+            eq(feedPollAttempts.feedId, latestPerFeed.feedId),
+            eq(feedPollAttempts.startedAt, latestPerFeed.latestStartedAt),
+          ),
+        );
+      return new Map(
+        rows.map((row) => [
+          row.feedId,
+          { outcome: row.outcome, startedAt: row.startedAt },
+        ]),
+      );
+    },
+
     async listAttempts(feedId, cursor, limit) {
       const rows = await db
         .select()

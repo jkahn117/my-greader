@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import {
   flattenDiagnosticMessageText,
   parseConfigFileTextToJson,
@@ -17,6 +17,8 @@ interface TestConfigOptions {
 export async function createWorkersTestConfig({
   developmentAuth,
 }: TestConfigOptions) {
+  // Wrangler validates the configured asset directory before Miniflare starts.
+  await mkdir(path.join(__dirname, "dist/client"), { recursive: true });
   const migrations = await readD1Migrations(path.join(__dirname, "drizzle"));
   // Parse JSONC on the host, keeping filesystem access outside the Worker tests.
   const configPath = path.join(__dirname, "wrangler.jsonc");

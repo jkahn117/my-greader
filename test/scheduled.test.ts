@@ -250,8 +250,10 @@ describe("scheduled Worker dispatch", () => {
   it("preserves forced attribution through the authenticated sync route", async () => {
     const context = createExecutionContext();
     const response = await worker.fetch(
-      new Request("http://localhost/feeds/sync/force", {
+      new Request("http://localhost/app/api/feeds/sync", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
       }),
       bindings,
       context,
@@ -259,7 +261,10 @@ describe("scheduled Worker dispatch", () => {
     await waitOnExecutionContext(context);
 
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("Force sync started");
+    expect(await response.json()).toMatchObject({
+      triggered: true,
+      forced: true,
+    });
     expect(create).toHaveBeenCalledExactlyOnceWith({
       params: { triggerReason: "forced" },
     });

@@ -292,13 +292,14 @@ function b64urlToUtf8(b64url: string): string {
 }
 
 /** Decodes a base64url string to raw bytes */
-function b64urlToBytes(b64url: string): Uint8Array {
+function b64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/.test(b64url) || b64url.length % 4 === 1) {
     throw new Error("Invalid base64url encoding");
   }
-  const bytes = Uint8Array.from(
-    atob(b64url.replace(/-/g, "+").replace(/_/g, "/")),
-    (c) => c.charCodeAt(0),
-  );
+  const decoded = atob(b64url.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index++) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
   return bytes;
 }

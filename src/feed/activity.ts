@@ -266,8 +266,8 @@ export function createActivityReader(
     const latestPerFeed = db
       .select({
         feedId: feedPollAttempts.feedId,
-        startedAt: sql<number>`max(${feedPollAttempts.startedAt})`.as(
-          "started_at",
+        latestStartedAt: sql<number>`max(${feedPollAttempts.startedAt})`.as(
+          "latest_started_at",
         ),
       })
       .from(feedPollAttempts)
@@ -340,7 +340,7 @@ export function createActivityReader(
           latestPerFeed,
           and(
             eq(feedPollAttempts.feedId, latestPerFeed.feedId),
-            eq(feedPollAttempts.startedAt, latestPerFeed.startedAt),
+            eq(feedPollAttempts.startedAt, latestPerFeed.latestStartedAt),
           ),
         )
         .innerJoin(

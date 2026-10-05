@@ -98,7 +98,7 @@ async function storedItems(feedId: string) {
 async function feedDashboard(): Promise<string> {
   const ctx = createExecutionContext();
   const response = await worker.fetch(
-    new Request("http://localhost/app/feeds"),
+    new Request("http://localhost/app/api/feeds"),
     env as Env,
     ctx,
   );
