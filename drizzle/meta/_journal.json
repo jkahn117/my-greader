@@ -22,20 +22,6 @@
       "when": 1775439481897,
       "tag": "0002_empty_norman_osborn",
       "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1791123727917,
-      "tag": "0006_feed_check_state",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1791130000000,
-      "tag": "0007_feed_attempts",
-      "breakpoints": true
     }
   ]
 }
