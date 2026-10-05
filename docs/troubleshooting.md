@@ -23,38 +23,44 @@ transient by nature but the server explicitly tells us to wait).
 When `rss-parser` (xml2js) rejects a Feed with an XML-level error (e.g. "Unclosed
 root tag"), the parser falls back to a lenient HTML-based extractor that uses
 [linkedom](https://github.com/WebReflection/linkedom). A successful fallback is
-stored as `parser_status = 'fallback'` on the durable Feed attempt, shown on the
-Timeline, and emitted as an Analytics Engine parse-status dimension.
+stored as `parser_status = 'fallback'` on the durable Feed attempt, shown in Feed
+attempt history, and emitted as an Analytics Engine parse-status dimension.
 
 ## Finding problem feeds
 
-### 1. Dashboard — Feed tab
+### 1. Dashboard — Feeds
 
-The **Feed tab** (`/app/feeds`) shows a "Feeds with issues" card at the top when
-any feed is currently erroring or deactivated. Each feed row shows:
+The **Feeds** page (`/app/feeds`) supports search, Folder filters, and health
+filters, including failing, rate-limited, and deactivated Feeds. Open a Feed at
+`/app/feeds/:feedId` to inspect current health:
 
-- A **status badge** (yellow = N errors, red = Deactivated)
-- The **last error message** inline under the feed title
-- The last successful check and last precise new-Item discovery
-- Whether initial backload completed
-- The **poll interval** and next eligibility time
-- The recorded Deactivation reason
+- Last successful check and precise new-Item discovery (unknown legacy facts stay unknown)
+- Initial backload completion
+- Backoff interval and next eligibility time
+- Consecutive errors, last error, and recorded Deactivation reason
 
-From here you can **Reactivate** a deactivated feed or **Deactivate** one manually.
+Feed detail provides **Reactivate** and **Deactivate** controls. These change the
+shared Feed for all subscribers, not just your Subscription.
 
-### 2. Dashboard — Timeline tab
+### 2. Dashboard — Feed attempt history
 
-The **Timeline tab** (`/app/timeline`) is the durable source for recent polling
-outcomes. Expand a Cycle Run to see each subscribed Feed attempt, its outcome,
-HTTP or parse diagnostic, fallback-parser badge, stable attempt ID, and newly
-attributed Items. Use the attempt ID to correlate the row with structured logs.
+Feed detail contains paginated durable attempt history, including outcome,
+HTTP or parser evidence, diagnostic, stable attempt ID, Cycle Run ID, and newly
+attributed Items. History is retained for 90 days; legacy Items are not attributed
+by timestamp, and Item retention can remove content from an otherwise retained
+attempt. Use the attempt ID to correlate the row with structured logs. The JSON
+endpoint is `/app/api/feeds/:feedId/attempts`; it requires a current Subscription.
 
-### 3. Dashboard — Metrics tab
+The former Timeline tab is removed. For Cycle Run history beyond the latest
+summary, use D1 and structured logs.
 
-Use the **Fetch errors by status** card (Analytics Engine, requires API token) to
-see aggregate HTTP error rates over 7 days, broken down by status code and
-number of affected Feeds. Network and parse failures are not HTTP-status metrics;
-use the Timeline or D1 for those.
+### 3. Dashboard — Overview
+
+The **Overview** page (`/app/overview`) shows latest-attempt Feed health buckets,
+needs-attention links, and the latest global Cycle Run lifecycle. Its optional
+Analytics Engine panel shows a 30-day trend, not the former Metrics tab's full
+HTTP error breakdown. Network and parser diagnostics remain available in Feed
+attempt history and D1 even without Analytics Engine credentials.
 
 ### 4. Structured logs (Workers Observability)
 
@@ -81,7 +87,7 @@ attemptId = "<cycle-run-id>:<feed-id>"
 feedId = "<feed-id>"
 ```
 
-HTTP status and parser status are durable D1 fields shown by the Timeline; they
+HTTP status and parser status are durable D1 fields shown in attempt history; they
 are not attached to every terminal structured log.
 
 ### 5. `wrangler tail`
@@ -115,7 +121,7 @@ SELECT id, cycle_run_id, feed_id, outcome, error_class,
 FROM feed_poll_attempts
 WHERE outcome IN ('failed', 'rate_limited')
    OR parser_status IN ('fallback', 'failure')
-ORDER BY started_at DESC
+ORDER BY started_at DESC, id DESC
 LIMIT 100;
 ```
 
@@ -145,15 +151,15 @@ The feed's XML is truncated or malformed. The lenient fallback parser will
 attempt to recover items. If the fallback also fails, the feed will accumulate
 errors and eventually deactivate.
 
-Check the Timeline or `feed_poll_attempts.diagnostic` for the bounded parser
+Check Feed attempt history or `feed_poll_attempts.diagnostic` for the bounded parser
 message. A successful fallback has `parser_status = 'fallback'`; a hard failure
 has `parser_status = 'failure'` and `error_class = 'parse'`.
 
 ### Feed polling too slowly (long poll interval)
 
-Poll intervals increase via adaptive backoff when a feed has no new items. Check
-the **Poll interval distribution** card on the Metrics tab to see how many feeds
-are at each backoff tier. Intervals reset to 30 minutes when new items appear.
+Poll intervals increase via adaptive Backoff when a Feed has no new Items. Check
+the interval and next eligibility time in Feed detail. Intervals reset to 30
+minutes when new Items appear, unless a longer Feed timing hint applies.
 
 If a Feed is consistently at the four-hour interval with no errors, it is
 simply quiet. An interval above four hours comes from a longer Feed `<ttl>` (up
@@ -161,10 +167,11 @@ to 24 hours) or a server `Retry-After` value after HTTP 429.
 
 ## Reset tools
 
-- **Reactivate a feed**: Feed tab → click "Reactivate" next to the deactivated feed.
+- **Reactivate a Feed**: Feeds → open the deactivated Feed → click "Reactivate".
   This resets `consecutiveErrors`, `lastError`, `deactivatedAt`,
   `deactivationReason`, `checkIntervalMinutes`, and `nextPollAt`. The Feed will
   be eligible on the next cycle.
 
-- **Sync now**: Feed tab → click "Sync now" to trigger an immediate polling
-  cycle for all due feeds without waiting for the 30-minute cron.
+- **Sync now**: Feeds → click "Sync now" to start a manual Cycle Run for all
+  globally eligible Feeds without waiting for the 30-minute cron. **Force sync**
+  bypasses due time only; deactivated and unsubscribed Feeds remain excluded.

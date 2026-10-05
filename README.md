@@ -11,7 +11,7 @@ The Worker serves two interfaces:
 
 Cloudflare D1 stores subscriptions, articles, read/star state, tokens, and polling history. A scheduled Cloudflare Workflow fetches feeds and records results. The dashboard reads durable activity from D1 and can show optional aggregate trends from Workers Analytics Engine.
 
-The Worker is built with Hono and server-rendered JSX. The interface uses htmx and Tailwind CSS; feed parsing uses `rss-parser` with a lenient fallback.
+The Worker uses Hono for HTTP APIs. The management dashboard is a React SPA built with Vite, TanStack Router, shadcn components, and Tailwind CSS, served as Workers static assets under `/app`. It calls same-origin JSON endpoints under `/app/api/*`. Feed parsing uses `rss-parser` with a lenient fallback.
 
 ## Fresh deployment
 
@@ -83,28 +83,40 @@ The dashboard’s **Access** tab generates and revokes API tokens. Copy a token 
 
 ### 5. Use the dashboard
 
-Visit `https://reader.example.com` and sign in through Cloudflare Access. The dashboard includes:
+Visit `https://reader.example.com/app` and sign in through Cloudflare Access. The dashboard includes:
 
-- **Metrics:** article and reading summaries, recent polling activity, feed activity, and polling intervals. Optional Analytics Engine data adds longer-term trends and fetch/error statistics.
-- **Feeds:** manage subscriptions and inspect feed status; import subscriptions using OPML.
-- **Timeline:** review recent polling cycles and feed results.
-- **Access:** create and revoke reader API tokens.
+- **Overview** (`/app/overview`): Item and marked-read summaries, Feed health, latest Cycle Run lifecycle, and needs-attention links. Optional Analytics Engine data adds a 30-day trend.
+- **Feeds** (`/app/feeds`): filter Subscriptions, import OPML, and start normal or forced polling. Open a Feed for its health, deactivate/reactivate controls, and paginated durable attempt history with attributed Items.
+- **Reading** (`/app/reading`): marked-read metrics over 7, 14, or 30 display-timezone calendar days. These describe current Item State and server receipt times, not reading sessions or time spent reading.
+- **Access** (`/app/access`): create and revoke reader API Tokens, and copy FreshRSS connection settings.
+
+The former server-rendered `/app/metrics` and `/app/timeline` pages and top-level `/tokens/*`, `/feeds/*`, and `/import` management endpoints are no longer supported. Reader protocol routes are unchanged.
 
 ## Updating an existing deployment
 
-Placeholder: document the routine update procedure here.
+Back up the production D1 database and review pending SQL migrations before updating. The combined release keeps the ordered `drizzle/*.sql` migrations from `next`; do not substitute migrations from the original React branch. Apply pending migrations before deploying the new Worker:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm check
+pnpm wrangler d1 migrations apply rss-reader --remote
+pnpm deploy
+```
+
+`pnpm deploy` builds both the React client (`dist/client`) and Worker (`dist/my_greader`) before deployment. Keep the hostname-wide Access application: it must cover `/app`, `/app/api/*`, and client assets, not just the old management paths. Keep reader bypass policies narrowly scoped to the reader routes, never `/api/*` or `/app/api/*`. Confirm both Access login and Current sync after deployment. These are operator steps, not an indication that this release has passed its checks.
 
 ## Polling and retention
 
 A scheduled Workflow checks feeds every 30 minutes. It processes eligible feeds in bounded batches, so the feed count is not limited to one cron invocation. Feeds with new articles are checked sooner; quiet feeds back off gradually, while rate limits and feed-provided timing hints are respected. Repeated errors can deactivate a feed, with the reason visible in the dashboard.
 
-A weekly cleanup removes unstarred articles older than 30 days by default and expires polling history after 90 days. Starred articles are retained. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change article retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
+A weekly cleanup (Mondays 03:00 UTC) removes unstarred Items fetched more than 30 days ago by default and expires polling history after 90 days, in bounded batches. An Item starred by any User is retained; expired attempt references are detached from retained Items before history deletion. Revoked API Tokens are removed after at least seven days. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change article retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
 
 ## Local development
 
 ```bash
 pnpm install
 cp .dev.vars.sample .dev.vars
+pnpm wrangler d1 migrations apply rss-reader --local
 pnpm dev
 ```
 
@@ -116,9 +128,12 @@ Local development uses `DEV_MODE=true` from the sample file to bypass Access JWT
 pnpm lint       # lint source and tests
 pnpm test       # run both test modes
 pnpm typecheck  # TypeScript checks
-pnpm build      # production build
+pnpm build      # CSS + React client + Worker production build
 pnpm check      # all of the above
+pnpm test:browser # Playwright acceptance tests against the local Vite server
 ```
+
+Browser tests require local migrations and `.dev.vars` with the development auth bypass; Vitest applies migrations in its own isolated D1 stores. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
 
 Other commands: `pnpm cf-typegen` regenerates Wrangler binding types, `pnpm studio` opens Drizzle Studio for local D1, and `pnpm format` formats TypeScript files.
 

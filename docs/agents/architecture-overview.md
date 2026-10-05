@@ -15,7 +15,7 @@
 
 The Worker serves two distinct concerns:
 
-1. **Management UI** — Cloudflare Access protects Metrics, Feed, Timeline, and Access tabs, including API Token and Feed controls
+1. **Management UI** — React routes under `/app` provide Overview, Feeds (with detail and attempt history), Reading, and Access pages. Cloudflare Access protects the hostname at the edge; Hono also verifies Access JWTs on `/app/api/*` JSON requests, including API Token and Feed controls.
 2. **GReader API** — the RSS backend that Current connects to, authenticated via long-lived API Tokens
 
 ## FreshRSS note

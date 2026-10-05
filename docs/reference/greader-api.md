@@ -224,7 +224,8 @@ r=user/-/state/com.google/starred   — remove starred
 **Response**: `OK` (plain text).
 
 Updates Item State only for Items in the authenticated User's Subscriptions.
-Marking an Item read records the transition time; marking it unread clears that
+Each explicit mark-read records its latest server receipt time (`read_at`),
+including repeated marks on an already-read Item; marking it unread clears that
 time. Unknown or inaccessible Item IDs retain the compatible `OK` response but
 make no change.
 
@@ -242,8 +243,9 @@ s=user/-/state/com.google/reading-list  — mark everything subscribed
 ts=<timestamp-usec>       — only mark items older than this timestamp
 ```
 
-**Response**: `OK` (plain text). Unsupported scopes, including the starred
-Stream, retain the compatible no-op response.
+**Response**: `OK` (plain text). Only previously unread Items receive a new
+`read_at` receipt; already-read Items keep theirs. Unsupported scopes, including
+the starred Stream, retain the compatible no-op response.
 
 ---
 

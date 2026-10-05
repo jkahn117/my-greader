@@ -10,11 +10,15 @@ Access-protected web UI and can be revoked at any time.
 
 ## Web UI Auth — Cloudflare Access
 
-Routes under `/app/*`, `/tokens/*`, `/feeds/*`, and `/import` are protected by `accessMiddleware`
-(`src/middleware/access.ts`). Cloudflare Access sits in front of the Worker and handles
-login entirely — the Worker never sees credentials.
+The hostname-wide Cloudflare Access application protects the React dashboard at `/app`
+and its static assets. Dashboard JSON APIs under `/app/api/*` also run `accessMiddleware`
+(`src/middleware/access.ts`) in Hono. Static SPA routes are served asset-first and do not
+run Worker JWT verification; they contain no User data until the client calls the protected
+JSON APIs. The old `/tokens/*`, `/feeds/*`, and `/import` adapters are removed.
+Cloudflare Access handles login entirely — the Worker never sees credentials. Keep Access
+bypass policies limited to reader protocol routes, not `/app/api/*`.
 
-On every authenticated request, Access injects a signed JWT:
+On authenticated requests forwarded to the Worker, Access injects a signed JWT:
 
 ```
 Cf-Access-Jwt-Assertion: <jwt>
@@ -88,13 +92,19 @@ possible. Cloudflare Access cannot protect these routes. API tokens are the brid
 
 ### Generation
 
-1. Authenticated user visits `/app/access` (Access-protected)
+1. Authenticated User visits the React page `/app/access`
 2. Enters a token name (e.g. "Current on iPhone") and clicks Generate
-3. `POST /tokens/generate` delegates to `createApiTokenLifecycle()`:
+3. `POST /app/api/tokens` accepts JSON `{ "name": "Current on iPhone" }` and delegates to `createApiTokenLifecycle()`:
+   - The trimmed name must contain 1–100 characters
    - The module generates 32 cryptographically random bytes encoded as a 64-char hex string
    - It SHA-256 hashes the token and stores only the hash in `api_tokens`
-   - The handler returns the raw token once in the htmx response fragment; it is never stored
-4. User copies raw token into Current's password field
+   - The handler returns `201` JSON containing the raw token once, with `Cache-Control: no-store`; the raw value is never persisted or returned by later reads
+4. User copies the raw token into Current's password field; the page also shows same-origin FreshRSS connection settings and the authenticated email
+
+`GET /app/api/tokens` returns the User's active and retained revoked tokens with name,
+creation time, coarse last-used time, and revocation state. It exposes neither hashes nor
+raw values. The client keeps a newly generated raw value only in page state, not browser
+storage.
 
 ### ClientLogin rate limiting
 
@@ -128,10 +138,10 @@ Body: Email=user@example.com&Passwd=<raw-token>
 
 ### Revocation
 
-1. User visits `/app/access`, sees active tokens with name + last used date
-2. Clicks Revoke
-3. `DELETE /tokens/:id` asks the API Token module to set `revoked_at`. The module verifies ownership against `userId`.
-4. htmx removes the row from the UI via `outerHTML` swap
+1. User visits `/app/access`, sees tokens with name, creation time, last-used time, and state
+2. Clicks Revoke and confirms the named token inline
+3. `DELETE /app/api/tokens/:id` asks the API Token module to set `revoked_at`. Ownership is verified against `userId`; another User's token returns `404` without changes. Repeated revocation of an owned revoked token is idempotent.
+4. The client refreshes the loader and shows the token as Revoked
 5. Any subsequent GReader request with that token receives `401 Unauthorized`
 6. Weekly cleanup removes tokens that have been revoked for at least seven days, using the same module policy.
 
@@ -145,18 +155,27 @@ header and form parsing, rate limiting, logging, and wire responses.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | `/app` | Cloudflare Access | Redirect to the Metrics tab |
-| GET | `/app/metrics` | Cloudflare Access | D1 and Analytics Engine metrics |
-| GET | `/app/timeline` | Cloudflare Access | Durable Cycle Run and Feed-attempt history |
-| GET | `/app/feeds` | Cloudflare Access | Subscription and Feed management (Feed tab) |
-| GET | `/app/access` | Cloudflare Access | API Token management (Access tab) |
-| POST | `/tokens/generate` | Cloudflare Access | Generate new API token |
-| DELETE | `/tokens/:id` | Cloudflare Access | Revoke token |
-| POST | `/import` | Cloudflare Access | OPML Feed import |
-| POST | `/feeds/sync` | Cloudflare Access | Start a normal manual Cycle Run for eligible Feeds |
-| POST | `/feeds/sync/force` | Cloudflare Access | Start a forced Cycle Run for all active subscribed Feeds |
-| POST | `/feeds/:id/deactivate` | Cloudflare Access | Manually deactivate a subscribed Feed |
-| POST | `/feeds/:id/reactivate` | Cloudflare Access | Manually reactivate a subscribed Feed |
+| GET | `/app`, `/app/overview` | Access at edge | React Overview (default client route) |
+| GET | `/app/feeds`, `/app/feeds/:feedId` | Access at edge | React Subscription workspace and Feed detail |
+| GET | `/app/reading` | Access at edge | React marked-read metrics |
+| GET | `/app/access` | Access at edge | React API Token management |
+| GET | `/app/api/overview`, `/app/api/overview/panels` | Access JWT | D1 summaries and optional Analytics Engine trend |
+| GET | `/app/api/feeds` | Access JWT | User's Subscriptions and Feed health |
+| GET | `/app/api/feeds/:feedId` | Access JWT | Subscribed Feed detail; otherwise `404` |
+| GET | `/app/api/feeds/:feedId/attempts` | Access JWT | Cursor-paginated durable attempts; default 25, maximum 50 |
+| GET | `/app/api/reading?days=7\|14\|30` | Access JWT | Calendar-day marked-read projection |
+| GET | `/app/api/tokens` | Access JWT | Token summaries and connection settings |
+| POST | `/app/api/tokens` | Access JWT | Generate API Token (JSON, raw value once) |
+| DELETE | `/app/api/tokens/:id` | Access JWT | Revoke owned token (JSON) |
+| POST | `/app/api/import` | Access JWT | Multipart `opml` upload; imported/duplicate/error counts |
+| POST | `/app/api/feeds/sync` | Access JWT | Start global eligible-Feed polling; JSON `{ "force": true }` bypasses due time only |
+| POST | `/app/api/feeds/:feedId/deactivate` | Access JWT | Manually deactivate a subscribed shared Feed |
+| POST | `/app/api/feeds/:feedId/reactivate` | Access JWT | Manually reactivate a subscribed shared Feed |
 | GET | `/auth/logout` | None | Redirect to Access logout URL |
 | POST | `/accounts/ClientLogin` | None (validates token) | GReader auth entry point |
 | GET/POST | `/reader/*` | API token header | All GReader API endpoints |
+
+Reader routes are also mounted under the FreshRSS-compatible `/api/greader.php` prefix.
+Normal and forced manual sync return `{ triggered, eligible, forced, instanceId }` JSON;
+`eligible` is a global pre-trigger count, not a per-User count or completion guarantee.
+Feed controls require a Subscription but change the shared Feed for all subscribers.
