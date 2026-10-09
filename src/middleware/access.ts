@@ -267,7 +267,7 @@ async function fetchJwks(
 
   try {
     const res = await fetch(`${issuer}/cdn-cgi/access/certs`, {
-      redirect: "error",
+      redirect: "manual",
     });
 
     if (!res.ok) {

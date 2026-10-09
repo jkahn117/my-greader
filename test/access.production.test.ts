@@ -324,7 +324,7 @@ describe("production Access through protected Worker requests", () => {
     ).toBe(401);
     expect(jwksFetch).toHaveBeenLastCalledWith(
       `${otherIssuer}/cdn-cgi/access/certs`,
-      { redirect: "error" },
+      { redirect: "manual" },
     );
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
   });
@@ -367,7 +367,7 @@ describe("production Access through protected Worker requests", () => {
     });
     expect(jwksFetch).toHaveBeenCalledTimes(1);
     expect(jwksFetch).toHaveBeenCalledWith(`${ISSUER}/cdn-cgi/access/certs`, {
-      redirect: "error",
+      redirect: "manual",
     });
   });
 });
