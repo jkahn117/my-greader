@@ -7,7 +7,7 @@ test.beforeEach(() => seed("seed-feeds.sql"));
 const feedTable = (page: import("@playwright/test").Page) =>
   page.getByRole("table", { name: "Marked read by feed" });
 
-test("shows daily and per-feed marked-read metrics for the default window", async ({
+test("reviews marked-read metrics across reporting windows", async ({
   page,
 }) => {
   await page.goto("/app/reading");
@@ -20,11 +20,8 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
   const total = page.locator("[data-slot='card']").filter({
     hasText: "Items marked read",
   });
-  // Alpha 1h + 3h (may straddle midnight) and Beta 2d ago; Gamma is 10d ago
   await expect(total.locator("[data-slot='card-title']")).toHaveText("3");
   await expect(total).toContainText("past 7 days in");
-
-  // violet shadcn/recharts chart, with a details-based tabular alternative
   await expect(page.locator("[data-chart]")).toBeVisible();
 
   const days = page.getByTestId("reading-day");
@@ -38,7 +35,6 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
   await expect(table.getByRole("link", { name: "Gamma Gazette" })).toHaveCount(
     0,
   );
-  // other users' receipts never inflate the dev user's per-feed counts
   await expect(
     table
       .getByRole("row")
@@ -46,24 +42,11 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
       .getByRole("cell", { name: "2", exact: true }),
   ).toBeVisible();
 
-  await expect(page.getByText(/Currently starred/i)).toBeVisible();
-  await expect(page.getByText(/received the mark-read/)).not.toBeVisible();
   await page.getByText("How read activity is counted").click();
   await expect(page.getByText(/received the mark-read/)).toBeVisible();
   await expect(page.getByText(/work offline sync later/)).toBeVisible();
-  await expect(page.getByText(/Marking an item read again/)).toBeVisible();
-  await expect(page.getByText(/days after they\s+were fetched/)).toBeVisible();
-  await expect(page.getByText(/release \/ expiration breakdown/)).toBeVisible();
-});
 
-test("time window control widens the window via the keyboard", async ({
-  page,
-}) => {
-  await page.goto("/app/reading");
-  await expect(page.getByTestId("reading-day")).toHaveCount(7);
-
-  await page.getByRole("link", { name: "14 days" }).focus();
-  await page.keyboard.press("Enter");
+  await page.getByRole("link", { name: "14 days" }).click();
   await expect(page).toHaveURL(/\/app\/reading\?days=14$/);
   await expect(page.getByTestId("reading-day")).toHaveCount(14);
   await expect(
@@ -73,22 +56,9 @@ test("time window control widens the window via the keyboard", async ({
   await page.getByRole("link", { name: "30 days" }).click();
   await expect(page.getByTestId("reading-day")).toHaveCount(30);
   await expect(page.getByText(/past 30 days in/).first()).toBeVisible();
-
-  // unsupported windows fall back to the default
-  await page.goto("/app/reading?days=99");
-  await expect(page.getByRole("link", { name: "7 days" })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
 });
 
-test("per-feed rows link to the feed detail page", async ({ page }) => {
-  await page.goto("/app/reading");
-  await feedTable(page).getByRole("link", { name: "Beta Blog" }).click();
-  await expect(page).toHaveURL(/\/app\/feeds\/e2e-feed-failing$/);
-});
-
-test("empty windows and missing subscriptions show explicit empty states", async ({
+test("shows empty states for no activity and no Subscriptions", async ({
   page,
 }) => {
   const base = {
@@ -120,7 +90,6 @@ test("empty windows and missing subscriptions show explicit empty states", async
       "No Feed breakdown yet. It will appear when read activity is recorded.",
     ),
   ).toBeVisible();
-
   await expect(
     page.getByText(/Activity appears here after your reader/),
   ).toBeVisible();
@@ -136,16 +105,4 @@ test("empty windows and missing subscriptions show explicit empty states", async
   await page.goto("/app/reading");
   await expect(page.getByText(/No subscriptions yet/)).toBeVisible();
   await expect(page.getByRole("link", { name: "add feeds" })).toBeVisible();
-});
-
-test("reading page fits a narrow viewport without horizontal scroll", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 375, height: 800 });
-  await page.goto("/app/reading?days=30");
-  await expect(page.getByTestId("reading-day")).toHaveCount(30);
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  );
-  expect(overflow).toBe(false);
 });

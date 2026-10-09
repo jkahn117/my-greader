@@ -13,7 +13,13 @@ const configuration = v.parse(
     ),
     d1_databases: v.array(v.object({ binding: v.string() })),
     analytics_engine_datasets: v.array(v.object({ binding: v.string() })),
-    ratelimits: v.array(v.object({ name: v.string() })),
+    ratelimits: v.array(
+      v.object({
+        name: v.string(),
+        namespace_id: v.string(),
+        simple: v.object({ limit: v.number(), period: v.number() }),
+      }),
+    ),
     secrets: v.object({ required: v.array(v.string()) }),
   }),
   JSON.parse((env as unknown as Record<string, string>).TEST_WRANGLER_CONFIG),
@@ -48,9 +54,17 @@ describe("consequential Worker configuration", () => {
     expect(
       configuration.analytics_engine_datasets.map((dataset) => dataset.binding),
     ).toContain("ANALYTICS");
-    expect(configuration.ratelimits.map((limiter) => limiter.name)).toContain(
-      "LOGIN_RATE_LIMITER",
-    );
+    expect(
+      configuration.ratelimits.filter(
+        (limiter) => limiter.name === "LOGIN_RATE_LIMITER",
+      ),
+    ).toEqual([
+      {
+        name: "LOGIN_RATE_LIMITER",
+        namespace_id: expect.stringMatching(/^\d+$/),
+        simple: { limit: 5, period: 60 },
+      },
+    ]);
     expect(configuration.secrets.required).toEqual(
       expect.arrayContaining(["CF_ACCESS_AUD", "CF_ACCESS_ISSUER"]),
     );
