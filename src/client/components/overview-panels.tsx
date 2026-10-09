@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Bar, BarChart, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChevronRight } from "lucide-react";
 import type {
   AttentionFeed,
@@ -53,6 +53,7 @@ function ReadingChart({
         aria-label={`Items marked read per day for the last ${windowDays} days (${timezone})`}
       >
         <BarChart data={data} accessibilityLayer>
+          <CartesianGrid vertical={false} />
           <XAxis
             dataKey="day"
             tickLine={false}
@@ -60,7 +61,15 @@ function ReadingChart({
             tickMargin={6}
             fontSize={11}
           />
-          <YAxis hide domain={[0, "dataMax"]} />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+            domain={[0, (max: number) => Math.max(1, max)]}
+            tickCount={3}
+            width={28}
+            fontSize={12}
+          />
           <ChartTooltip
             content={<ChartTooltipContent labelKey="date" />}
             cursor={false}
@@ -153,8 +162,8 @@ export function OverviewPanels({
   }
 
   const healthRows: [string, number, string?][] = [
-    ["New Items", data.feedHealth.successful],
     ["Unchanged / not modified", data.feedHealth.empty],
+    ["New Items", data.feedHealth.successful, "text-primary"],
     ["Rate limited", data.feedHealth.rateLimited, "text-warning-foreground"],
     ["Failed", data.feedHealth.failed, "text-destructive"],
     ["Skipped (deliberate)", data.feedHealth.skipped],
@@ -166,8 +175,8 @@ export function OverviewPanels({
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <Card>
-          <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
-            <CardTitle className="text-base">Your reading activity</CardTitle>
+          <CardHeader className="flex flex-row items-baseline justify-between gap-2 space-y-0">
+            <CardTitle>Your reading activity</CardTitle>
             <Link
               to="/reading"
               search={{ days: 7 }}
@@ -215,16 +224,37 @@ export function OverviewPanels({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Feed health</CardTitle>
+            <CardTitle>Feed health</CardTitle>
             <p className="text-xs text-muted-foreground">
               Latest check per subscribed Feed
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div
+              aria-hidden="true"
+              className="flex h-3.5 overflow-hidden rounded-sm bg-muted"
+            >
+              {[
+                [data.feedHealth.empty, "bg-[#bac5df]"],
+                [data.feedHealth.successful, "bg-primary"],
+                [data.feedHealth.rateLimited, "bg-warning"],
+                [data.feedHealth.failed, "bg-destructive"],
+              ].map(([count, color]) =>
+                Number(count) > 0 ? (
+                  <div
+                    key={color}
+                    className={String(color)}
+                    style={{ flexGrow: Number(count) }}
+                  />
+                ) : null,
+              )}
+            </div>
             <ul className="space-y-1.5 text-sm">
               {healthRows.map(([label, count, tone]) => (
                 <li key={label} className="flex justify-between gap-4">
-                  <span className="text-muted-foreground">{label}</span>
+                  <span className={tone ?? "text-muted-foreground"}>
+                    {label}
+                  </span>
                   <span className={`font-medium tabular-nums ${tone ?? ""}`}>
                     {count}
                   </span>
@@ -277,8 +307,8 @@ export function OverviewPanels({
       </div>
 
       <Card>
-        <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
-          <CardTitle className="text-base">Needs attention</CardTitle>
+        <CardHeader className="flex flex-row items-baseline justify-between gap-2 space-y-0">
+          <CardTitle>Needs attention</CardTitle>
           <Link
             to="/feeds"
             className="text-xs font-medium text-primary underline-offset-4 hover:underline"

@@ -50,10 +50,14 @@ function StatCard({
   sub?: string;
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-1">
-        <CardDescription className="text-[13px]">{label}</CardDescription>
-        <CardTitle className="text-3xl font-semibold">{value}</CardTitle>
+    <Card className="gap-1">
+      <CardHeader className="gap-1">
+        <CardDescription className="text-[13px] leading-none">
+          {label}
+        </CardDescription>
+        <CardTitle className="text-3xl leading-none font-semibold">
+          {value}
+        </CardTitle>
       </CardHeader>
       {sub && (
         <CardContent className="pt-0">
@@ -73,7 +77,7 @@ export function OverviewPending() {
         <Skeleton className="h-8 w-72" />
         <Skeleton className="h-4 w-96" />
       </div>
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-28 w-full" />
         ))}
@@ -126,7 +130,7 @@ export function OverviewPage({ data }: { data: OverviewResponse }) {
         <SyncButton />
       </div>
 
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Your Feeds"
           value={data.feedCount}

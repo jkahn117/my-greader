@@ -66,9 +66,9 @@ function NavBadge({ count }: { count: number }) {
 
 function navLinkClass(active: boolean) {
   return cn(
-    "flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors",
+    "flex items-center rounded-md px-3 py-2.5 text-sm font-medium transition-colors lg:px-5",
     active
-      ? "bg-[#2d55c7] text-sidebar-foreground"
+      ? "bg-[#2d55c7] font-bold text-sidebar-foreground"
       : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground",
   );
 }
@@ -109,12 +109,12 @@ export function AppSidebar() {
   return (
     <>
       {/* Desktop rail */}
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 flex-col bg-sidebar text-sidebar-foreground lg:flex">
-        <div className="flex items-center gap-3 px-5 pt-7">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-[218px] flex-col bg-sidebar text-sidebar-foreground lg:flex">
+        <div className="flex items-center gap-3 px-6 pt-7">
           <BrandMark />
           <span className="text-[17px] font-semibold">My GReader</span>
         </div>
-        <nav aria-label="Dashboard" className="mt-8 flex-1 px-3">
+        <nav aria-label="Dashboard" className="mt-8 flex-1 px-4">
           {nav}
         </nav>
         <div className="border-t border-sidebar-accent px-5 py-4">

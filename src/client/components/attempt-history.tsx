@@ -262,7 +262,7 @@ export function CheckHistory({
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-base">Check history</CardTitle>
+        <CardTitle>Check history</CardTitle>
         <CardDescription className="text-xs">
           {strip.length > 0
             ? `Last ${strip.length} check${strip.length === 1 ? "" : "s"} · oldest to newest · spaced by attempts, not elapsed time`
@@ -366,7 +366,7 @@ export function ErrorBreakdown({ state }: { state: FeedAttemptsState }) {
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-base">Error breakdown</CardTitle>
+        <CardTitle>Error breakdown</CardTitle>
         <CardDescription className="text-xs">
           {data
             ? `Past ${data.problemGroups.windowDays} days · ${total} problem check${total === 1 ? "" : "s"}`
@@ -641,7 +641,7 @@ export function Results({
     <Card className="gap-4">
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2">
         <div className="space-y-1.5">
-          <CardTitle className="text-base">Results</CardTitle>
+          <CardTitle>Results</CardTitle>
           <CardDescription className="text-xs">
             {problem ?? "Every recorded attempt, newest first"}
           </CardDescription>

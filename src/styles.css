@@ -6,17 +6,17 @@
    actionable warnings, red for failures / automatic deactivation. */
 @theme {
   /* Cool gray surfaces behind white cards (design rev05) */
-  --color-background:          oklch(0.955 0.005 256);
-  --color-foreground:          oklch(0.21 0.006 286);
+  --color-background:          #f4f5f8;
+  --color-foreground:          #18181b;
   --color-card:                oklch(1 0 0);
-  --color-card-foreground:     oklch(0.21 0.006 286);
+  --color-card-foreground:     #18181b;
 
   /* Muted / secondary surfaces */
   --color-muted:               oklch(0.97 0 0);
-  --color-muted-foreground:    oklch(0.556 0 0);
+  --color-muted-foreground:    #606875;
 
   /* Primary action — blue */
-  --color-primary:             oklch(0.546 0.245 262.881);
+  --color-primary:             #2457d6;
   --color-primary-foreground:  oklch(0.985 0 0);
 
   /* Secondary (light gray) */
@@ -32,32 +32,37 @@
   --color-accent-foreground:   oklch(0.205 0 0);
 
   /* Borders, inputs, focus rings */
-  --color-border:              oklch(0.922 0 0);
-  --color-input:               oklch(0.922 0 0);
+  --color-border:              #dfe2e8;
+  --color-input:               #cdd2de;
   --color-ring:                oklch(0.708 0.19 262.881);
 
   /* Reading — violet */
-  --color-reading:             oklch(0.541 0.281 293.009);
+  --color-reading:             #8152d5;
   --color-reading-foreground:  oklch(0.985 0 0);
 
   /* Warning — amber */
-  --color-warning:             oklch(0.769 0.188 70.08);
-  --color-warning-foreground:  oklch(0.279 0.077 45.635);
+  --color-warning:             #db9a33;
+  --color-warning-foreground:  #925209;
 
   /* Destructive / failure — red */
-  --color-destructive:         oklch(0.577 0.245 27.325);
+  --color-destructive:         #b42332;
   --color-destructive-foreground: oklch(0.985 0 0);
 
   /* Graphite navigation rail */
-  --color-sidebar:             oklch(0.18 0.015 270);
+  --color-sidebar:             #181c25;
   --color-sidebar-foreground:  oklch(0.985 0 0);
-  --color-sidebar-muted:       oklch(0.75 0.01 270);
-  --color-sidebar-accent:      oklch(0.27 0.02 270);
+  --color-sidebar-muted:       #afb6c3;
+  --color-sidebar-accent:      #343944;
 }
 
 /* Apply background + text defaults to the page */
 @layer base {
+  *, ::before, ::after {
+    border-color: var(--color-border);
+  }
+
   body {
+    font-variant-numeric: tabular-nums;
     background-color: var(--color-background);
     color: var(--color-foreground);
   }

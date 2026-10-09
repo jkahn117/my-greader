@@ -13,6 +13,10 @@ test("nav exposes Overview, Feeds, Reading, Access and redirects /app", async ({
   for (const label of ["Overview", "Feeds", "Reading", "Access"]) {
     await expect(nav.getByRole("link", { name: label })).toBeVisible();
   }
+  await expect(nav.getByRole("link", { name: "Overview" })).toHaveCSS(
+    "font-weight",
+    "700",
+  );
 });
 
 test("overview summary cards appear in the required order", async ({
@@ -25,6 +29,17 @@ test("overview summary cards appear in the required order", async ({
   await expect(cards.nth(2)).toContainText("Items marked read");
   await expect(cards.nth(3)).toContainText("Feeds needing attention");
   await expect(cards.nth(3)).toContainText("rate limited");
+});
+
+test("summary cards share one row at laptop widths", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.goto("/app/overview");
+  const cards = page.locator("[data-slot='card']");
+  const boxes = await Promise.all(
+    [0, 1, 2, 3].map((index) => cards.nth(index).boundingBox()),
+  );
+  expect(boxes.every((box) => box !== null)).toBe(true);
+  expect(new Set(boxes.map((box) => box!.y)).size).toBe(1);
 });
 
 test("overview panels: reading, feed health, needs attention — names and values", async ({
