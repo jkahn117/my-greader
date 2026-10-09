@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // All browser tests share one isolated local D1 instance; reseed before mutations.
-export function seed(file: "seed-feeds.sql" | "seed-tokens.sql") {
+export function seed(
+  file: "seed-feeds.sql" | "seed-tokens.sql" | "seed-invalid-feed.sql",
+) {
   execFileSync(
     "pnpm",
     [

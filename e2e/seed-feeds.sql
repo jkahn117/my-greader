@@ -17,6 +17,9 @@ VALUES
   ('e2e-feed-limited', 'https://delta.example.com/feed.xml', 'Delta Daily', 0, NULL, unixepoch() * 1000 - 90000000, unixepoch() * 1000 - 90000000, 240),
   ('e2e-feed-paused', 'https://epsilon.example.com/feed.xml', 'Epsilon Echo', 0, NULL, unixepoch() * 1000 - 259200000, unixepoch() * 1000 - 259200000, 240);
 
+-- Beta has incomplete polling history from before timestamp tracking.
+UPDATE feeds SET poll_state_origin = 'legacy_uncertain' WHERE id = 'e2e-feed-failing';
+
 UPDATE feeds SET deactivated_at = unixepoch() * 1000 - 604800000, deactivation_reason = 'legacy_unknown' WHERE id = 'e2e-feed-dead';
 UPDATE feeds SET deactivated_at = unixepoch() * 1000 - 172800000, deactivation_reason = 'manual' WHERE id = 'e2e-feed-paused';
 

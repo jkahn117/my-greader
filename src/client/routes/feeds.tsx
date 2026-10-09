@@ -102,10 +102,24 @@ function nextEligibility(f: FeedListItem): string {
   return formatTime(f.nextCheckAt);
 }
 
-/** Secondary evidence line under a Feed title (folder, reason, last error). */
+/** Older clients can leave invalid URLs; one must not hide the whole listing. */
+function feedDomain(feedUrl: string): string {
+  try {
+    return new URL(feedUrl).hostname || "Invalid Feed URL";
+  } catch {
+    return "Invalid Feed URL";
+  }
+}
+
+/** Missing older timestamps are unknown, not proof that a check never happened. */
+function historyTime(timestamp: number | null): string {
+  if (timestamp == null) return "Not recorded";
+  return formatTime(timestamp);
+}
+
+/** Secondary evidence line under a Feed title (reason and last error). */
 function evidence(f: FeedListItem, s: DisplayStatus): string[] {
   const parts: string[] = [];
-  if (f.folder) parts.push(f.folder);
   if (s === "paused") parts.push("Manually paused");
   if (s === "legacy_deactivated")
     parts.push("Deactivated before reason tracking — cause unknown");
@@ -388,20 +402,26 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
                 {filtered.map(({ feed: f, status: s }) => {
                   const pill = PILL[s];
                   const lines = evidence(f, s);
-                  const uncertain = f.legacyUncertain ? " (legacy)" : "";
+                  const domain = feedDomain(f.feedUrl);
                   return (
                     <TableRow key={f.subscriptionId}>
                       <TableCell className="max-w-0 py-3 pl-6 md:w-[38%]">
                         <Link
                           to="/feeds/$feedId"
                           params={{ feedId: f.feedId }}
+                          id={`feed-title-${f.subscriptionId}`}
                           className="block truncate font-semibold text-foreground underline-offset-4 hover:text-primary hover:underline focus-visible:text-primary"
                         >
-                          {f.title ?? f.feedUrl}
+                          {f.title ?? domain}
                         </Link>
                         <p className="truncate text-xs text-muted-foreground">
-                          {f.feedUrl}
+                          {domain}
                         </p>
+                        {f.folder && (
+                          <Badge variant="secondary" className="mt-1">
+                            {f.folder}
+                          </Badge>
+                        )}
                         <Badge
                           variant={pill.variant}
                           className="my-1 md:hidden"
@@ -413,22 +433,11 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
                             {lines.join(" · ")}
                           </p>
                         )}
-                        {f.legacyUncertain && (
-                          <p className="mt-0.5 text-xs text-muted-foreground italic">
-                            Legacy poll state — timestamps may be inferred
-                          </p>
-                        )}
                         <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs whitespace-nowrap text-muted-foreground md:hidden">
                           <dt>Last success</dt>
-                          <dd>
-                            {formatTime(f.lastSuccessfulAt)}
-                            {uncertain}
-                          </dd>
+                          <dd>{historyTime(f.lastSuccessfulAt)}</dd>
                           <dt>Last new Item</dt>
-                          <dd>
-                            {formatTime(f.lastNewItemAt)}
-                            {uncertain}
-                          </dd>
+                          <dd>{historyTime(f.lastNewItemAt)}</dd>
                           <dt>Next eligible</dt>
                           <dd>{nextEligibility(f)}</dd>
                           {f.consecutiveErrors > 0 && (
@@ -443,20 +452,10 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
                         <Badge variant={pill.variant}>{pill.label}</Badge>
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap md:table-cell">
-                        {formatTime(f.lastSuccessfulAt)}
-                        {uncertain && (
-                          <span className="text-xs text-muted-foreground">
-                            {uncertain}
-                          </span>
-                        )}
+                        {historyTime(f.lastSuccessfulAt)}
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap md:table-cell">
-                        {formatTime(f.lastNewItemAt)}
-                        {uncertain && (
-                          <span className="text-xs text-muted-foreground">
-                            {uncertain}
-                          </span>
-                        )}
+                        {historyTime(f.lastNewItemAt)}
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap lg:table-cell">
                         {nextEligibility(f)}
@@ -465,10 +464,15 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
                         {f.consecutiveErrors || "—"}
                       </TableCell>
                       <TableCell className="pr-4">
-                        <ChevronRight
-                          aria-hidden
-                          className="size-4 text-muted-foreground"
-                        />
+                        <Link
+                          to="/feeds/$feedId"
+                          params={{ feedId: f.feedId }}
+                          aria-label="Open Feed details"
+                          aria-describedby={`feed-title-${f.subscriptionId}`}
+                          className="flex size-8 items-center justify-center rounded-md text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronRight aria-hidden className="size-4" />
+                        </Link>
                       </TableCell>
                     </TableRow>
                   );
