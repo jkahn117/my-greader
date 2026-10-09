@@ -19,8 +19,8 @@ interface FeedElement extends FeedNode {
 }
 
 // Lenient feed parser for malformed XML/HTML feeds.
-// Uses linkedom (an HTML parser, far more tolerant than xml2js used by
-// rss-parser) to extract feed items when the primary parser fails.
+// Uses linkedom (an HTML parser, more tolerant than strict XML validation)
+// to extract feed items when the primary parser fails.
 // Handles both RSS 2.0 and Atom 1.0 formats.
 
 export interface FallbackFeedItem {

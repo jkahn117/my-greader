@@ -11,7 +11,7 @@ The Worker serves two interfaces:
 
 Cloudflare D1 stores subscriptions, articles, read/star state, tokens, and polling history. A scheduled Cloudflare Workflow fetches feeds and records results. The dashboard reads durable activity from D1 and can show optional aggregate trends from Workers Analytics Engine.
 
-The Worker uses Hono for HTTP APIs. The management dashboard is a React SPA built with Vite, TanStack Router, shadcn components, and Tailwind CSS, served as Workers static assets under `/app`. It calls same-origin JSON endpoints under `/app/api/*`. Feed parsing uses `rss-parser` with a lenient fallback.
+The Worker uses Hono for HTTP APIs. The management dashboard is a React SPA built with Vite, TanStack Router, shadcn components, and Tailwind CSS, served as Workers static assets under `/app`. It calls same-origin JSON endpoints under `/app/api/*`. Feed parsing uses Feedsmith with strict XML validation and a lenient linkedom fallback.
 
 ## Fresh deployment
 

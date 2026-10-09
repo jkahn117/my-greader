@@ -9,7 +9,7 @@
 - **Database**: Cloudflare D1 (SQLite), Drizzle ORM (schema + migrations + queries)
 - **Polling**: Cloudflare Workflows with durable Cycle Runs and per-Feed attempts in D1
 - **Metrics**: D1 for durable dashboard projections; Workers Analytics Engine for optional trends
-- **Feed parsing**: rss-parser with a lenient linkedom fallback
+- **Feed parsing**: Feedsmith with strict XML validation and a lenient linkedom fallback
 
 ## Dual concerns
 

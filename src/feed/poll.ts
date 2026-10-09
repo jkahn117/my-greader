@@ -8,7 +8,7 @@
  * Observability tools stay in the Workflow adapter. This module publishes
  * domain events through `PollObserver` and has no Powertools imports.
  */
-import Parser from "rss-parser";
+import { parseFeed } from "../lib/feed-parser";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
@@ -853,9 +853,6 @@ export function createFeedPoller(
       }
       return result;
     }
-    const parser = new Parser({
-      customFields: { item: [["content:encoded", "contentEncoded"]] },
-    });
     let parsed;
     let parseStatus: "success" | "fallback" = "success";
 
@@ -866,7 +863,7 @@ export function createFeedPoller(
           `HTTP ${response.status}: HTML document instead of RSS or Atom`,
         );
       }
-      parsed = await parser.parseString(xml);
+      parsed = parseFeed(xml);
     } catch (e) {
       const parserError = safeDiagnostic((e as Error).message);
 
@@ -906,7 +903,7 @@ export function createFeedPoller(
     const documentBaseUrl = resolveDocumentBaseUrl(xml, feed.feedUrl);
     const itemRows: ItemCommitRow[] = (
       await Promise.all(
-        (parsed.items ?? []).map(async (item: any) => {
+        parsed.items.map(async (item) => {
           const itemUrl = resolveUrl(item.link, documentBaseUrl);
           const guid = item.guid ?? itemUrl;
           if (!guid) return null;
@@ -922,7 +919,7 @@ export function createFeedPoller(
                 item.summary,
                 item.contentSnippet,
               ]
-                .filter(Boolean)
+                .filter((content): content is string => Boolean(content))
                 .reduce<string>(
                   (best, c) => (c.length > best.length ? c : best),
                   "",

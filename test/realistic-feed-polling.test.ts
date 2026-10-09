@@ -6,7 +6,7 @@ import {
 import worker from "../src/index";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cycleRuns, feeds, items, users } from "../src/db/schema";
+import { cycleRuns, feeds, items, itemState, users } from "../src/db/schema";
 import {
   createFeedPoller,
   createFeedHealth,
@@ -313,7 +313,7 @@ describe("realistic Feed Polling", () => {
       consecutiveErrors: 1,
       lastSuccessfulPollAt: POLLED_AT + 1,
     });
-    expect(await feedDashboard()).toContain("Unclosed");
+    expect(await feedDashboard()).toContain("Malformed XML");
     const recovered = rssNamespaces.replace(
       "</channel>",
       `<item><guid>after-recovery</guid><title>Discovered after recovery</title></item></channel>`,
@@ -586,6 +586,176 @@ describe("realistic Feed Polling", () => {
     expect(await storedItems(feedId)).toHaveLength(2);
   });
 
+  it.each([
+    {
+      format: "Atom",
+      parserStatus: "success",
+      identity: "https://identity.example.test/notes/existing",
+      body: `<feed xmlns="http://www.w3.org/2005/Atom">
+        <title>Identity Feed</title><entry><id>urn:uuid:existing-atom</id>
+        <link rel="related" href="/related"/><link rel="alternate" href="/notes/existing"/>
+        <title>Existing Item</title><published>2024-05-31T12:00:00Z</published>
+        </entry></feed>`,
+    },
+    {
+      format: "RDF",
+      parserStatus: "success",
+      identity: "https://identity.example.test/notes/existing",
+      body: `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <channel rdf:about="https://identity.example.test/feed.xml"><title>Identity Feed</title>
+        <link>https://identity.example.test/</link><description>Identity test</description></channel>
+        <item rdf:about="urn:uuid:existing-rdf"><title>Existing Item</title>
+        <link>/notes/existing</link><dc:date>2024-05-31T12:00:00Z</dc:date></item></rdf:RDF>`,
+    },
+    {
+      format: "malformed Atom",
+      parserStatus: "fallback",
+      identity: "urn:uuid:existing-atom",
+      body: `<feed xmlns="http://www.w3.org/2005/Atom">
+        <title>Identity Feed</title><entry><id>urn:uuid:existing-atom</id>
+        <link rel="alternate" href="/notes/existing"/><title>Existing Item</title>
+        <published>2024-05-31T12:00:00Z</published></entry>`,
+    },
+    {
+      format: "malformed RDF",
+      parserStatus: "fallback",
+      identity: "/notes/existing",
+      body: `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns="http://purl.org/rss/1.0/"><channel><title>Identity Feed</title></channel>
+        <item rdf:about="urn:uuid:existing-rdf"><title>Existing Item</title>
+        <link>/notes/existing</link></item>`,
+    },
+  ])(
+    "preserves persisted $format Item IDs and Item State across the parser upgrade",
+    async ({ body, identity, parserStatus }) => {
+      const feedId = await subscribeToFixture(
+        "https://identity.example.test/feed.xml",
+      );
+      const itemId = await deriveItemId(identity);
+      const db = getDb(env.DB);
+      await db.insert(items).values({
+        id: itemId,
+        feedId,
+        title: "Existing Item",
+        url: "https://identity.example.test/notes/existing",
+        content: "Previously ingested content",
+        publishedAt: Date.parse("2024-05-31T12:00:00Z"),
+        fetchedAt: POLLED_AT - 1_000,
+      });
+      await db.insert(itemState).values({
+        itemId,
+        userId: "dev-user-id",
+        isRead: 1,
+        isStarred: 1,
+        readAt: POLLED_AT - 500,
+      });
+      const existingItems = await storedItems(feedId);
+      const existingState = await db.select().from(itemState).all();
+
+      for (const cycleNumber of [1, 2]) {
+        await expect(
+          pollResponse(feedId, cycleNumber, body),
+        ).resolves.toMatchObject({
+          outcome: "unchanged",
+          newItems: 0,
+        });
+        expect(await storedItems(feedId)).toEqual(existingItems);
+        expect(await db.select().from(itemState).all()).toEqual(existingState);
+        expect(
+          await env.DB.prepare(
+            "SELECT parser_status FROM feed_poll_attempts WHERE cycle_run_id = ?",
+          )
+            .bind(`fixture-cycle-${cycleNumber}`)
+            .first(),
+        ).toEqual({ parser_status: parserStatus });
+      }
+    },
+  );
+
+  it.each([
+    {
+      format: "Atom",
+      body: `<feed xmlns="http://www.w3.org/2005/Atom"><title>No links</title>
+        <entry><id>urn:uuid:no-link-atom</id><title>No link</title></entry></feed>`,
+    },
+    {
+      format: "RDF",
+      body: `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns="http://purl.org/rss/1.0/"><channel><title>No links</title></channel>
+        <item rdf:about="urn:uuid:no-link-rdf"><title>No link</title></item></rdf:RDF>`,
+    },
+  ])(
+    "skips strict $format Items without a URL as before the upgrade",
+    async ({ body }) => {
+      const feedId = await subscribeToFixture(
+        "https://identity.example.test/feed.xml",
+      );
+      await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
+        outcome: "unchanged",
+        newItems: 0,
+      });
+      expect(await storedItems(feedId)).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "dc:date only",
+      dates: "<dc:date>2024-05-31T09:00:00Z</dc:date>",
+      publishedAt: Date.parse("2024-05-31T09:00:00Z"),
+    },
+    {
+      name: "pubDate before dc:date",
+      dates:
+        "<pubDate>Fri, 31 May 2024 10:00:00 GMT</pubDate><dc:date>2024-05-31T09:00:00Z</dc:date>",
+      publishedAt: Date.parse("2024-05-31T10:00:00Z"),
+    },
+    {
+      name: "invalid pubDate does not fall through to dc:date",
+      dates:
+        "<pubDate>invalid</pubDate><dc:date>2024-05-31T09:00:00Z</dc:date>",
+      publishedAt: POLLED_AT + 1,
+    },
+    {
+      name: "empty pubDate falls through to dc:date",
+      dates: "<pubDate></pubDate><dc:date>2024-05-31T09:00:00Z</dc:date>",
+      publishedAt: Date.parse("2024-05-31T09:00:00Z"),
+    },
+    {
+      name: "first dc:date wins",
+      dates:
+        "<dc:date>2024-05-31T09:00:00Z</dc:date><dc:date>2024-05-31T10:00:00Z</dc:date>",
+      publishedAt: Date.parse("2024-05-31T09:00:00Z"),
+    },
+  ])(
+    "preserves RSS publication date precedence: $name",
+    async ({ dates, publishedAt }) => {
+      const feedId = await subscribeToFixture(
+        "https://dates.example.test/feed.xml",
+      );
+      const body = `<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <channel><title>Dates</title><item><guid>dated-item</guid><title>Dated Item</title>
+      ${dates}</item></channel></rss>`;
+      await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
+        outcome: "new_items",
+        newItems: 1,
+      });
+      const stored = await storedItems(feedId);
+      expect(stored).toEqual([
+        expect.objectContaining({
+          id: await deriveItemId("dated-item"),
+          publishedAt,
+        }),
+      ]);
+      await expect(pollResponse(feedId, 2, body)).resolves.toMatchObject({
+        outcome: "unchanged",
+        newItems: 0,
+      });
+      expect(await storedItems(feedId)).toEqual(stored);
+    },
+  );
+
   it("recovers a truncated RSS document with the production fallback parser", async () => {
     const feedId = await subscribeToFixture(
       "https://broken.example.test/feed.xml",
@@ -645,7 +815,7 @@ describe("realistic Feed Polling", () => {
       parser_status: "failure",
     });
     expect(String(failedAttempt?.diagnostic).trim()).toMatch(
-      /^Non-whitespace before first tag/,
+      /^Malformed XML:/,
     );
     expect(await loadFeed(feedId)).toMatchObject({
       consecutiveErrors: 1,
