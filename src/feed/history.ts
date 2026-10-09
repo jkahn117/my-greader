@@ -51,6 +51,7 @@ export interface FeedHistory {
   ): Promise<
     {
       kind: string;
+      httpStatus: number | null;
       count: number;
       lastAt: number;
       lastMessage: string | null;
@@ -200,11 +201,18 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
       };
     },
 
+    /**
+     * Groups problem checks (failed and rate-limited) in the labeled window
+     * by recorded evidence: outcome, error class and HTTP status. Rate
+     * limiting is its own kind so a 429 is never presented as a failure.
+     */
     async problemGroups(feedId, now) {
       const since = now - PROBLEM_WINDOW_DAYS * 24 * 60 * 60 * 1000;
       const rows = await db
         .select({
-          kind: feedPollAttempts.errorClass,
+          outcome: feedPollAttempts.outcome,
+          errorClass: feedPollAttempts.errorClass,
+          httpStatus: feedPollAttempts.httpStatus,
           count: sql<number>`count(*)`,
           lastAt: sql<number>`max(${feedPollAttempts.startedAt})`,
         })
@@ -212,11 +220,16 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
         .where(
           and(
             eq(feedPollAttempts.feedId, feedId),
-            eq(feedPollAttempts.outcome, "failed"),
+            inArray(feedPollAttempts.outcome, ["failed", "rate_limited"]),
             gte(feedPollAttempts.startedAt, since),
           ),
         )
-        .groupBy(feedPollAttempts.errorClass);
+        .groupBy(
+          feedPollAttempts.outcome,
+          feedPollAttempts.errorClass,
+          feedPollAttempts.httpStatus,
+        )
+        .orderBy(desc(sql`count(*)`));
 
       const result = [];
       for (const row of rows) {
@@ -226,17 +239,20 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           .where(
             and(
               eq(feedPollAttempts.feedId, feedId),
-              eq(feedPollAttempts.outcome, "failed"),
-              row.kind === null
-                ? sql`${feedPollAttempts.errorClass} is null`
-                : eq(feedPollAttempts.errorClass, row.kind),
+              sql`${feedPollAttempts.outcome} is ${row.outcome}`,
+              sql`${feedPollAttempts.errorClass} is ${row.errorClass}`,
+              sql`${feedPollAttempts.httpStatus} is ${row.httpStatus}`,
               gte(feedPollAttempts.startedAt, since),
             ),
           )
           .orderBy(desc(feedPollAttempts.startedAt), desc(feedPollAttempts.id))
           .limit(1);
         result.push({
-          kind: row.kind ?? "unknown",
+          kind:
+            row.outcome === "rate_limited"
+              ? "rate_limited"
+              : (row.errorClass ?? "unknown"),
+          httpStatus: row.httpStatus,
           count: Number(row.count),
           lastAt: Number(row.lastAt),
           lastMessage: latest[0]?.diagnostic ?? null,

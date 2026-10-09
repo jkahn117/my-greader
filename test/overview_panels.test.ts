@@ -44,6 +44,12 @@ async function seedFeed(opts: {
   userId?: string;
   title?: string;
   deactivatedAt?: number | null;
+  deactivationReason?:
+    | "manual"
+    | "automatic_transient"
+    | "automatic_permanent"
+    | "legacy_unknown"
+    | null;
   consecutiveErrors?: number;
   lastError?: string | null;
 }) {
@@ -54,6 +60,7 @@ async function seedFeed(opts: {
     feedUrl: `https://${feedId}.example.com/feed.xml`,
     title: opts.title ?? "Feed",
     deactivatedAt: opts.deactivatedAt ?? null,
+    deactivationReason: opts.deactivationReason ?? null,
     consecutiveErrors: opts.consecutiveErrors ?? 0,
     lastError: opts.lastError ?? null,
     checkIntervalMinutes: 240,
@@ -332,7 +339,45 @@ describe("GET /app/api/overview/panels", () => {
     const body = await fetchPanels();
     expect(body.needsAttention).toHaveLength(1);
     expect(body.needsAttention[0].feedId).toBe(failing);
-    expect(body.needsAttention[0].reason).toContain("3 consecutive errors");
+    expect(body.needsAttention[0].kind).toBe("failing");
+    expect(body.needsAttention[0].detail).toContain("3 consecutive errors");
+  });
+
+  it("reports rate-limited feeds as attention, distinct from failures", async () => {
+    const limited = await seedFeed({ title: "Throttled" });
+    await seedAttempt(limited, "rate_limited");
+    const failing = await seedFeed({
+      title: "Broken",
+      consecutiveErrors: 2,
+      lastError: "HTTP 500",
+    });
+
+    const body = await fetchPanels();
+    const kinds = Object.fromEntries(
+      body.needsAttention.map((f) => [f.feedId, f.kind]),
+    );
+    expect(kinds[limited]).toBe("rate_limited");
+    expect(kinds[failing]).toBe("failing");
+    const rl = body.needsAttention.find((f) => f.feedId === limited)!;
+    expect(rl.detail).toContain("HTTP 429");
+  });
+
+  it("counts manual pauses as a footnote, not attention", async () => {
+    await seedFeed({
+      title: "Paused",
+      deactivatedAt: Date.now(),
+      deactivationReason: "manual",
+    });
+    await seedFeed({
+      title: "Auto",
+      deactivatedAt: Date.now(),
+      deactivationReason: "automatic_permanent",
+    });
+
+    const body = await fetchPanels();
+    expect(body.needsAttention).toHaveLength(1);
+    expect(body.needsAttention[0].kind).toBe("auto_deactivated");
+    expect(body.manuallyPaused).toBe(1);
   });
 
   it("degrades the Analytics Engine panel independently", async () => {

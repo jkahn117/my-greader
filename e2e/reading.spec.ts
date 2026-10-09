@@ -24,8 +24,12 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
   await expect(total.locator("[data-slot='card-title']")).toHaveText("3");
   await expect(total).toContainText("past 7 days in");
 
+  // violet shadcn/recharts chart, with a details-based tabular alternative
+  await expect(page.locator("[data-chart]")).toBeVisible();
+
   const days = page.getByTestId("reading-day");
   await expect(days).toHaveCount(7);
+  await page.getByText("Daily totals").click();
   await expect(days.last()).toContainText("today, partial");
 
   const table = feedTable(page);
@@ -47,6 +51,9 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
   await expect(page.getByText(/work offline sync later/)).toBeVisible();
   await expect(page.getByText(/Marking an item read again/)).toBeVisible();
   await expect(page.getByText(/days after they\s+were fetched/)).toBeVisible();
+  await expect(
+    page.getByText(/release \/ expiration breakdown/),
+  ).toBeVisible();
 });
 
 test("time window control widens the window via the keyboard", async ({

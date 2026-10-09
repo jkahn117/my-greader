@@ -132,7 +132,9 @@ describe("GET /app/api/overview", () => {
     // deactivated subscription still counts toward New Items
     expect(body.newItemsLast7Days).toBe(2);
     expect(body.markedReadLast7Days).toBe(1);
-    expect(body.feedsNeedingAttention).toBe(1);
+    expect(body.attention.total).toBe(1);
+    expect(body.attention.autoDeactivated).toBe(1);
+    expect(body.latestCycle.state).toBeDefined();
     expect(body.timezone).toBeTruthy();
   });
 
@@ -165,7 +167,7 @@ describe("GET /app/api/overview", () => {
     expect(body.feedCount).toBe(0);
     expect(body.newItemsLast7Days).toBe(0);
     expect(body.markedReadLast7Days).toBe(0);
-    expect(body.feedsNeedingAttention).toBe(0);
+    expect(body.attention.total).toBe(0);
   });
 
   it("counts feeds with persisted errors as needing attention", async () => {
@@ -176,6 +178,7 @@ describe("GET /app/api/overview", () => {
     });
     const res = await fetch("/app/api/overview");
     const body = (await res.json()) as OverviewResponse;
-    expect(body.feedsNeedingAttention).toBe(1);
+    expect(body.attention.total).toBe(1);
+    expect(body.attention.failing).toBe(1);
   });
 });

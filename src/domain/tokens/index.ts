@@ -114,10 +114,7 @@ export function createApiTokenLifecycle(
           isNull(apiTokens.revokedAt),
           or(
             isNull(apiTokens.lastUsedAt),
-            lte(
-              apiTokens.lastUsedAt,
-              now - API_TOKEN_USAGE_WRITE_INTERVAL_MS,
-            ),
+            lte(apiTokens.lastUsedAt, now - API_TOKEN_USAGE_WRITE_INTERVAL_MS),
           ),
         ),
       );

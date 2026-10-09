@@ -16,7 +16,6 @@ import {
   inArray,
   isNotNull,
   isNull,
-  or,
   sql,
 } from "drizzle-orm";
 import {
@@ -115,13 +114,43 @@ export interface ActivityMetrics {
   readsByDay: ReadsByDay[];
 }
 
+export interface AttentionRow {
+  feedId: string;
+  title: string;
+  deactivatedAt: number | null;
+  deactivationReason: string | null;
+  consecutiveErrors: number;
+  lastError: string | null;
+  latestOutcome: FeedAttemptOutcome | null;
+}
+
+export interface AttentionSummary {
+  total: number;
+  rateLimited: number;
+  failing: number;
+  autoDeactivated: number;
+  manuallyPaused: number;
+}
+
+export interface AttentionItem {
+  feedId: string;
+  title: string | null;
+  kind: "rate_limited" | "failing" | "auto_deactivated";
+  detail: string;
+}
+
 export interface OverviewSummary {
   feedCount: number;
   activeFeedCount: number;
   deactivatedFeedCount: number;
   newItemsLast7Days: number;
   markedReadLast7Days: number;
-  feedsNeedingAttention: number;
+  attention: AttentionSummary;
+  latestCycle: {
+    state: "running" | "completed" | "empty" | "missing" | "unknown";
+    ranAt: number | null;
+    checkedFeeds: number | null;
+  };
 }
 
 export interface ReadingDay {
@@ -150,7 +179,8 @@ export interface OverviewPanels {
     ranAt: number | null;
     checkedFeeds: number | null;
   };
-  needsAttention: { feedId: string; title: string | null; reason: string }[];
+  needsAttention: AttentionItem[];
+  manuallyPaused: number;
 }
 
 export interface ActivityReader {
@@ -193,6 +223,45 @@ function publicAttemptDiagnostic(attempt: {
   return null;
 }
 
+/**
+ * Classifies one subscribed feed's attention state from persisted facts:
+ * manual pauses are deliberate and never count as failures; rate limiting
+ * is reported from the feed's latest check outcome, separately from the
+ * persisted error streak.
+ */
+function classifyAttention(
+  row: AttentionRow,
+): { kind: AttentionItem["kind"]; detail: string } | "paused" | null {
+  if (row.deactivatedAt !== null) {
+    if (row.deactivationReason === "manual") return "paused";
+    const streak =
+      row.consecutiveErrors > 0
+        ? `${row.consecutiveErrors} consecutive errors${
+            row.lastError ? `: ${row.lastError}` : ""
+          }`
+        : "no recorded error streak";
+    return {
+      kind: "auto_deactivated",
+      detail: `${streak} · cause unconfirmed`,
+    };
+  }
+  if (row.latestOutcome === "rate_limited") {
+    return {
+      kind: "rate_limited",
+      detail: "HTTP 429 on the latest check · Backoff active",
+    };
+  }
+  if (row.consecutiveErrors > 0) {
+    return {
+      kind: "failing",
+      detail: `${row.consecutiveErrors} consecutive errors${
+        row.lastError ? `: ${row.lastError}` : ""
+      }`,
+    };
+  }
+  return null;
+}
+
 /** Creates the durable Activity read interface used by dashboard adapters. */
 export function createActivityReader(
   dbBinding: D1Database,
@@ -202,55 +271,139 @@ export function createActivityReader(
 
   return { timeline, metrics, overviewSummary, overviewPanels };
 
+  /** Latest recorded cycle-run lifecycle, shared by overview reads. */
+  async function latestCycle(): Promise<OverviewSummary["latestCycle"]> {
+    const row = await db
+      .select()
+      .from(cycleRuns)
+      .orderBy(desc(cycleRuns.ranAt), desc(cycleRuns.id))
+      .limit(1);
+    const latest = row[0];
+    if (!latest) return { state: "missing", ranAt: null, checkedFeeds: null };
+    if (latest.status === null)
+      return { state: "unknown", ranAt: latest.ranAt, checkedFeeds: null };
+    if (latest.status === "running")
+      return {
+        state: "running",
+        ranAt: latest.ranAt,
+        checkedFeeds: latest.checkedFeeds,
+      };
+    if (latest.outcome === "empty")
+      return { state: "empty", ranAt: latest.ranAt, checkedFeeds: 0 };
+    return {
+      state: "completed",
+      ranAt: latest.ranAt,
+      checkedFeeds: latest.checkedFeeds,
+    };
+  }
+
+  /**
+   * Every subscribed feed with its persisted health facts and latest
+   * recorded check outcome — the raw evidence for attention classification.
+   */
+  async function attentionRows(userId: string): Promise<AttentionRow[]> {
+    const latestPerFeed = db
+      .select({
+        feedId: feedPollAttempts.feedId,
+        latestStartedAt: sql<number>`max(${feedPollAttempts.startedAt})`.as(
+          "latest_started_at",
+        ),
+      })
+      .from(feedPollAttempts)
+      .groupBy(feedPollAttempts.feedId)
+      .as("attention_latest_per_feed");
+
+    return db
+      .select({
+        feedId: feeds.id,
+        title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
+        deactivatedAt: feeds.deactivatedAt,
+        deactivationReason: feeds.deactivationReason,
+        consecutiveErrors: feeds.consecutiveErrors,
+        lastError: feeds.lastError,
+        latestOutcome: feedPollAttempts.outcome,
+      })
+      .from(subscriptions)
+      .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+      .leftJoin(latestPerFeed, eq(latestPerFeed.feedId, feeds.id))
+      .leftJoin(
+        feedPollAttempts,
+        and(
+          eq(feedPollAttempts.feedId, latestPerFeed.feedId),
+          eq(feedPollAttempts.startedAt, latestPerFeed.latestStartedAt),
+        ),
+      )
+      .where(eq(subscriptions.userId, userId))
+      .orderBy(feeds.id);
+  }
+
+  /** Aggregates classified attention rows into the summary breakdown. */
+  function summarizeAttention(rows: AttentionRow[]): AttentionSummary {
+    const summary: AttentionSummary = {
+      total: 0,
+      rateLimited: 0,
+      failing: 0,
+      autoDeactivated: 0,
+      manuallyPaused: 0,
+    };
+    for (const row of rows) {
+      const kind = classifyAttention(row);
+      if (kind === "paused") summary.manuallyPaused++;
+      else if (kind !== null) {
+        summary.total++;
+        if (kind.kind === "rate_limited") summary.rateLimited++;
+        else if (kind.kind === "failing") summary.failing++;
+        else summary.autoDeactivated++;
+      }
+    }
+    return summary;
+  }
+
   /** Builds User-scoped totals for the React dashboard overview. */
   async function overviewSummary(userId: string): Promise<OverviewSummary> {
     const cutoffMs = now() - METRICS_WINDOW_MS;
-    const [feedRows, newItemsRow, readRow, attentionRow] = await db.batch([
-      db
-        .select({
-          total: sql<number>`count(*)`,
-          deactivated: sql<number>`sum(case when ${feeds.deactivatedAt} is not null then 1 else 0 end)`,
-        })
-        .from(subscriptions)
-        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-        .where(eq(subscriptions.userId, userId)),
-      db
-        .select({ count: sql<number>`count(distinct ${items.id})` })
-        .from(items)
-        .innerJoin(subscriptions, eq(items.feedId, subscriptions.feedId))
-        .where(
-          and(eq(subscriptions.userId, userId), gt(items.fetchedAt, cutoffMs)),
-        ),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(itemState)
-        .innerJoin(items, eq(itemState.itemId, items.id))
-        .innerJoin(
-          subscriptions,
-          and(
-            eq(subscriptions.feedId, items.feedId),
-            eq(subscriptions.userId, itemState.userId),
+    const [feedRows, newItemsRow, readRow, attentionList, cycle] =
+      await Promise.all([
+        db
+          .select({
+            total: sql<number>`count(*)`,
+            deactivated: sql<number>`sum(case when ${feeds.deactivatedAt} is not null then 1 else 0 end)`,
+          })
+          .from(subscriptions)
+          .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
+          .where(eq(subscriptions.userId, userId)),
+        db
+          .select({ count: sql<number>`count(distinct ${items.id})` })
+          .from(items)
+          .innerJoin(subscriptions, eq(items.feedId, subscriptions.feedId))
+          .where(
+            and(
+              eq(subscriptions.userId, userId),
+              gt(items.fetchedAt, cutoffMs),
+            ),
           ),
-        )
-        .where(
-          and(
-            eq(itemState.userId, userId),
-            eq(itemState.isRead, 1),
-            isNotNull(itemState.readAt),
-            gt(itemState.readAt, cutoffMs),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(itemState)
+          .innerJoin(items, eq(itemState.itemId, items.id))
+          .innerJoin(
+            subscriptions,
+            and(
+              eq(subscriptions.feedId, items.feedId),
+              eq(subscriptions.userId, itemState.userId),
+            ),
+          )
+          .where(
+            and(
+              eq(itemState.userId, userId),
+              eq(itemState.isRead, 1),
+              isNotNull(itemState.readAt),
+              gt(itemState.readAt, cutoffMs),
+            ),
           ),
-        ),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(subscriptions)
-        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-        .where(
-          and(
-            eq(subscriptions.userId, userId),
-            sql`(${feeds.deactivatedAt} is not null or ${feeds.consecutiveErrors} > 0)`,
-          ),
-        ),
-    ]);
+        attentionRows(userId),
+        latestCycle(),
+      ]);
 
     const feedCount = Number(feedRows[0]?.total ?? 0);
     const deactivatedFeedCount = Number(feedRows[0]?.deactivated ?? 0);
@@ -260,7 +413,8 @@ export function createActivityReader(
       deactivatedFeedCount,
       newItemsLast7Days: Number(newItemsRow[0]?.count ?? 0),
       markedReadLast7Days: Number(readRow[0]?.count ?? 0),
-      feedsNeedingAttention: Number(attentionRow[0]?.count ?? 0),
+      attention: summarizeAttention(attentionList),
+      latestCycle: cycle,
     };
   }
 
@@ -288,8 +442,8 @@ export function createActivityReader(
       readRows,
       topFeedRows,
       latestAttemptRows,
-      cycleRow,
-      attentionRows,
+      cycle,
+      attentionList,
       subscriptionCountRow,
     ] = await Promise.all([
       db
@@ -363,29 +517,8 @@ export function createActivityReader(
           ),
         )
         .orderBy(desc(feedPollAttempts.id)),
-      db
-        .select()
-        .from(cycleRuns)
-        .orderBy(desc(cycleRuns.ranAt), desc(cycleRuns.id))
-        .limit(1),
-      db
-        .select({
-          feedId: feeds.id,
-          title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title})`,
-          deactivatedAt: feeds.deactivatedAt,
-          deactivationReason: feeds.deactivationReason,
-          consecutiveErrors: feeds.consecutiveErrors,
-          lastError: feeds.lastError,
-        })
-        .from(subscriptions)
-        .innerJoin(feeds, eq(subscriptions.feedId, feeds.id))
-        .where(
-          and(
-            eq(subscriptions.userId, userId),
-            or(isNotNull(feeds.deactivatedAt), gt(feeds.consecutiveErrors, 0)),
-          ),
-        )
-        .limit(NEEDS_ATTENTION_LIMIT),
+      latestCycle(),
+      attentionRows(userId),
       db
         .select({ count: sql<number>`count(*)` })
         .from(subscriptions)
@@ -434,24 +567,24 @@ export function createActivityReader(
       Number(subscriptionCountRow[0]?.count ?? 0) - seenFeeds.size,
     );
 
-    const latestCycle = cycleRow[0];
-    const cycle: OverviewPanels["cycle"] = !latestCycle
-      ? { state: "missing", ranAt: null, checkedFeeds: null }
-      : latestCycle.status === null
-        ? { state: "unknown", ranAt: latestCycle.ranAt, checkedFeeds: null }
-        : latestCycle.status === "running"
-          ? {
-              state: "running",
-              ranAt: latestCycle.ranAt,
-              checkedFeeds: latestCycle.checkedFeeds,
-            }
-          : latestCycle.outcome === "empty"
-            ? { state: "empty", ranAt: latestCycle.ranAt, checkedFeeds: 0 }
-            : {
-                state: "completed",
-                ranAt: latestCycle.ranAt,
-                checkedFeeds: latestCycle.checkedFeeds,
-              };
+    const needsAttention: AttentionItem[] = [];
+    let manuallyPaused = 0;
+    for (const row of attentionList) {
+      const classified = classifyAttention(row);
+      if (classified === "paused") {
+        manuallyPaused++;
+      } else if (
+        classified !== null &&
+        needsAttention.length < NEEDS_ATTENTION_LIMIT
+      ) {
+        needsAttention.push({
+          feedId: row.feedId,
+          title: row.title ?? null,
+          kind: classified.kind,
+          detail: classified.detail,
+        });
+      }
+    }
 
     return {
       reading: {
@@ -466,14 +599,8 @@ export function createActivityReader(
       },
       feedHealth,
       cycle,
-      needsAttention: attentionRows.map((row) => ({
-        feedId: row.feedId,
-        title: row.title ?? null,
-        reason:
-          row.deactivatedAt !== null
-            ? `Deactivated${row.deactivationReason === "manual" ? " (manual)" : ""}`
-            : `${row.consecutiveErrors} consecutive errors${row.lastError ? `: ${row.lastError}` : ""}`,
-      })),
+      needsAttention,
+      manuallyPaused,
     };
   }
 

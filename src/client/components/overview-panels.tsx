@@ -1,7 +1,12 @@
 /** @jsxImportSource react */
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import type { OverviewPanelsResponse } from "../../shared/dashboard-api";
+import { Bar, BarChart, XAxis, YAxis } from "recharts";
+import { ChevronRight } from "lucide-react";
+import type {
+  AttentionFeed,
+  OverviewPanelsResponse,
+} from "../../shared/dashboard-api";
 import { apiGet } from "../lib/api";
 import { formatTime } from "../lib/time";
 import {
@@ -10,9 +15,25 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "../components/ui/chart";
 import { Badge } from "../components/ui/badge";
 
-/** CSS bar chart of the marked-read trend (violet = reading). */
+const readingChartConfig = {
+  count: { label: "Marked read", color: "var(--color-reading)" },
+} satisfies ChartConfig;
+
+/** Weekday label for a display-timezone YYYY-MM-DD day key. */
+function dayLabel(date: string): string {
+  const d = new Date(`${date}T12:00:00`);
+  return d.toLocaleDateString("en-US", { weekday: "short" });
+}
+
+/** Violet shadcn/recharts bar chart with an sr-only tabular alternative. */
 function ReadingChart({
   daily,
   windowDays,
@@ -22,25 +43,49 @@ function ReadingChart({
   windowDays: number;
   timezone: string;
 }) {
-  const max = Math.max(1, ...daily.map((d) => d.count));
+  const data = daily.map((d) => ({ day: dayLabel(d.date), ...d }));
   return (
     <div>
-      <div className="flex h-24 items-end gap-1.5" aria-hidden>
-        {daily.map((d) => (
-          <div
-            key={d.date}
-            title={`${d.date}: ${d.count} marked read`}
-            className="flex-1 rounded-t bg-violet-500/80"
-            style={{ height: `${Math.max(4, (d.count / max) * 100)}%` }}
+      <ChartContainer
+        config={readingChartConfig}
+        className="h-36 w-full"
+        role="img"
+        aria-label={`Items marked read per day for the last ${windowDays} days (${timezone})`}
+      >
+        <BarChart data={data} accessibilityLayer>
+          <XAxis
+            dataKey="day"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={6}
+            fontSize={11}
           />
-        ))}
-      </div>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-        <span>{daily[0]?.date}</span>
-        <span>{daily[daily.length - 1]?.date}</span>
-      </div>
+          <YAxis hide domain={[0, "dataMax"]} />
+          <ChartTooltip
+            content={<ChartTooltipContent labelKey="date" />}
+            cursor={false}
+          />
+          <Bar
+            dataKey="count"
+            fill="var(--color-count)"
+            radius={[3, 3, 0, 0]}
+            isAnimationActive={false}
+          />
+        </BarChart>
+      </ChartContainer>
+      <table className="sr-only">
+        <caption>Items marked read per day</caption>
+        <tbody>
+          {daily.map((d) => (
+            <tr key={d.date}>
+              <th scope="row">{d.date}</th>
+              <td>{d.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <p className="mt-1 text-xs text-muted-foreground">
-        Items marked read per day ({windowDays} days, {timezone}; boundary days
+        Items marked read · last {windowDays} days ({timezone}; boundary days
         are partial)
       </p>
     </div>
@@ -62,7 +107,22 @@ function cycleLabel(cycle: OverviewPanelsResponse["cycle"]): string {
   }
 }
 
-export function OverviewPanels({ timezone }: { timezone: string }) {
+const ATTENTION_PILL: Record<
+  AttentionFeed["kind"],
+  { label: string; variant: "warning" | "destructive" }
+> = {
+  rate_limited: { label: "Rate limited", variant: "warning" },
+  failing: { label: "Failing", variant: "destructive" },
+  auto_deactivated: { label: "Auto-deactivated", variant: "destructive" },
+};
+
+export function OverviewPanels({
+  timezone,
+  feedCount,
+}: {
+  timezone: string;
+  feedCount: number;
+}) {
   const [data, setData] = useState<OverviewPanelsResponse | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -92,11 +152,11 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
     return <p className="text-sm text-muted-foreground">Loading panels…</p>;
   }
 
-  const healthRows: [string, number][] = [
-    ["New items on last check", data.feedHealth.successful],
-    ["Completed, nothing new", data.feedHealth.empty],
-    ["Rate limited", data.feedHealth.rateLimited],
-    ["Failed", data.feedHealth.failed],
+  const healthRows: [string, number, string?][] = [
+    ["New Items", data.feedHealth.successful],
+    ["Unchanged / not modified", data.feedHealth.empty],
+    ["Rate limited", data.feedHealth.rateLimited, "text-warning-foreground"],
+    ["Failed", data.feedHealth.failed, "text-destructive"],
     ["Skipped (deliberate)", data.feedHealth.skipped],
     ["Check running", data.feedHealth.running],
     ["No recorded activity", data.feedHealth.missing],
@@ -104,10 +164,17 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Reading activity</CardTitle>
+          <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
+            <CardTitle className="text-base">Your reading activity</CardTitle>
+            <Link
+              to="/reading"
+              search={{ days: 7 }}
+              className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Reading detail →
+            </Link>
           </CardHeader>
           <CardContent className="space-y-4">
             <ReadingChart
@@ -117,11 +184,8 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
             />
             {data.reading.topFeeds.length > 0 ? (
               <div>
-                <p className="text-xs font-medium text-muted-foreground">
-                  Most marked read
-                </p>
-                <ul className="mt-1 space-y-1 text-sm">
-                  {data.reading.topFeeds.map((f) => (
+                <ul className="space-y-1 text-sm">
+                  {data.reading.topFeeds.slice(0, 3).map((f) => (
                     <li key={f.feedId} className="flex justify-between gap-4">
                       <Link
                         to="/feeds/$feedId"
@@ -142,19 +206,28 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
                 Nothing marked read in this window.
               </p>
             )}
+            <p className="text-xs text-muted-foreground">
+              Dates reflect latest server receipt. Read state does not
+              distinguish reading from release.
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Feed health</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Latest check per subscribed Feed
+            </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <ul className="space-y-1 text-sm">
-              {healthRows.map(([label, count]) => (
+            <ul className="space-y-1.5 text-sm">
+              {healthRows.map(([label, count, tone]) => (
                 <li key={label} className="flex justify-between gap-4">
                   <span className="text-muted-foreground">{label}</span>
-                  <span className="font-medium">{count}</span>
+                  <span className={`font-medium tabular-nums ${tone ?? ""}`}>
+                    {count}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -184,7 +257,7 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
                         <div
                           key={d.day}
                           title={`${d.day}: ${d.newArticles}`}
-                          className="flex-1 rounded-t bg-blue-500/70"
+                          className="flex-1 rounded-t bg-primary/70"
                           style={{
                             height: `${Math.max(4, (d.newArticles / max) * 100)}%`,
                           }}
@@ -204,34 +277,57 @@ export function OverviewPanels({ timezone }: { timezone: string }) {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
           <CardTitle className="text-base">Needs attention</CardTitle>
+          <Link
+            to="/feeds"
+            className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+          >
+            All {feedCount} Feeds →
+          </Link>
         </CardHeader>
         <CardContent>
-          {data.needsAttention.length === 0 ? (
+          {data.needsAttention.length === 0 && data.manuallyPaused === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing needs attention right now.
             </p>
           ) : (
-            <ul className="divide-y text-sm">
-              {data.needsAttention.map((f) => (
-                <li
-                  key={f.feedId}
-                  className="flex items-center justify-between gap-4 py-2"
-                >
-                  <Link
-                    to="/feeds/$feedId"
-                    params={{ feedId: f.feedId }}
-                    className="truncate text-primary underline-offset-4 hover:underline"
-                  >
-                    {f.title ?? f.feedId}
-                  </Link>
-                  <Badge variant="secondary" className="shrink-0">
-                    {f.reason}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
+            <>
+              {data.needsAttention.length > 0 && (
+                <ul className="divide-y">
+                  {data.needsAttention.map((f) => {
+                    const pill = ATTENTION_PILL[f.kind];
+                    return (
+                      <li key={f.feedId}>
+                        <Link
+                          to="/feeds/$feedId"
+                          params={{ feedId: f.feedId }}
+                          className="group flex items-center gap-4 py-3"
+                        >
+                          <span className="w-40 shrink-0 truncate text-sm font-semibold">
+                            {f.title ?? f.feedId}
+                          </span>
+                          <Badge variant={pill.variant} className="shrink-0">
+                            {pill.label}
+                          </Badge>
+                          <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
+                            {f.detail}
+                          </span>
+                          <ChevronRight className="size-4 shrink-0 text-primary transition-transform group-hover:translate-x-0.5" />
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {data.manuallyPaused > 0 && (
+                <p className="pt-3 text-xs text-muted-foreground">
+                  {data.manuallyPaused} additional Feed
+                  {data.manuallyPaused === 1 ? " is" : "s are"} manually paused,
+                  not counted as a failure.
+                </p>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

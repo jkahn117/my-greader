@@ -7,13 +7,31 @@ test("lists tokens with state and shows connection instructions", async ({
   page,
 }) => {
   await page.goto("/app/access");
-  await expect(page.getByText("Connect a reader")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "API Tokens" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Last use updates at most hourly. It is not a connection"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Raw API Tokens appear only at creation."),
+  ).toBeVisible();
+
+  // connection instructions are secondary: collapsed while tokens exist
+  const instructions = page.getByRole("button", {
+    name: "Current connection instructions",
+  });
+  await expect(instructions).toHaveAttribute("aria-expanded", "false");
+  await instructions.click();
   await expect(page.getByText("FreshRSS", { exact: true })).toBeVisible();
   await expect(page.getByText("http://localhost:5176")).toBeVisible();
   await expect(page.getByText("dev@localhost")).toBeVisible();
 
   const keeper = page.getByRole("row", { name: /Seeded Keeper/ });
-  await expect(keeper).toContainText("Active");
+  // active tokens show their Revoke action; revoked ones a "Revoked" label
+  await expect(
+    keeper.getByRole("button", { name: "Revoke Seeded Keeper" }),
+  ).toBeVisible();
   await expect(keeper).toContainText("Never");
   await expect(page.getByRole("row", { name: /Seeded Retired/ })).toContainText(
     "Revoked",
@@ -27,13 +45,14 @@ test("generates a token shown once, copies it, and hides it on reload", async ({
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/app/access");
+  await page.getByRole("button", { name: "Create API Token" }).click();
 
   const name = page.getByLabel("Token name");
-  await name.focus();
+  await expect(name).toBeFocused();
   await name.fill("Playwright Reader");
   await page.keyboard.press("Enter");
 
-  const result = page.getByRole("region", { name: "New API token" });
+  const result = page.getByRole("region", { name: "New API Token" });
   await expect(result).toBeVisible();
   const raw = (await page.getByTestId("raw-token").textContent())!;
   expect(raw).toMatch(/^[0-9a-f]{64}$/);
@@ -67,8 +86,9 @@ test("copy falls back to selecting the token when clipboard is denied", async ({
     });
   });
   await page.goto("/app/access");
+  await page.getByRole("button", { name: "Create API Token" }).click();
   await page.getByLabel("Token name").fill("No Clipboard");
-  await page.getByRole("button", { name: "Generate" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await page.getByRole("button", { name: "Copy token" }).click();
   await expect(page.getByText(/Copy failed/)).toBeVisible();
   const raw = await page.getByTestId("raw-token").textContent();
@@ -81,14 +101,15 @@ test("invalid name shows safe error feedback and creates nothing", async ({
   page,
 }) => {
   await page.goto("/app/access");
+  await page.getByRole("button", { name: "Create API Token" }).click();
   const name = page.getByLabel("Token name");
   await name.fill("   ");
-  await page.getByRole("button", { name: "Generate" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText(
     "Enter a token name (1–100 characters).",
   );
   await expect(name).toBeFocused();
-  await expect(page.getByRole("region", { name: "New API token" })).toHaveCount(
+  await expect(page.getByRole("region", { name: "New API Token" })).toHaveCount(
     0,
   );
 });
@@ -106,12 +127,13 @@ test("server failure shows safe error feedback without a token", async ({
       : route.continue(),
   );
   await page.goto("/app/access");
+  await page.getByRole("button", { name: "Create API Token" }).click();
   await page.getByLabel("Token name").fill("Will Fail");
-  await page.getByRole("button", { name: "Generate" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
-    "Token generation failed (500)",
+    "Token creation failed (500)",
   );
-  await expect(page.getByRole("region", { name: "New API token" })).toHaveCount(
+  await expect(page.getByRole("region", { name: "New API Token" })).toHaveCount(
     0,
   );
 });
@@ -142,17 +164,17 @@ test("revocation confirms the token by keyboard and leaves others", async ({
     "Revoked “Seeded Doomed”.",
   );
   await expect(doomed).toContainText("Revoked");
-  await expect(page.getByRole("row", { name: /Seeded Keeper/ })).toContainText(
-    "Active",
-  );
+  await expect(
+    page.getByRole("button", { name: "Revoke Seeded Keeper" }),
+  ).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("row", { name: /Seeded Doomed/ })).toContainText(
     "Revoked",
   );
-  await expect(page.getByRole("row", { name: /Seeded Keeper/ })).toContainText(
-    "Active",
-  );
+  await expect(
+    page.getByRole("button", { name: "Revoke Seeded Keeper" }),
+  ).toBeVisible();
 });
 
 test("failed revocation shows safe feedback and keeps the token", async ({
@@ -171,7 +193,7 @@ test("failed revocation shows safe feedback and keeps the token", async ({
   await expect(page.getByRole("status")).toContainText(
     "Revoking “Seeded Keeper” failed (500).",
   );
-  await expect(page.getByRole("row", { name: /Seeded Keeper/ })).toContainText(
-    "Active",
-  );
+  await expect(
+    page.getByRole("button", { name: "Revoke Seeded Keeper" }),
+  ).toBeVisible();
 });

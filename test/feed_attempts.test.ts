@@ -97,7 +97,7 @@ async function seedAttempt(
     completedAt:
       opts.finishedAt === undefined ? opts.startedAt + 500 : opts.finishedAt,
     outcome,
-    httpStatus: opts.httpStatus ?? 200,
+    httpStatus: opts.httpStatus === undefined ? 200 : opts.httpStatus,
     errorClass: (opts.errorKind ?? null) as FeedAttemptErrorClass | null,
     diagnostic: opts.errorMessage ?? null,
     parserStatus: (opts.parserState ?? "success") as FeedAttemptParserStatus,
@@ -243,27 +243,45 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     expect(body.streaks.problem.count).toBe(0);
   });
 
-  it("groups problems by kind over the labeled window", async () => {
+  it("groups problems by evidence class and HTTP status over the labeled window", async () => {
     const feedId = await seedFeed({ lastFetchedAt: 10 });
     const now = Date.now();
     await seedAttempt(feedId, {
       startedAt: now - 1000,
       status: "error",
+      httpStatus: 500,
       errorKind: "http",
       errorMessage: "HTTP 500",
     });
     await seedAttempt(feedId, {
+      startedAt: now - 1500,
+      status: "error",
+      httpStatus: 500,
+      errorKind: "http",
+      errorMessage: "HTTP 500 older",
+    });
+    await seedAttempt(feedId, {
       startedAt: now - 2000,
       status: "error",
+      httpStatus: 503,
       errorKind: "http",
       errorMessage: "HTTP 503",
     });
     await seedAttempt(feedId, {
+      startedAt: now - 2500,
+      status: "rate_limited",
+      httpStatus: 429,
+      errorMessage: "HTTP 429 (rate limited)",
+    });
+    await seedAttempt(feedId, {
       startedAt: now - 3000,
       status: "error",
+      httpStatus: null,
       errorKind: "network",
       errorMessage: "socket hangup",
     });
+    // Successful checks are never problems.
+    await seedAttempt(feedId, { startedAt: now - 3500, status: "ok" });
     // Outside the 30-day window — excluded.
     await seedAttempt(feedId, {
       startedAt: now - 40 * 24 * 60 * 60 * 1000,
@@ -275,13 +293,22 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
     const body = (await res.json()) as FeedAttemptsResponse;
     expect(body.problemGroups.windowDays).toBe(30);
-    const byKind = Object.fromEntries(
-      body.problemGroups.groups.map((g) => [g.kind, g]),
+    const byKey = Object.fromEntries(
+      body.problemGroups.groups.map((g) => [`${g.kind}:${g.httpStatus}`, g]),
     );
-    expect(byKind.http.count).toBe(2);
-    expect(byKind.http.lastMessage).toBe("HTTP 500");
-    expect(byKind.network.count).toBe(1);
-    expect(byKind.parse).toBeUndefined();
+    expect(body.problemGroups.groups[0]).toMatchObject({
+      kind: "http",
+      httpStatus: 500,
+      count: 2,
+      lastMessage: "HTTP 500",
+    });
+    expect(byKey["http:503"].count).toBe(1);
+    expect(byKey["rate_limited:429"].count).toBe(1);
+    expect(byKey["network:null"].count).toBe(1);
+    expect(body.problemGroups.groups.some((g) => g.kind === "parse")).toBe(
+      false,
+    );
+    expect(body.problemGroups.groups).toHaveLength(4);
   });
 
   it("distinguishes legacy and empty history from zero activity", async () => {
