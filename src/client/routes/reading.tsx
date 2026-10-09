@@ -266,7 +266,8 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
             Reading activity
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Client-reported state, not inferred reading completion
+            Read marks synced from your reader, not a measure of reading
+            completion
             {range ? ` · ${range} (${data.timezone})` : ""}
           </p>
         </div>
@@ -293,7 +294,7 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="min-w-0">
               <CardHeader>
-                <CardDescription className="text-xs font-medium uppercase tracking-wide">
+                <CardDescription className="text-[13px]">
                   Items marked read · last {data.days} days
                 </CardDescription>
                 <CardTitle className="text-3xl font-semibold">
@@ -303,9 +304,22 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
               </CardHeader>
               <CardContent>
                 {data.markedRead === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
-                    No items marked read in the past {data.days} days.
-                  </p>
+                  <div className="space-y-2 py-4 text-sm">
+                    <p className="font-medium">
+                      No items marked read in the past {data.days} days.
+                    </p>
+                    <p className="text-muted-foreground">
+                      Activity appears here after your reader sends read marks
+                      during sync. Mark an Item read in Current or another
+                      reader, then sync it.
+                    </p>
+                    <Link
+                      to="/access"
+                      className="inline-block text-primary underline-offset-4 hover:underline"
+                    >
+                      Reader connection instructions →
+                    </Link>
+                  </div>
                 ) : (
                   <DailyChart daily={data.daily} timezone={data.timezone} />
                 )}
@@ -314,14 +328,14 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
 
             <Card className="min-w-0">
               <CardHeader>
-                <CardDescription className="text-xs font-medium uppercase tracking-wide">
+                <CardDescription className="text-[13px]">
                   Currently starred
                 </CardDescription>
                 <CardTitle className="text-3xl font-semibold">
                   {data.starredCount}
                 </CardTitle>
                 <CardDescription>
-                  Current state — not limited to this window.
+                  Items you have starred, across all dates.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -329,8 +343,9 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
                   Marked read by Feed · {data.days} days
                 </h2>
                 {data.byFeed.length === 0 ? (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
-                    No feeds have items marked read in this window.
+                  <p className="py-4 text-sm text-muted-foreground">
+                    No Feed breakdown yet. It will appear when read activity is
+                    recorded.
                   </p>
                 ) : (
                   <div className="mt-3 overflow-x-auto">
@@ -369,41 +384,47 @@ export function ReadingPage({ data }: { data: ReadingResponse }) {
           </div>
 
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">About these numbers</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
-                <li>
-                  Counts are items currently marked read, dated by when the
-                  server received the mark-read — not when you actually read
-                  them, how long you spent, or whether you meant to.
-                </li>
-                <li>
-                  Readers that work offline sync later, so their reads land on
-                  the day they synchronize.
-                </li>
-                <li>
-                  Marking an item read again moves it to the latest receipt;
-                  marking it unread removes it until it is marked read again.
-                </li>
-                <li>
-                  Unstarred items are deleted {data.retentionDays} days after
-                  they were fetched, along with their read state, so older reads
-                  can disappear from these totals.
-                </li>
-                <li>
-                  No release / expiration breakdown until the Current experiment
-                  in{" "}
-                  <a
-                    href="https://github.com/jkahn117/my-greader/issues/41"
-                    className="text-primary underline-offset-4 hover:underline"
-                  >
-                    issue #41
-                  </a>
-                  .
-                </li>
-              </ul>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Dates use the latest read mark received during sync. Totals can
+                change when Items are marked unread or removed.
+              </p>
+              <details>
+                <summary className="w-fit text-sm font-medium text-primary">
+                  How read activity is counted
+                </summary>
+                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+                  <li>
+                    Counts are items currently marked read, dated by when the
+                    server received the mark-read — not when you actually read
+                    them, how long you spent, or whether you meant to.
+                  </li>
+                  <li>
+                    Readers that work offline sync later, so their reads land on
+                    the day they synchronize.
+                  </li>
+                  <li>
+                    Marking an item read again moves it to the latest receipt;
+                    marking it unread removes it until it is marked read again.
+                  </li>
+                  <li>
+                    Unstarred items are deleted {data.retentionDays} days after
+                    they were fetched, along with their read state, so older
+                    reads can disappear from these totals.
+                  </li>
+                  <li>
+                    No release / expiration breakdown until the Current
+                    experiment in{" "}
+                    <a
+                      href="https://github.com/jkahn117/my-greader/issues/41"
+                      className="text-primary underline-offset-4 hover:underline"
+                    >
+                      issue #41
+                    </a>
+                    .
+                  </li>
+                </ul>
+              </details>
             </CardContent>
           </Card>
         </>

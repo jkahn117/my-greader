@@ -47,13 +47,13 @@ test("shows daily and per-feed marked-read metrics for the default window", asyn
   ).toBeVisible();
 
   await expect(page.getByText(/Currently starred/i)).toBeVisible();
+  await expect(page.getByText(/received the mark-read/)).not.toBeVisible();
+  await page.getByText("How read activity is counted").click();
   await expect(page.getByText(/received the mark-read/)).toBeVisible();
   await expect(page.getByText(/work offline sync later/)).toBeVisible();
   await expect(page.getByText(/Marking an item read again/)).toBeVisible();
   await expect(page.getByText(/days after they\s+were fetched/)).toBeVisible();
-  await expect(
-    page.getByText(/release \/ expiration breakdown/),
-  ).toBeVisible();
+  await expect(page.getByText(/release \/ expiration breakdown/)).toBeVisible();
 });
 
 test("time window control widens the window via the keyboard", async ({
@@ -116,14 +116,24 @@ test("empty windows and missing subscriptions show explicit empty states", async
     page.getByText("No items marked read in the past 7 days."),
   ).toBeVisible();
   await expect(
-    page.getByText("No feeds have items marked read in this window."),
+    page.getByText(
+      "No Feed breakdown yet. It will appear when read activity is recorded.",
+    ),
   ).toBeVisible();
+
+  await expect(
+    page.getByText(/Activity appears here after your reader/),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: "Reader connection instructions" })
+    .click();
+  await expect(page).toHaveURL(/\/app\/access$/);
 
   await page.unroute("**/app/api/reading*");
   await page.route("**/app/api/reading*", (route) =>
     route.fulfill({ json: { ...base, subscriptionCount: 0 } }),
   );
-  await page.reload();
+  await page.goto("/app/reading");
   await expect(page.getByText(/No subscriptions yet/)).toBeVisible();
   await expect(page.getByRole("link", { name: "add feeds" })).toBeVisible();
 });
