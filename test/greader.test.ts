@@ -8,6 +8,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import * as v from "valibot";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
@@ -28,6 +29,74 @@ const TOKEN = "test-hardcoded-token";
 const OTHER_TOKEN = "other-hardcoded-token";
 
 const BASE = "http://localhost";
+
+const userInfoSchema = v.object({
+  userId: v.string(),
+  userEmail: v.string(),
+  userProfileId: v.string(),
+});
+
+const categorySchema = v.object({
+  id: v.string(),
+  label: v.optional(v.string()),
+});
+
+const subscriptionSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  htmlUrl: v.string(),
+  url: v.string(),
+  categories: v.array(categorySchema),
+});
+
+const subscriptionListSchema = v.object({
+  subscriptions: v.array(subscriptionSchema),
+});
+
+const streamItemSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  summary: v.object({ content: v.string() }),
+  origin: v.object({
+    streamId: v.string(),
+    title: v.string(),
+    htmlUrl: v.string(),
+  }),
+  categories: v.array(v.string()),
+});
+
+const streamContentsSchema = v.object({
+  items: v.array(streamItemSchema),
+  continuation: v.optional(v.string()),
+});
+
+const itemRefsSchema = v.object({
+  itemRefs: v.array(
+    v.object({
+      id: v.string(),
+      timestampUsec: v.string(),
+    }),
+  ),
+  continuation: v.optional(v.string()),
+});
+
+const tagListSchema = v.object({
+  tags: v.array(v.object({ id: v.string() })),
+});
+
+const quickaddSchema = v.object({
+  numResults: v.number(),
+  query: v.string(),
+  streamId: v.string(),
+});
+
+/** Parses an HTTP response against the GReader wire contract used by the test. */
+async function parseJson<TSchema extends v.GenericSchema>(
+  response: Response,
+  schema: TSchema,
+): Promise<v.InferOutput<TSchema>> {
+  return v.parse(schema, await response.json());
+}
 
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
@@ -191,7 +260,7 @@ describe("user-info", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as Record<string, string>;
+    const body = await parseJson(res, userInfoSchema);
 
     expect(res.status).toBe(200);
     expect(body).toHaveProperty("userId");
@@ -210,7 +279,7 @@ describe("subscription/list", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as { subscriptions: unknown[] };
+    const body = await parseJson(res, subscriptionListSchema);
 
     expect(res.status).toBe(200);
     expect(body.subscriptions).toEqual([]);
@@ -230,9 +299,7 @@ describe("subscription/list", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as {
-      subscriptions: Array<Record<string, unknown>>;
-    };
+    const body = await parseJson(res, subscriptionListSchema);
 
     expect(res.status).toBe(200);
     expect(body.subscriptions).toHaveLength(1);
@@ -273,7 +340,7 @@ describe("subscription/edit", () => {
       headers: authHeaders(),
     });
 
-    const body = (await list.json()) as { subscriptions: unknown[] };
+    const body = await parseJson(list, subscriptionListSchema);
     expect(body.subscriptions).toHaveLength(1);
   });
 
@@ -302,7 +369,7 @@ describe("subscription/edit", () => {
       headers: authHeaders(),
     });
 
-    const body = (await list.json()) as { subscriptions: unknown[] };
+    const body = await parseJson(list, subscriptionListSchema);
     expect(body.subscriptions).toHaveLength(0);
   });
 
@@ -336,9 +403,7 @@ describe("subscription/edit", () => {
       headers: authHeaders(),
     });
 
-    const body = (await list.json()) as {
-      subscriptions: Array<Record<string, unknown>>;
-    };
+    const body = await parseJson(list, subscriptionListSchema);
 
     expect(body.subscriptions[0].title).toBe("My Custom Title");
     expect(body.subscriptions[0].categories).toEqual([
@@ -397,9 +462,7 @@ describe("stream/contents", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as {
-      items: Array<Record<string, unknown>>;
-    };
+    const body = await parseJson(res, streamContentsSchema);
 
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
@@ -410,9 +473,7 @@ describe("stream/contents", () => {
     expect(item).toHaveProperty("summary");
     expect(item).toHaveProperty("origin");
     expect(item).toHaveProperty("categories");
-    expect(item.categories as string[]).toContain(
-      "user/-/state/com.google/reading-list",
-    );
+    expect(item.categories).toContain("user/-/state/com.google/reading-list");
   });
 
   it("excludes read items when xt=com.google/read", async () => {
@@ -443,7 +504,7 @@ describe("stream/contents", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as { items: unknown[] };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items).toHaveLength(0);
   });
 
@@ -476,10 +537,7 @@ describe("stream/contents", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as {
-      items: unknown[];
-      continuation?: string;
-    };
+    const body = await parseJson(res, streamContentsSchema);
 
     expect(body.items).toHaveLength(1);
     expect(body.continuation).toBeTruthy();
@@ -506,9 +564,7 @@ describe("stream/items/ids", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as {
-      itemRefs: Array<{ id: string; timestampUsec: string }>;
-    };
+    const body = await parseJson(res, itemRefsSchema);
 
     expect(res.status).toBe(200);
     expect(body.itemRefs).toHaveLength(1);
@@ -556,7 +612,7 @@ describe("edit-tag", () => {
       },
     );
 
-    const body = (await stream.json()) as { items: unknown[] };
+    const body = await parseJson(stream, streamContentsSchema);
     expect(body.items).toHaveLength(0);
   });
 
@@ -590,12 +646,10 @@ describe("edit-tag", () => {
       },
     );
 
-    const body = (await stream.json()) as {
-      items: Array<Record<string, unknown>>;
-    };
+    const body = await parseJson(stream, streamContentsSchema);
 
     expect(body.items).toHaveLength(1);
-    expect(body.items[0].categories as string[]).toContain(
+    expect(body.items[0].categories).toContain(
       "user/-/state/com.google/starred",
     );
   });
@@ -641,7 +695,7 @@ describe("edit-tag", () => {
       { headers: authHeaders() },
     );
 
-    const unreadBody = (await unread.json()) as { items: unknown[] };
+    const unreadBody = await parseJson(unread, streamContentsSchema);
     expect(unreadBody.items).toHaveLength(1);
 
     const starred = await fetch(
@@ -649,7 +703,7 @@ describe("edit-tag", () => {
       { headers: authHeaders() },
     );
 
-    const starredBody = (await starred.json()) as { items: unknown[] };
+    const starredBody = await parseJson(starred, streamContentsSchema);
     expect(starredBody.items).toEqual([]);
   });
 
@@ -705,7 +759,7 @@ describe("edit-tag", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await starred.json()) as { items: unknown[] };
+    const body = await parseJson(starred, streamContentsSchema);
     expect(body.items).toEqual([]);
   });
 });
@@ -743,7 +797,7 @@ describe("mark-all-as-read", () => {
       },
     );
 
-    const body = (await stream.json()) as { items: unknown[] };
+    const body = await parseJson(stream, streamContentsSchema);
     expect(body.items).toHaveLength(0);
   });
 
@@ -781,9 +835,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const unreadBody = (await unread.json()) as {
-      items: Array<{ title: string }>;
-    };
+    const unreadBody = await parseJson(unread, streamContentsSchema);
 
     expect(unreadBody.items).toHaveLength(1);
     expect(unreadBody.items[0].title).toBe("Other article");
@@ -824,7 +876,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(unread, streamContentsSchema);
     expect(body.items.map((item) => item.title)).toEqual(["News article"]);
   });
 
@@ -866,7 +918,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(unread, streamContentsSchema);
     expect(body.items.map((item) => item.title)).toEqual(["Starred article"]);
   });
 
@@ -897,7 +949,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(unread, streamContentsSchema);
     expect(body.items.map((item) => item.title)).toEqual(["Unread article"]);
   });
 
@@ -928,7 +980,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await unread.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(unread, streamContentsSchema);
     expect(body.items.map((item) => item.title)).toEqual(["Other article"]);
   });
 
@@ -974,9 +1026,7 @@ describe("mark-all-as-read", () => {
       { headers: authHeaders() },
     );
 
-    const unreadBody = (await unread.json()) as {
-      items: Array<{ title: string }>;
-    };
+    const unreadBody = await parseJson(unread, streamContentsSchema);
 
     expect(unreadBody.items.map((i) => i.title)).toEqual(["New"]);
   });
@@ -998,7 +1048,7 @@ describe("FreshRSS prefix", () => {
     });
 
     expect(info.status).toBe(200);
-    const body = (await info.json()) as { userId: string };
+    const body = await parseJson(info, userInfoSchema);
     expect(body.userId).toBe("dev-user-id");
   });
 
@@ -1017,7 +1067,7 @@ describe("FreshRSS prefix", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
 
     expect(res.status).toBe(200);
     expect(body.items.map((item) => item.title)).toEqual(["Prefixed item"]);
@@ -1040,9 +1090,7 @@ describe("stream/items/contents", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as {
-      items: Array<{ title: string; id: string }>;
-    };
+    const body = await parseJson(res, streamContentsSchema);
 
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
@@ -1069,7 +1117,7 @@ describe("stream/items/contents", () => {
       body: formBody({ i: itemId }),
     });
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
     expect(body.items[0].title).toBe("Article 1");
@@ -1087,7 +1135,7 @@ describe("stream/items/contents", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as { items: unknown[] };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items).toEqual([]);
   });
 });
@@ -1131,10 +1179,7 @@ describe("stream continuation", () => {
       { headers: authHeaders() },
     );
 
-    const first = (await page1.json()) as {
-      items: Array<{ title: string }>;
-      continuation?: string;
-    };
+    const first = await parseJson(page1, streamContentsSchema);
 
     expect(first.items.map((i) => i.title)).toEqual(["Newest", "Middle"]);
     expect(first.continuation).toBeTruthy();
@@ -1144,10 +1189,7 @@ describe("stream continuation", () => {
       { headers: authHeaders() },
     );
 
-    const second = (await page2.json()) as {
-      items: Array<{ title: string }>;
-      continuation?: string;
-    };
+    const second = await parseJson(page2, streamContentsSchema);
 
     expect(second.items.map((i) => i.title)).toEqual(["Oldest"]);
     expect(second.continuation).toBeUndefined();
@@ -1192,10 +1234,7 @@ describe("stream continuation", () => {
         headers: authHeaders(),
       });
 
-      const body = (await res.json()) as {
-        items: Array<{ title: string }>;
-        continuation?: string;
-      };
+      const body = await parseJson(res, streamContentsSchema);
 
       titles.push(...body.items.map((item) => item.title));
       cursor = body.continuation;
@@ -1242,10 +1281,7 @@ describe("stream continuation", () => {
         headers: authHeaders(),
       });
 
-      const body = (await res.json()) as {
-        itemRefs: Array<{ id: string }>;
-        continuation?: string;
-      };
+      const body = await parseJson(res, itemRefsSchema);
 
       ids.push(...body.itemRefs.map((item) => item.id));
       cursor = body.continuation;
@@ -1285,7 +1321,7 @@ describe("stream selectors", () => {
       },
     );
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items.map((i) => i.title)).toEqual(["From A"]);
   });
 
@@ -1304,7 +1340,7 @@ describe("stream selectors", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as { items: unknown[] };
+    const body = await parseJson(res, streamContentsSchema);
     expect(res.status).toBe(200);
     expect(body.items).toEqual([]);
   });
@@ -1335,7 +1371,7 @@ describe("stream selectors", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items.map((item) => item.title)).toEqual(["From A"]);
   });
 
@@ -1362,7 +1398,7 @@ describe("stream selectors", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items.map((i) => i.title)).toEqual(["Tech article"]);
   });
 
@@ -1397,7 +1433,7 @@ describe("stream selectors", () => {
       { headers: authHeaders() },
     );
 
-    const body = (await res.json()) as { items: Array<{ title: string }> };
+    const body = await parseJson(res, streamContentsSchema);
     expect(body.items.map((i) => i.title)).toEqual(["New"]);
   });
 });
@@ -1417,7 +1453,7 @@ describe("tag/list", () => {
       headers: authHeaders(),
     });
 
-    const body = (await res.json()) as { tags: Array<{ id: string }> };
+    const body = await parseJson(res, tagListSchema);
     expect(res.status).toBe(200);
     expect(body.tags).toEqual([
       { id: "user/-/state/com.google/starred" },
@@ -1437,11 +1473,7 @@ describe("subscription/quickadd", () => {
       body: formBody({ quickadd: "https://example.com/feed.xml" }),
     });
 
-    const body = (await res.json()) as {
-      numResults: number;
-      query: string;
-      streamId: string;
-    };
+    const body = await parseJson(res, quickaddSchema);
 
     expect(res.status).toBe(200);
     expect(body.numResults).toBe(1);
@@ -1452,7 +1484,7 @@ describe("subscription/quickadd", () => {
       headers: authHeaders(),
     });
 
-    const listed = (await list.json()) as { subscriptions: unknown[] };
+    const listed = await parseJson(list, subscriptionListSchema);
     expect(listed.subscriptions).toHaveLength(1);
   });
 });
@@ -1538,9 +1570,7 @@ describe("per-user visibility", () => {
       headers: authHeaders(OTHER_TOKEN),
     });
 
-    const streamBody = (await otherStream.json()) as {
-      items: Array<{ title: string; categories: string[] }>;
-    };
+    const streamBody = await parseJson(otherStream, streamContentsSchema);
 
     expect(streamBody.items).toHaveLength(1);
     expect(streamBody.items[0]).toMatchObject({
@@ -1552,9 +1582,10 @@ describe("per-user visibility", () => {
       headers: authHeaders(OTHER_TOKEN),
     });
 
-    const subscriptionBody = (await otherSubscriptions.json()) as {
-      subscriptions: Array<{ categories: unknown[] }>;
-    };
+    const subscriptionBody = await parseJson(
+      otherSubscriptions,
+      subscriptionListSchema,
+    );
 
     expect(subscriptionBody.subscriptions).toHaveLength(1);
     expect(subscriptionBody.subscriptions[0].categories).toEqual([
@@ -1566,7 +1597,7 @@ describe("per-user visibility", () => {
       { headers: authHeaders(OTHER_TOKEN) },
     );
 
-    const privateBody = (await privateContents.json()) as { items: unknown[] };
+    const privateBody = await parseJson(privateContents, streamContentsSchema);
     expect(privateBody.items).toEqual([]);
   });
 });
