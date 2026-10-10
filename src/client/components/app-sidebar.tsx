@@ -48,15 +48,18 @@ function useAttentionCount(): number | null {
         if (!cancelled) setCount(res.attention.total);
       })
       .catch(() => {});
+
     return () => {
       cancelled = true;
     };
   }, []);
+
   return count;
 }
 
 function NavBadge({ count }: { count: number }) {
   if (count === 0) return null;
+
   return (
     <span className="ml-auto rounded-[5px] bg-[#493c2c] px-1.5 py-0.5 text-[11px] font-medium text-[#ffcf87]">
       {count}
@@ -87,6 +90,7 @@ export function AppSidebar() {
       <ul className="space-y-1">
         {NAV_ITEMS.map((item) => {
           const active = dashboardPath.startsWith(item.to);
+
           return (
             <li key={item.to}>
               <Link
@@ -146,6 +150,7 @@ export function AppSidebar() {
         >
           {NAV_ITEMS.map((item) => {
             const active = dashboardPath.startsWith(item.to);
+
             return (
               <Link
                 key={item.to}

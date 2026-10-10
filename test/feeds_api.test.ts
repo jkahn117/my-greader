@@ -33,6 +33,7 @@ async function fetchApi(
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -85,18 +86,21 @@ async function seedFeedAndSub(opts: {
     feedId,
     folder: opts.folder ?? null,
   });
+
   if (opts.lastStatus != null && opts.lastFetchedAt != null) {
     const cycleRunId = `cycle-${feedId}`;
     await db.insert(cycleRuns).values({
       id: cycleRunId,
       ranAt: opts.lastFetchedAt,
     });
+
     const outcome: FeedAttemptOutcome =
       opts.lastStatus === "ok"
         ? "unchanged"
         : opts.lastStatus === "error"
           ? "failed"
           : (opts.lastStatus as FeedAttemptOutcome);
+
     await db.insert(feedPollAttempts).values({
       id: `attempt-${feedId}`,
       cycleRunId,
@@ -107,6 +111,7 @@ async function seedFeedAndSub(opts: {
       errorClass: outcome === "failed" ? "http" : null,
     });
   }
+
   return feedId;
 }
 
@@ -130,20 +135,24 @@ describe("GET /app/api/feeds", () => {
         lastFetchedAt: 2000,
         lastStatus,
       });
+
       const list = (await (
         await fetchApi("/app/api/feeds")
       ).json()) as FeedsResponse;
+
       const detail = await (await fetchApi(`/app/api/feeds/${feedId}`)).json();
       expect(detail).toMatchObject({
         status: list.feeds[0].status,
         lastCheckedAt: 2000,
         lastSuccessfulAt: 1000,
       });
+
       const controlled = await (
         await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
           method: "POST",
         })
       ).json();
+
       expect(controlled).toMatchObject({
         status: "deactivated",
         lastCheckedAt: 2000,
@@ -156,6 +165,7 @@ describe("GET /app/api/feeds", () => {
       feedUrl: "https://mine.example.com/feed",
       title: "Mine",
     });
+
     await seedUser("other-user", "other@localhost");
     await seedFeedAndSub({
       userId: "other-user",
@@ -247,10 +257,12 @@ describe("POST /app/api/import", () => {
 
     const form = new FormData();
     form.set("opml", new File([opml], "feeds.opml", { type: "text/xml" }));
+
     const res = await fetchApi("/app/api/import", {
       method: "POST",
       body: form,
     });
+
     expect(res.status).toBe(200);
     const body = (await res.json()) as ImportResponse;
     expect(body).toEqual({ imported: 1, duplicates: 1, errors: [] });
@@ -267,6 +279,7 @@ describe("POST /app/api/import", () => {
       method: "POST",
       body: new FormData(),
     });
+
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBeTruthy();
@@ -282,40 +295,48 @@ describe("feed detail + deactivation", () => {
       lastSuccessfulAt: Date.now() - 30_000,
       lastStatus: "ok",
     });
+
     const res = await fetchApi(`/app/api/feeds/${feedId}`);
     expect(res.status).toBe(200);
+
     const body = (await res.json()) as {
       feedId: string;
       backloadComplete: boolean;
     };
+
     expect(body.feedId).toBe(feedId);
     expect(body.backloadComplete).toBe(true);
   });
 
   it("rejects reads and mutations for feeds the user doesn't own", async () => {
     await seedUser("other-user", "other@localhost");
+
     const theirs = await seedFeedAndSub({
       userId: "other-user",
       feedUrl: "https://theirs.example.com/feed",
       title: "Theirs",
     });
+
     for (const method of ["GET", "POST"]) {
       const res = await fetchApi(
         `/app/api/feeds/${theirs}${method === "POST" ? "/deactivate" : ""}`,
         { method },
       );
+
       expect(res.status, `${method}`).toBe(404);
     }
   });
 
   it("reports each deactivation reason plus legacy-uncertain", async () => {
     const now = Date.now();
+
     const cases: Array<[string | null, boolean]> = [
       ["transient", false],
       ["permanent", false],
       ["manual", false],
       [null, true], // pre-migration deactivation
     ];
+
     for (const [reason, legacy] of cases) {
       const feedId = await seedFeedAndSub({
         feedUrl: `https://${reason ?? "legacy"}.example.com/feed`,
@@ -323,11 +344,14 @@ describe("feed detail + deactivation", () => {
         deactivatedAt: now,
         deactivatedReason: reason,
       });
+
       const res = await fetchApi(`/app/api/feeds/${feedId}`);
+
       const body = (await res.json()) as {
         deactivatedReason: string | null;
         legacyUncertain: boolean;
       };
+
       expect(body.deactivatedReason).toBe(
         reason === "transient"
           ? "automatic_transient"
@@ -348,23 +372,29 @@ describe("feed detail + deactivation", () => {
     const off = await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
       method: "POST",
     });
+
     expect(off.status).toBe(200);
+
     const offBody = (await off.json()) as {
       deactivatedReason: string | null;
       status: string;
     };
+
     expect(offBody.deactivatedReason).toBe("manual");
     expect(offBody.status).toBe("deactivated");
 
     const on = await fetchApi(`/app/api/feeds/${feedId}/reactivate`, {
       method: "POST",
     });
+
     expect(on.status).toBe(200);
+
     const onBody = (await on.json()) as {
       deactivatedAt: number | null;
       deactivatedReason: string | null;
       consecutiveErrors: number;
     };
+
     expect(onBody.deactivatedAt).toBeNull();
     expect(onBody.deactivatedReason).toBeNull();
     expect(onBody.consecutiveErrors).toBe(0);
@@ -374,6 +404,7 @@ describe("feed detail + deactivation", () => {
     const res = await fetchApi(`/app/api/feeds/nope/deactivate`, {
       method: "POST",
     });
+
     expect(res.status).toBe(404);
   });
 });
@@ -423,6 +454,7 @@ describe("POST /app/api/feeds/sync", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ force: true }),
     });
+
     expect(res.status).toBe(200);
     const body = (await res.json()) as SyncResponse;
     expect(body.triggered).toBe(true);
@@ -436,6 +468,7 @@ describe("POST /app/api/feeds/sync", () => {
       headers: { "Content-Type": "application/json" },
       body: "not json",
     });
+
     expect(res.status).toBe(400);
   });
 });

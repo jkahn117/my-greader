@@ -10,5 +10,6 @@ beforeAll(async () => {
   const migrations: D1Migration[] = JSON.parse(
     (env as unknown as Record<string, string>).TEST_MIGRATIONS,
   );
+
   await applyD1Migrations(env.DB, migrations);
 });

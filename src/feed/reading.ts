@@ -47,8 +47,10 @@ function zonedParts(ms: number, timezone: string) {
     minute: "2-digit",
     second: "2-digit",
   }).formatToParts(ms);
+
   const get = (type: string) =>
     Number(parts.find((p) => p.type === type)?.value ?? 0);
+
   return {
     year: get("year"),
     month: get("month"),
@@ -63,6 +65,7 @@ function zonedParts(ms: number, timezone: string) {
 function offsetMs(ms: number, timezone: string): number {
   const p = zonedParts(ms, timezone);
   const wall = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+
   return wall - Math.floor(ms / 1000) * 1000;
 }
 
@@ -71,25 +74,31 @@ function zonedMidnight(date: string, timezone: string): number {
   const [y, m, d] = date.split("-").map(Number);
   const guess = Date.UTC(y, m - 1, d);
   const approximate = guess - offsetMs(guess, timezone);
+
   const format = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   });
+
   // Find the date transition rather than requiring midnight to exist.
   let low = approximate - 36 * 60 * 60 * 1000;
   let high = approximate + 36 * 60 * 60 * 1000;
+
   while (high - low > 1) {
     const middle = Math.floor((low + high) / 2);
+
     if (format.format(middle) < date) low = middle;
     else high = middle;
   }
+
   return high;
 }
 
 function shiftDate(date: string, days: number): string {
   const [y, m, d] = date.split("-").map(Number);
+
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
@@ -97,6 +106,7 @@ function shiftDate(date: string, days: number): string {
 export function isValidTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+
     return true;
   } catch {
     return false;
@@ -116,6 +126,7 @@ export function zonedDays(
   const p = zonedParts(now, timezone);
   const today = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
   const result: ZonedDay[] = [];
+
   for (let i = count - 1; i >= 0; i--) {
     const date = shiftDate(today, -i);
     result.push({
@@ -124,6 +135,7 @@ export function zonedDays(
       end: zonedMidnight(shiftDate(date, 1), timezone),
     });
   }
+
   return result;
 }
 
@@ -201,6 +213,7 @@ export function createReadingMetrics(db: D1Database): ReadingMetrics {
           Number(r.count),
         ]),
       );
+
       const feedRows = feedRes.results as {
         feedId: string;
         title: string | null;
@@ -208,6 +221,7 @@ export function createReadingMetrics(db: D1Database): ReadingMetrics {
         deactivated: number;
         count: number;
       }[];
+
       return {
         daily: days.map((d) => ({
           date: d.date,

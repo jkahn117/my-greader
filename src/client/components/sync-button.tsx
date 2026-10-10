@@ -24,10 +24,12 @@ export function SyncButton() {
   async function sync(force: boolean) {
     setBusy(true);
     setMessage(null);
+
     try {
       const res = await apiPost<SyncResponse>("/app/api/feeds/sync", {
         force,
       });
+
       setMessage(
         res.triggered
           ? `Sync started — ${res.eligible} feed${res.eligible === 1 ? "" : "s"} eligible`

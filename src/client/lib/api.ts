@@ -12,9 +12,11 @@ export class ApiError extends Error {
 /** GET a dashboard JSON endpoint; throws ApiError on non-2xx. */
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: "application/json" } });
+
   if (!res.ok) {
     throw new ApiError(res.status, `request failed: ${res.status}`);
   }
+
   return (await res.json()) as T;
 }
 
@@ -28,9 +30,11 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
+
   if (!res.ok) {
     throw new ApiError(res.status, `request failed: ${res.status}`);
   }
+
   return (await res.json()) as T;
 }
 
@@ -41,9 +45,11 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
     headers: { Accept: "application/json" },
     body: form,
   });
+
   if (!res.ok) {
     throw new ApiError(res.status, `request failed: ${res.status}`);
   }
+
   return (await res.json()) as T;
 }
 
@@ -53,8 +59,10 @@ export async function apiDelete<T>(path: string): Promise<T> {
     method: "DELETE",
     headers: { Accept: "application/json" },
   });
+
   if (!res.ok) {
     throw new ApiError(res.status, `request failed: ${res.status}`);
   }
+
   return (await res.json()) as T;
 }

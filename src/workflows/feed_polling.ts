@@ -53,7 +53,9 @@ function asDisposable<T extends object>(binding: T): T & Disposable {
   ) {
     return binding as T & Disposable;
   }
+
   (binding as T & Disposable)[Symbol.dispose] = () => {};
+
   return binding as T & Disposable;
 }
 
@@ -121,10 +123,12 @@ export async function runFeedPollingWorkflow(
 
     try {
       using analytics = asDisposable(env.ANALYTICS);
+
       const metrics = createMetrics(
         analytics as unknown as Env["ANALYTICS"],
         (env.ANALYTICS_ENABLED as string) !== "false",
       );
+
       metrics.recordCycleError({ error: errorMessage });
       await metrics.flush();
     } catch {
@@ -155,6 +159,7 @@ async function pollWorkflow(
       try {
         using d1 = asDisposable(env.DB);
         const cycles = createPollingCycleManager(d1, () => Date.now());
+
         return await cycles.begin(cycleRunId, triggerReason);
       } catch (err) {
         logger.error("get-due-feeds step failed", {
@@ -174,6 +179,7 @@ async function pollWorkflow(
 
   if (dueFeeds.length === 0) {
     logger.info("no feeds due, skipping cycle", { cycleRunId });
+
     return;
   }
 
@@ -191,6 +197,7 @@ async function pollWorkflow(
       try {
         using d1 = asDisposable(env.DB);
         using analytics = asDisposable(env.ANALYTICS);
+
         const metrics = createMetrics(
           analytics as unknown as Env["ANALYTICS"],
           (env.ANALYTICS_ENABLED as string) !== "false",
@@ -234,6 +241,7 @@ async function pollWorkflow(
                     httpStatus: event.status,
                   });
                 }
+
                 break;
               case "feedParseFailed":
                 metrics.recordParse({
@@ -276,10 +284,12 @@ async function pollWorkflow(
             logAttemptResult(cycleRunId, result.value);
           }
         }
+
         const rejected = settled.find(
           (result): result is PromiseRejectedResult =>
             result.status === "rejected",
         );
+
         if (rejected) throw rejected.reason;
       } catch (err) {
         logger.error(`fetch-batch-${batchIndex} step failed`, {
@@ -301,11 +311,14 @@ async function pollWorkflow(
     try {
       using d1 = asDisposable(env.DB);
       using analytics = asDisposable(env.ANALYTICS);
+
       const metrics = createMetrics(
         analytics as unknown as Env["ANALYTICS"],
         (env.ANALYTICS_ENABLED as string) !== "false",
       );
+
       const cycles = createPollingCycleManager(d1, () => Date.now());
+
       const summary = await cycles.complete(
         cycleRunId,
         dueFeeds.length,
@@ -319,6 +332,7 @@ async function pollWorkflow(
         newArticles: summary.newItems,
         failedFeeds: summary.failedFeeds,
       });
+
       try {
         await metrics.flush();
       } catch (err) {
@@ -327,6 +341,7 @@ async function pollWorkflow(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+
       return summary;
     } catch (err) {
       logger.error("record-cycle step failed", {
@@ -357,18 +372,23 @@ function logAttemptResult(cycleRunId: string, result: FeedPollResult): void {
     feedTitle: result.feedTitle,
     outcome: result.outcome,
   };
+
   if (result.outcome === "failed") {
     logger.error("feed polling attempt completed", {
       ...context,
       errorClass: result.errorClass,
       error: result.error,
     });
+
     return;
   }
+
   if (result.outcome === "rate_limited") {
     logger.warn("feed polling attempt completed", context);
+
     return;
   }
+
   logger.info("feed polling attempt completed", {
     ...context,
     ...((result.outcome === "new_items" || result.outcome === "unchanged") && {

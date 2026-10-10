@@ -30,6 +30,7 @@ const readingChartConfig = {
 /** Weekday label for a display-timezone YYYY-MM-DD day key. */
 function dayLabel(date: string): string {
   const d = new Date(`${date}T12:00:00`);
+
   return d.toLocaleDateString("en-US", { weekday: "short" });
 }
 
@@ -44,6 +45,7 @@ function ReadingChart({
   timezone: string;
 }) {
   const data = daily.map((d) => ({ day: dayLabel(d.date), ...d }));
+
   return (
     <div>
       <ChartContainer
@@ -144,6 +146,7 @@ export function OverviewPanels({
       .catch(() => {
         if (!cancelled) setFailed(true);
       });
+
     return () => {
       cancelled = true;
     };
@@ -157,6 +160,7 @@ export function OverviewPanels({
       </p>
     );
   }
+
   if (!data) {
     return <p className="text-sm text-muted-foreground">Loading panels…</p>;
   }
@@ -283,6 +287,7 @@ export function OverviewPanels({
                             )
                           : [1]),
                       );
+
                       return (
                         <div
                           key={d.day}
@@ -327,6 +332,7 @@ export function OverviewPanels({
                 <ul className="divide-y">
                   {data.needsAttention.map((f) => {
                     const pill = ATTENTION_PILL[f.kind];
+
                     return (
                       <li key={f.feedId}>
                         <Link

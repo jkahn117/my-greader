@@ -9,6 +9,7 @@ import { createApiTokenLifecycle } from "../domain/tokens";
  */
 export async function tokenMiddleware(c: Context, next: Next) {
   const auth = c.req.header("Authorization") ?? "";
+
   const raw = auth.startsWith("GoogleLogin auth=")
     ? auth.slice("GoogleLogin auth=".length).trim()
     : null;

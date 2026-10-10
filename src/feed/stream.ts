@@ -35,7 +35,9 @@ export type ItemRow = {
 
 export function toGReaderItem(r: ItemRow) {
   const categories = ["user/-/state/com.google/reading-list"];
+
   if (r.isRead) categories.push("user/-/state/com.google/read");
+
   if (r.isStarred) categories.push("user/-/state/com.google/starred");
 
   const publishedSec = r.item.publishedAt
@@ -169,6 +171,7 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     const lastItem = page.at(-1);
+
     const continuation =
       hasMore && lastItem?.item.publishedAt && lastItem.item.id
         ? encodeContinuation(lastItem.item.publishedAt, lastItem.item.id)

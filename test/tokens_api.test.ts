@@ -20,6 +20,7 @@ import type {
 } from "../src/shared/dashboard-api";
 
 const BASE = "http://localhost";
+
 const HOUR_MS = 3_600_000;
 
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -27,6 +28,7 @@ async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -102,6 +104,7 @@ describe("GET /app/api/tokens", () => {
     const body = (await (
       await fetch("/app/api/tokens")
     ).json()) as TokensResponse;
+
     expect(body.connection).toEqual({
       mode: "FreshRSS",
       serverUrl: "http://localhost",
@@ -134,16 +137,19 @@ describe("POST /app/api/tokens", () => {
 
   it("never writes the raw token to logs", async () => {
     const lines: string[] = [];
+
     const spies = (["log", "info", "warn", "error", "debug"] as const).map(
       (m) =>
         vi.spyOn(console, m).mockImplementation((...args: unknown[]) => {
           lines.push(args.map((a) => String(a)).join(" "));
         }),
     );
+
     try {
       const { rawToken } = (await (
         await generate({ name: "Logged" })
       ).json()) as GenerateTokenResponse;
+
       await fetch("/app/api/tokens");
       expect(lines.length).toBeGreaterThan(0);
       expect(lines.join("\n")).not.toContain(rawToken);
@@ -156,9 +162,11 @@ describe("POST /app/api/tokens", () => {
     const { rawToken } = (await (
       await generate({ name: "Reader" })
     ).json()) as GenerateTokenResponse;
+
     const info = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: `GoogleLogin auth=${rawToken}` },
     });
+
     expect(info.status).toBe(200);
   });
 
@@ -200,10 +208,13 @@ describe("DELETE /app/api/tokens/:id", () => {
     const revoked = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: "GoogleLogin auth=raw-one" },
     });
+
     expect(revoked.status).toBe(401);
+
     const other = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: "GoogleLogin auth=raw-two" },
     });
+
     expect(other.status).toBe(200);
   });
 
@@ -233,6 +244,7 @@ describe("coarse last-used tracking", () => {
     const res = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: `GoogleLogin auth=${raw}` },
     });
+
     expect(res.status).toBe(200);
   }
 
@@ -264,6 +276,7 @@ describe("coarse last-used tracking", () => {
     const list = (await (
       await fetch("/app/api/tokens")
     ).json()) as TokensResponse;
+
     expect(list.tokens[0].lastUsedAt).toBeGreaterThan(stale);
   });
 });

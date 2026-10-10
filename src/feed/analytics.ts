@@ -62,18 +62,21 @@ export function createAnalyticsReader(params: {
     if (!enabled) return { data: [], meta: [] };
 
     const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
+
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiToken}` },
         body: sql,
       });
+
       if (!res.ok) {
         if (res.status === 404) return { data: [], meta: [] };
         throw new Error(
           `AE SQL query failed (${res.status}): ${await res.text().catch(() => res.statusText)}`,
         );
       }
+
       return res.json<AeSqlResult>();
     } catch {
       return { data: [], meta: [] };
@@ -93,6 +96,7 @@ export function createAnalyticsReader(params: {
     feedActivity: { feedId: string; title: string }[],
   ): Promise<AnalyticsData> {
     const feedTitleMap = new Map(feedActivity.map((f) => [f.feedId, f.title]));
+
     const [velocityRaw, perfRaw, errorRaw, trendRaw] = await Promise.all([
       query(
         `SELECT blob5 AS feedId,

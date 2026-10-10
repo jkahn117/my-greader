@@ -126,11 +126,13 @@ export function createMetrics(
         feedId: e.feedId,
         status: e.status,
       });
+
       if (e.articleCount) {
         enqueue("feed_new_articles", MetricUnit.Count, e.articleCount, {
           feedId: e.feedId,
         });
       }
+
       if (e.error) {
         enqueue("feed_parse_failure", MetricUnit.Count, 1, {
           feedId: e.feedId,

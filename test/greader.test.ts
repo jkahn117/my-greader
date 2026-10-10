@@ -24,7 +24,9 @@ import { deriveItemId, sha256 } from "../src/lib/crypto";
 // ---------------------------------------------------------------------------
 
 const TOKEN = "test-hardcoded-token";
+
 const OTHER_TOKEN = "other-hardcoded-token";
+
 const BASE = "http://localhost";
 
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -32,6 +34,7 @@ async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -144,6 +147,7 @@ describe("ClientLogin", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formBody({ Email: "user@example.com", Passwd: "wrong-token" }),
     });
+
     expect(res.status).toBe(403);
   });
 
@@ -153,6 +157,7 @@ describe("ClientLogin", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formBody({ Email: "user@example.com", Passwd: "" }),
     });
+
     expect(res.status).toBe(403);
   });
 });
@@ -171,6 +176,7 @@ describe("Token middleware", () => {
     const res = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: "GoogleLogin auth=bad-token" },
     });
+
     expect(res.status).toBe(401);
   });
 });
@@ -184,6 +190,7 @@ describe("user-info", () => {
     const res = await fetch("/reader/api/0/user-info", {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as Record<string, string>;
 
     expect(res.status).toBe(200);
@@ -202,6 +209,7 @@ describe("subscription/list", () => {
     const res = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as { subscriptions: unknown[] };
 
     expect(res.status).toBe(200);
@@ -215,11 +223,13 @@ describe("subscription/list", () => {
       itemGuid: "https://example.com/article-1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId, "Tech");
 
     const res = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as {
       subscriptions: Array<Record<string, unknown>>;
     };
@@ -262,6 +272,7 @@ describe("subscription/edit", () => {
     const list = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const body = (await list.json()) as { subscriptions: unknown[] };
     expect(body.subscriptions).toHaveLength(1);
   });
@@ -273,6 +284,7 @@ describe("subscription/edit", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "A1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/subscription/edit", {
@@ -283,11 +295,13 @@ describe("subscription/edit", () => {
       },
       body: formBody({ ac: "unsubscribe", s: `feed/${feedId}` }),
     });
+
     expect(res.status).toBe(200);
 
     const list = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const body = (await list.json()) as { subscriptions: unknown[] };
     expect(body.subscriptions).toHaveLength(0);
   });
@@ -299,6 +313,7 @@ describe("subscription/edit", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "A1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/subscription/edit", {
@@ -314,14 +329,17 @@ describe("subscription/edit", () => {
         a: "user/-/label/News",
       }),
     });
+
     expect(res.status).toBe(200);
 
     const list = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const body = (await list.json()) as {
       subscriptions: Array<Record<string, unknown>>;
     };
+
     expect(body.subscriptions[0].title).toBe("My Custom Title");
     expect(body.subscriptions[0].categories).toEqual([
       { id: "user/-/label/News", label: "News" },
@@ -330,12 +348,14 @@ describe("subscription/edit", () => {
 
   it("accepts a bare feed URL when unsubscribing", async () => {
     const feedUrl = "https://example.com/feed.xml";
+
     const { feedId } = await seedFeed({
       feedUrl,
       title: "Example Feed",
       itemGuid: "https://example.com/a1",
       itemTitle: "A1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/subscription/edit", {
@@ -348,9 +368,11 @@ describe("subscription/edit", () => {
     });
 
     expect(res.status).toBe(200);
+
     const list = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     expect(await list.json()).toEqual({ subscriptions: [] });
   });
 });
@@ -367,12 +389,14 @@ describe("stream/contents", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch(
       "/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as {
       items: Array<Record<string, unknown>>;
     };
@@ -398,6 +422,7 @@ describe("stream/contents", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     // Mark as read
@@ -417,6 +442,7 @@ describe("stream/contents", () => {
       "/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as { items: unknown[] };
     expect(body.items).toHaveLength(0);
   });
@@ -429,6 +455,7 @@ describe("stream/contents", () => {
       itemTitle: "Article 1",
       publishedAt: Date.now() - 1000,
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     // Seed a second item
@@ -448,6 +475,7 @@ describe("stream/contents", () => {
       "/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&n=1",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as {
       items: unknown[];
       continuation?: string;
@@ -470,12 +498,14 @@ describe("stream/items/ids", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch(
       "/reader/api/0/stream/items/ids?s=user/-/state/com.google/reading-list",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as {
       itemRefs: Array<{ id: string; timestampUsec: string }>;
     };
@@ -501,6 +531,7 @@ describe("edit-tag", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/edit-tag", {
@@ -514,6 +545,7 @@ describe("edit-tag", () => {
         a: "user/-/state/com.google/read",
       }),
     });
+
     expect(res.status).toBe(200);
 
     // Item should now be excluded from unread stream
@@ -523,6 +555,7 @@ describe("edit-tag", () => {
         headers: authHeaders(),
       },
     );
+
     const body = (await stream.json()) as { items: unknown[] };
     expect(body.items).toHaveLength(0);
   });
@@ -534,6 +567,7 @@ describe("edit-tag", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     await fetch("/reader/api/0/edit-tag", {
@@ -555,9 +589,11 @@ describe("edit-tag", () => {
         headers: authHeaders(),
       },
     );
+
     const body = (await stream.json()) as {
       items: Array<Record<string, unknown>>;
     };
+
     expect(body.items).toHaveLength(1);
     expect(body.items[0].categories as string[]).toContain(
       "user/-/state/com.google/starred",
@@ -571,6 +607,7 @@ describe("edit-tag", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     for (const tag of [
@@ -585,6 +622,7 @@ describe("edit-tag", () => {
         },
         body: formBody({ i: itemId, a: tag }),
       });
+
       const res = await fetch("/reader/api/0/edit-tag", {
         method: "POST",
         headers: {
@@ -593,6 +631,7 @@ describe("edit-tag", () => {
         },
         body: formBody({ i: itemId, r: tag }),
       });
+
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("OK");
     }
@@ -601,6 +640,7 @@ describe("edit-tag", () => {
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const unreadBody = (await unread.json()) as { items: unknown[] };
     expect(unreadBody.items).toHaveLength(1);
 
@@ -608,6 +648,7 @@ describe("edit-tag", () => {
       "/reader/api/0/stream/contents?s=user/-/state/com.google/starred",
       { headers: authHeaders() },
     );
+
     const starredBody = (await starred.json()) as { items: unknown[] };
     expect(starredBody.items).toEqual([]);
   });
@@ -619,6 +660,7 @@ describe("edit-tag", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/edit-tag", {
@@ -629,6 +671,7 @@ describe("edit-tag", () => {
       },
       body: formBody({ i: itemId, a: "user/-/state/com.google/read" }),
     });
+
     expect(res.status).toBe(200);
   });
 
@@ -651,14 +694,17 @@ describe("edit-tag", () => {
         a: "user/-/state/com.google/starred",
       }),
     });
+
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("OK");
 
     await subscribeUser("dev-user-id", feedId);
+
     const starred = await fetch(
       "/reader/api/0/stream/contents?s=user/-/state/com.google/starred",
       { headers: authHeaders() },
     );
+
     const body = (await starred.json()) as { items: unknown[] };
     expect(body.items).toEqual([]);
   });
@@ -676,6 +722,7 @@ describe("mark-all-as-read", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/mark-all-as-read", {
@@ -686,6 +733,7 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: "user/-/state/com.google/reading-list" }),
     });
+
     expect(res.status).toBe(200);
 
     const stream = await fetch(
@@ -694,6 +742,7 @@ describe("mark-all-as-read", () => {
         headers: authHeaders(),
       },
     );
+
     const body = (await stream.json()) as { items: unknown[] };
     expect(body.items).toHaveLength(0);
   });
@@ -705,12 +754,14 @@ describe("mark-all-as-read", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     const other = await seedFeed({
       feedUrl: "https://other.example.com/feed.xml",
       title: "Other",
       itemGuid: "https://other.example.com/b1",
       itemTitle: "Other article",
     });
+
     await subscribeUser("dev-user-id", feedId);
     await subscribeUser("dev-user-id", other.feedId);
 
@@ -722,15 +773,18 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: `feed/${feedId}` }),
     });
+
     expect(res.status).toBe(200);
 
     const unread = await fetch(
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const unreadBody = (await unread.json()) as {
       items: Array<{ title: string }>;
     };
+
     expect(unreadBody.items).toHaveLength(1);
     expect(unreadBody.items[0].title).toBe("Other article");
   });
@@ -742,12 +796,14 @@ describe("mark-all-as-read", () => {
       itemGuid: "https://tech.example.com/a1",
       itemTitle: "Tech article",
     });
+
     const news = await seedFeed({
       feedUrl: "https://news.example.com/feed.xml",
       title: "News",
       itemGuid: "https://news.example.com/a1",
       itemTitle: "News article",
     });
+
     await subscribeUser("dev-user-id", tech.feedId, "Tech");
     await subscribeUser("dev-user-id", news.feedId, "News");
 
@@ -759,6 +815,7 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: "user/-/label/Tech" }),
     });
+
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("OK");
 
@@ -766,6 +823,7 @@ describe("mark-all-as-read", () => {
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const body = (await unread.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((item) => item.title)).toEqual(["News article"]);
   });
@@ -777,6 +835,7 @@ describe("mark-all-as-read", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Starred article",
     });
+
     await subscribeUser("dev-user-id", feedId);
     await fetch("/reader/api/0/edit-tag", {
       method: "POST",
@@ -798,6 +857,7 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: "user/-/state/com.google/starred" }),
     });
+
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("OK");
 
@@ -805,6 +865,7 @@ describe("mark-all-as-read", () => {
       "/reader/api/0/stream/contents?s=user/-/state/com.google/starred&xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const body = (await unread.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((item) => item.title)).toEqual(["Starred article"]);
   });
@@ -816,6 +877,7 @@ describe("mark-all-as-read", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Unread article",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/mark-all-as-read", {
@@ -826,6 +888,7 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: "user/-/state/com.google/read" }),
     });
+
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("OK");
 
@@ -833,6 +896,7 @@ describe("mark-all-as-read", () => {
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const body = (await unread.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((item) => item.title)).toEqual(["Unread article"]);
   });
@@ -853,20 +917,24 @@ describe("mark-all-as-read", () => {
       },
       body: formBody({ s: `feed/${feedId}` }),
     });
+
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("OK");
 
     await subscribeUser("dev-user-id", feedId);
+
     const unread = await fetch(
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const body = (await unread.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((item) => item.title)).toEqual(["Other article"]);
   });
 
   it("respects ts cutoff so newer items stay unread", async () => {
     const now = Date.now();
+
     const { feedId } = await seedFeed({
       feedUrl: "https://example.com/feed.xml",
       title: "Feed",
@@ -874,6 +942,7 @@ describe("mark-all-as-read", () => {
       itemTitle: "Old",
       publishedAt: now - 10_000,
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const db = getDb(env.DB);
@@ -904,9 +973,11 @@ describe("mark-all-as-read", () => {
       "/reader/api/0/stream/contents?xt=user/-/state/com.google/read",
       { headers: authHeaders() },
     );
+
     const unreadBody = (await unread.json()) as {
       items: Array<{ title: string }>;
     };
+
     expect(unreadBody.items.map((i) => i.title)).toEqual(["New"]);
   });
 });
@@ -918,12 +989,14 @@ describe("FreshRSS prefix", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formBody({ Email: "user@example.com", Passwd: TOKEN }),
     });
+
     expect(login.status).toBe(200);
     expect(await login.text()).toContain(`Auth=${TOKEN}`);
 
     const info = await fetch("/api/greader.php/reader/api/0/user-info", {
       headers: authHeaders(),
     });
+
     expect(info.status).toBe(200);
     const body = (await info.json()) as { userId: string };
     expect(body.userId).toBe("dev-user-id");
@@ -936,12 +1009,14 @@ describe("FreshRSS prefix", () => {
       itemGuid: "https://example.com/item",
       itemTitle: "Prefixed item",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch(
       "/api/greader.php/reader/api/0/stream/contents?n=1",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
 
     expect(res.status).toBe(200);
@@ -957,15 +1032,18 @@ describe("stream/items/contents", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch(
       `/reader/api/0/stream/items/contents?i=tag:google.com,2005:reader/item/${itemId}`,
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as {
       items: Array<{ title: string; id: string }>;
     };
+
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
     expect(body.items[0].title).toBe("Article 1");
@@ -979,6 +1057,7 @@ describe("stream/items/contents", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "Article 1",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch("/reader/api/0/stream/items/contents", {
@@ -989,6 +1068,7 @@ describe("stream/items/contents", () => {
       },
       body: formBody({ i: itemId }),
     });
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
@@ -1006,6 +1086,7 @@ describe("stream/items/contents", () => {
     const res = await fetch(`/reader/api/0/stream/items/contents?i=${itemId}`, {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as { items: unknown[] };
     expect(body.items).toEqual([]);
   });
@@ -1020,6 +1101,7 @@ describe("stream continuation", () => {
       itemTitle: "Newest",
       publishedAt: 3_000,
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const db = getDb(env.DB);
@@ -1048,10 +1130,12 @@ describe("stream continuation", () => {
       "/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&n=2",
       { headers: authHeaders() },
     );
+
     const first = (await page1.json()) as {
       items: Array<{ title: string }>;
       continuation?: string;
     };
+
     expect(first.items.map((i) => i.title)).toEqual(["Newest", "Middle"]);
     expect(first.continuation).toBeTruthy();
 
@@ -1059,16 +1143,19 @@ describe("stream continuation", () => {
       `/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&n=2&c=${first.continuation}`,
       { headers: authHeaders() },
     );
+
     const second = (await page2.json()) as {
       items: Array<{ title: string }>;
       continuation?: string;
     };
+
     expect(second.items.map((i) => i.title)).toEqual(["Oldest"]);
     expect(second.continuation).toBeUndefined();
   });
 
   it("does not skip or duplicate items that share publishedAt", async () => {
     const publishedAt = 1_700_000_000_000;
+
     const { feedId } = await seedFeed({
       feedUrl: "https://example.com/feed.xml",
       title: "Feed",
@@ -1076,6 +1163,7 @@ describe("stream continuation", () => {
       itemTitle: "Same-1",
       publishedAt,
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const db = getDb(env.DB);
@@ -1091,21 +1179,27 @@ describe("stream continuation", () => {
 
     const titles: string[] = [];
     let cursor: string | undefined;
+
     for (let i = 0; i < 3; i++) {
       const qs = new URLSearchParams({
         s: "user/-/state/com.google/reading-list",
         n: "1",
       });
+
       if (cursor) qs.set("c", cursor);
+
       const res = await fetch(`/reader/api/0/stream/contents?${qs}`, {
         headers: authHeaders(),
       });
+
       const body = (await res.json()) as {
         items: Array<{ title: string }>;
         continuation?: string;
       };
+
       titles.push(...body.items.map((item) => item.title));
       cursor = body.continuation;
+
       if (!cursor) break;
     }
 
@@ -1114,6 +1208,7 @@ describe("stream continuation", () => {
 
   it("paginates item IDs with equal timestamps without gaps", async () => {
     const publishedAt = 1_700_000_000_000;
+
     const first = await seedFeed({
       feedUrl: "https://example.com/feed.xml",
       title: "Feed",
@@ -1121,6 +1216,7 @@ describe("stream continuation", () => {
       itemTitle: "ID 1",
       publishedAt,
     });
+
     await subscribeUser("dev-user-id", first.feedId);
 
     const secondId = await deriveItemId("https://example.com/id-2");
@@ -1136,16 +1232,21 @@ describe("stream continuation", () => {
 
     const ids: string[] = [];
     let cursor: string | undefined;
+
     do {
       const query = new URLSearchParams({ n: "1" });
+
       if (cursor) query.set("c", cursor);
+
       const res = await fetch(`/reader/api/0/stream/items/ids?${query}`, {
         headers: authHeaders(),
       });
+
       const body = (await res.json()) as {
         itemRefs: Array<{ id: string }>;
         continuation?: string;
       };
+
       ids.push(...body.itemRefs.map((item) => item.id));
       cursor = body.continuation;
     } while (cursor);
@@ -1166,12 +1267,14 @@ describe("stream selectors", () => {
       itemGuid: "https://a.example.com/1",
       itemTitle: "From A",
     });
+
     const otherFeed = await seedFeed({
       feedUrl: "https://b.example.com/feed.xml",
       title: "B",
       itemGuid: "https://b.example.com/1",
       itemTitle: "From B",
     });
+
     await subscribeUser("dev-user-id", selectedFeed.feedId);
     await subscribeUser("dev-user-id", otherFeed.feedId);
 
@@ -1181,6 +1284,7 @@ describe("stream selectors", () => {
         headers: authHeaders(),
       },
     );
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((i) => i.title)).toEqual(["From A"]);
   });
@@ -1192,12 +1296,14 @@ describe("stream selectors", () => {
       itemGuid: "https://a.example.com/1",
       itemTitle: "From A",
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const res = await fetch(
       "/reader/api/0/stream/contents?s=feed/unknown-feed-id",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as { items: unknown[] };
     expect(res.status).toBe(200);
     expect(body.items).toEqual([]);
@@ -1205,25 +1311,30 @@ describe("stream selectors", () => {
 
   it("filters to a single feed by URL", async () => {
     const feedUrl = "https://a.example.com/feed.xml";
+
     const selectedFeed = await seedFeed({
       feedUrl,
       title: "A",
       itemGuid: "https://a.example.com/1",
       itemTitle: "From A",
     });
+
     const otherFeed = await seedFeed({
       feedUrl: "https://b.example.com/feed.xml",
       title: "B",
       itemGuid: "https://b.example.com/1",
       itemTitle: "From B",
     });
+
     await subscribeUser("dev-user-id", selectedFeed.feedId);
     await subscribeUser("dev-user-id", otherFeed.feedId);
 
     const query = new URLSearchParams({ s: `feed/${feedUrl}` });
+
     const res = await fetch(`/reader/api/0/stream/contents?${query}`, {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((item) => item.title)).toEqual(["From A"]);
   });
@@ -1235,12 +1346,14 @@ describe("stream selectors", () => {
       itemGuid: "https://tech.example.com/1",
       itemTitle: "Tech article",
     });
+
     const news = await seedFeed({
       feedUrl: "https://news.example.com/feed.xml",
       title: "News",
       itemGuid: "https://news.example.com/1",
       itemTitle: "News article",
     });
+
     await subscribeUser("dev-user-id", tech.feedId, "Tech");
     await subscribeUser("dev-user-id", news.feedId, "News");
 
@@ -1248,12 +1361,14 @@ describe("stream selectors", () => {
       "/reader/api/0/stream/contents?s=user/-/label/Tech",
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((i) => i.title)).toEqual(["Tech article"]);
   });
 
   it("ot= excludes items older than the unix timestamp", async () => {
     const now = Date.now();
+
     const { feedId } = await seedFeed({
       feedUrl: "https://example.com/feed.xml",
       title: "Feed",
@@ -1261,6 +1376,7 @@ describe("stream selectors", () => {
       itemTitle: "Old",
       publishedAt: now - 60_000,
     });
+
     await subscribeUser("dev-user-id", feedId);
 
     const db = getDb(env.DB);
@@ -1275,10 +1391,12 @@ describe("stream selectors", () => {
     });
 
     const ot = Math.floor((now - 10_000) / 1000);
+
     const res = await fetch(
       `/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&ot=${ot}`,
       { headers: authHeaders() },
     );
+
     const body = (await res.json()) as { items: Array<{ title: string }> };
     expect(body.items.map((i) => i.title)).toEqual(["New"]);
   });
@@ -1292,11 +1410,13 @@ describe("tag/list", () => {
       itemGuid: "https://example.com/a1",
       itemTitle: "A1",
     });
+
     await subscribeUser("dev-user-id", feedId, "Tech");
 
     const res = await fetch("/reader/api/0/tag/list", {
       headers: authHeaders(),
     });
+
     const body = (await res.json()) as { tags: Array<{ id: string }> };
     expect(res.status).toBe(200);
     expect(body.tags).toEqual([
@@ -1316,11 +1436,13 @@ describe("subscription/quickadd", () => {
       },
       body: formBody({ quickadd: "https://example.com/feed.xml" }),
     });
+
     const body = (await res.json()) as {
       numResults: number;
       query: string;
       streamId: string;
     };
+
     expect(res.status).toBe(200);
     expect(body.numResults).toBe(1);
     expect(body.query).toBe("https://example.com/feed.xml");
@@ -1329,6 +1451,7 @@ describe("subscription/quickadd", () => {
     const list = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(),
     });
+
     const listed = (await list.json()) as { subscriptions: unknown[] };
     expect(listed.subscriptions).toHaveLength(1);
   });
@@ -1360,6 +1483,7 @@ describe("GReader request validation", () => {
       },
       body: formBody(body),
     });
+
     expect(res.status).toBe(400);
   });
 });
@@ -1386,12 +1510,14 @@ describe("per-user visibility", () => {
       itemGuid: "https://shared.example/item",
       itemTitle: "Shared item",
     });
+
     const privateFeed = await seedFeed({
       feedUrl: "https://private.example/feed.xml",
       title: "Private",
       itemGuid: "https://private.example/item",
       itemTitle: "Private item",
     });
+
     await subscribeUser("dev-user-id", shared.feedId, "Owner folder");
     await subscribeUser("other-user-id", shared.feedId, "Other folder");
     await subscribeUser("dev-user-id", privateFeed.feedId);
@@ -1411,9 +1537,11 @@ describe("per-user visibility", () => {
     const otherStream = await fetch("/reader/api/0/stream/contents", {
       headers: authHeaders(OTHER_TOKEN),
     });
+
     const streamBody = (await otherStream.json()) as {
       items: Array<{ title: string; categories: string[] }>;
     };
+
     expect(streamBody.items).toHaveLength(1);
     expect(streamBody.items[0]).toMatchObject({
       title: "Shared item",
@@ -1423,9 +1551,11 @@ describe("per-user visibility", () => {
     const otherSubscriptions = await fetch("/reader/api/0/subscription/list", {
       headers: authHeaders(OTHER_TOKEN),
     });
+
     const subscriptionBody = (await otherSubscriptions.json()) as {
       subscriptions: Array<{ categories: unknown[] }>;
     };
+
     expect(subscriptionBody.subscriptions).toHaveLength(1);
     expect(subscriptionBody.subscriptions[0].categories).toEqual([
       { id: "user/-/label/Other folder", label: "Other folder" },
@@ -1435,6 +1565,7 @@ describe("per-user visibility", () => {
       `/reader/api/0/stream/items/contents?i=${privateFeed.itemId}`,
       { headers: authHeaders(OTHER_TOKEN) },
     );
+
     const privateBody = (await privateContents.json()) as { items: unknown[] };
     expect(privateBody.items).toEqual([]);
   });

@@ -14,9 +14,11 @@ export async function scheduled(
   switch (event.cron) {
     case "*/30 * * * *":
       await triggerFeedPollingWorkflow(env);
+
       return;
     case "0 3 * * 1":
       await purgeRevokedTokens(env);
+
       return purgeRetention(env);
     default:
       createLogger().warn("unknown cron schedule", { cron: event.cron });
@@ -37,13 +39,16 @@ export async function triggerFeedPollingWorkflow(
         ? "triggerForcePollingWorkflow"
         : "triggerFeedPollingWorkflow",
   });
+
   const instance = await env.FEED_POLLING_WORKFLOW.create({
     params: { triggerReason },
   });
+
   logger.info("feed polling workflow started", {
     instanceId: instance.id,
     triggerReason,
   });
+
   return instance.id;
 }
 

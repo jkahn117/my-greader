@@ -30,13 +30,16 @@ const BASE = "http://localhost";
 async function fetchPanels(timezone = "UTC"): Promise<OverviewPanelsResponse> {
   const req = new Request(`${BASE}/app/api/overview/panels`);
   const ctx = createExecutionContext();
+
   const res = await worker.fetch(
     req,
     { ...env, DISPLAY_TIMEZONE: timezone } as Env,
     ctx,
   );
+
   await waitOnExecutionContext(ctx);
   expect(res.status).toBe(200);
+
   return (await res.json()) as OverviewPanelsResponse;
 }
 
@@ -70,6 +73,7 @@ async function seedFeed(opts: {
     userId: opts.userId ?? "dev-user-id",
     feedId,
   });
+
   return feedId;
 }
 
@@ -139,11 +143,13 @@ describe("GET /app/api/overview/panels", () => {
     await markRead("dev-user-id", feedId, Date.parse("2024-03-06T08:00:00Z"));
     await markRead("dev-user-id", feedId, Date.parse("2024-03-06T07:59:59Z"));
     await markRead("dev-user-id", feedId, Date.parse("2024-03-10T08:00:00Z"));
+
     const body = await createActivityReader(env.DB).overviewPanels(
       "dev-user-id",
       timestamp,
       "America/Los_Angeles",
     );
+
     expect(body.reading.daily.map((day) => day.date)).toEqual([
       "2024-03-06",
       "2024-03-07",
@@ -178,10 +184,12 @@ describe("GET /app/api/overview/panels", () => {
       "failed",
     );
     expect((await fetchPanels()).feedHealth.failed).toBe(1);
+
     const manyFeedIds = [
       feedId,
       ...Array.from({ length: 150 }, (_, i) => `missing-${i}`),
     ];
+
     expect(
       (await history.latestAttempts(manyFeedIds)).get(feedId)?.outcome,
     ).toBe("failed");
@@ -197,9 +205,11 @@ describe("GET /app/api/overview/panels", () => {
     // One read now, one read ~2 days ago in LA time. A read at 06:30 UTC
     // is still the previous day in LA — covers the timezone boundary.
     await markRead("dev-user-id", feedId, now);
+
     const laBoundary = new Date(now).toLocaleString("en-US", {
       timeZone: "America/Los_Angeles",
     });
+
     await markRead("dev-user-id", feedId, now - 2 * 24 * 60 * 60 * 1000);
 
     const body = await fetchPanels();
@@ -334,6 +344,7 @@ describe("GET /app/api/overview/panels", () => {
       consecutiveErrors: 3,
       lastError: "HTTP 500",
     });
+
     await seedFeed({}); // healthy, backed off — not attention
 
     const body = await fetchPanels();
@@ -346,6 +357,7 @@ describe("GET /app/api/overview/panels", () => {
   it("reports rate-limited feeds as attention, distinct from failures", async () => {
     const limited = await seedFeed({ title: "Throttled" });
     await seedAttempt(limited, "rate_limited");
+
     const failing = await seedFeed({
       title: "Broken",
       consecutiveErrors: 2,
@@ -353,9 +365,11 @@ describe("GET /app/api/overview/panels", () => {
     });
 
     const body = await fetchPanels();
+
     const kinds = Object.fromEntries(
       body.needsAttention.map((f) => [f.feedId, f.kind]),
     );
+
     expect(kinds[limited]).toBe("rate_limited");
     expect(kinds[failing]).toBe("failing");
     const rl = body.needsAttention.find((f) => f.feedId === limited)!;

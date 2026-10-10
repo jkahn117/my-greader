@@ -22,6 +22,7 @@ async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 

@@ -8,18 +8,22 @@ export function parseStreamId(streamId: string): StreamScope {
   if (streamId.startsWith("feed/")) {
     return { type: "feed", value: streamId.slice(5) };
   }
+
   if (streamId.startsWith("user/-/label/")) {
     return {
       type: "folder",
       value: streamId.slice("user/-/label/".length),
     };
   }
+
   if (streamId === "user/-/state/com.google/starred") {
     return { type: "starred", value: null };
   }
+
   if (streamId === "user/-/state/com.google/reading-list") {
     return { type: "all", value: null };
   }
+
   return { type: "unsupported", value: streamId };
 }
 

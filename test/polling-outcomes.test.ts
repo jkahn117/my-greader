@@ -33,6 +33,7 @@ function rssWithItems(count: number): string {
       <description>${"content ".repeat(900)}</description>
     </item>`,
   ).join("");
+
   return `<?xml version="1.0"?><rss version="2.0"><channel>
     <title>Large Feed</title><link>https://example.com</link>${itemXml}
   </channel></rss>`;
@@ -46,6 +47,7 @@ function immediateStep(): WorkflowStep {
         typeof configOrCallback === "function"
           ? configOrCallback
           : maybeCallback;
+
       return (callback as () => Promise<unknown>)();
     },
   } as WorkflowStep;
@@ -128,6 +130,7 @@ describe("durable Feed attempt outcomes", () => {
     const checkedAt = 1_735_732_800_000;
     const feed = feedInput("empty-initial");
     await seedAttempt(feed, "cycle-empty-initial");
+
     const poller = createFeedPoller(
       env.DB,
       { get: async () => new Response(EMPTY_RSS) },
@@ -149,6 +152,7 @@ describe("durable Feed attempt outcomes", () => {
     )
       .bind(feed.id)
       .first();
+
     expect(stored).toEqual({
       last_successful_poll_at: checkedAt,
       last_new_item_discovered_at: null,
@@ -169,6 +173,7 @@ describe("durable Feed attempt outcomes", () => {
       { publish() {} },
       () => 1_735_732_800_000,
     );
+
     const notModifiedPoller = createFeedPoller(
       env.DB,
       { get: async () => new Response(null, { status: 304 }) },
@@ -261,6 +266,7 @@ describe("durable Feed attempt outcomes", () => {
       const cycleRunId = `cycle-${testCase.id}`;
       const attemptId = `attempt-${testCase.id}`;
       await seedAttempt(feed, cycleRunId);
+
       const poller = createFeedPoller(
         env.DB,
         testCase.transport,
@@ -294,6 +300,7 @@ describe("durable Feed attempt outcomes", () => {
     vi.spyOn(response, "text").mockRejectedValue(
       new Error("body stream reset"),
     );
+
     const poller = createFeedPoller(
       env.DB,
       { get: async () => response },
@@ -321,18 +328,22 @@ describe("durable Feed attempt outcomes", () => {
   it("returns a committed attempt on retry without repeating HTTP or observers", async () => {
     const feed = feedInput("retry");
     await seedAttempt(feed, "cycle-retry");
+
     const observer = {
       publish: vi.fn(() => {
         throw new Error("AE down");
       }),
     };
+
     const firstTransport = {
       get: vi.fn(async () => new Response(ONE_ITEM_RSS)),
     };
+
     const attempt = {
       cycleRunId: "cycle-retry",
       attemptId: "attempt-retry",
     };
+
     const firstPoller = createFeedPoller(
       env.DB,
       firstTransport,
@@ -350,7 +361,9 @@ describe("durable Feed attempt outcomes", () => {
         throw new Error("HTTP must not repeat");
       }),
     };
+
     const retryObserver = { publish: vi.fn() };
+
     const retryPoller = createFeedPoller(
       env.DB,
       retryTransport,
@@ -370,33 +383,41 @@ describe("durable Feed attempt outcomes", () => {
     const feed = feedInput("overlap");
     await seedAttempt(feed, "cycle-overlap");
     let resolveSuccess: (response: Response) => void = () => {};
+
     let resolveNotModified: (response: Response) => void = () => {};
+
     const successResponse = new Promise<Response>((resolve) => {
       resolveSuccess = resolve;
     });
+
     const notModifiedResponse = new Promise<Response>((resolve) => {
       resolveNotModified = resolve;
     });
+
     const successTransport = { get: vi.fn(() => successResponse) };
     const notModifiedTransport = { get: vi.fn(() => notModifiedResponse) };
     const successObserver = { publish: vi.fn() };
     const notModifiedObserver = { publish: vi.fn() };
+
     const attempt = {
       cycleRunId: "cycle-overlap",
       attemptId: "attempt-overlap",
     };
+
     const successPoll = createFeedPoller(
       env.DB,
       successTransport,
       successObserver,
       () => 1_735_732_800_000,
     ).poll(feed, attempt);
+
     const notModifiedPoll = createFeedPoller(
       env.DB,
       notModifiedTransport,
       notModifiedObserver,
       () => 1_735_732_800_001,
     ).poll(feed, attempt);
+
     await vi.waitFor(() => {
       expect(successTransport.get).toHaveBeenCalledOnce();
       expect(notModifiedTransport.get).toHaveBeenCalledOnce();
@@ -432,13 +453,17 @@ describe("durable Feed attempt outcomes", () => {
       status: "running",
     });
     let releaseOwner: (response: Response) => void = () => {};
+
     const ownerResponse = new Promise<Response>((resolve) => {
       releaseOwner = resolve;
     });
+
     const ownerTransport = { get: vi.fn(() => ownerResponse) };
+
     const contenderTransport = {
       get: vi.fn(async () => new Response(null, { status: 304 })),
     };
+
     const ownerPoll = createFeedPoller(
       env.DB,
       ownerTransport,
@@ -448,6 +473,7 @@ describe("durable Feed attempt outcomes", () => {
       cycleRunId: "cycle-owner",
       attemptId: "attempt-owner",
     });
+
     await vi.waitFor(() => expect(ownerTransport.get).toHaveBeenCalledOnce());
 
     const contenderResult = await createFeedPoller(
@@ -459,6 +485,7 @@ describe("durable Feed attempt outcomes", () => {
       cycleRunId: "cycle-contender",
       attemptId: "attempt-contender",
     });
+
     releaseOwner(new Response(ONE_ITEM_RSS));
 
     await expect(ownerPoll).resolves.toMatchObject({ outcome: "new_items" });
@@ -481,10 +508,13 @@ describe("durable Feed attempt outcomes", () => {
       status: "running",
     });
     let releaseOwner: (response: Response) => void = () => {};
+
     const ownerResponse = new Promise<Response>((resolve) => {
       releaseOwner = resolve;
     });
+
     const ownerTransport = { get: vi.fn(() => ownerResponse) };
+
     const ownerPoll = createFeedPoller(
       env.DB,
       ownerTransport,
@@ -494,59 +524,76 @@ describe("durable Feed attempt outcomes", () => {
       cycleRunId: "cycle-current-owner",
       attemptId: "attempt-current-owner",
     });
+
     await vi.waitFor(() => expect(ownerTransport.get).toHaveBeenCalledOnce());
 
     let claimFinished: () => void = () => {};
+
     let returnClaim: () => void = () => {};
+
     const claimFinishedPromise = new Promise<void>((resolve) => {
       claimFinished = resolve;
     });
+
     const returnClaimPromise = new Promise<void>((resolve) => {
       returnClaim = resolve;
     });
+
     let pauseFirstBatch = true;
+
     const pausingDb = new Proxy(env.DB, {
       get(target, property) {
         if (property === "batch") {
           return async (statements: D1PreparedStatement[]) => {
             const results = await target.batch(statements);
+
             if (pauseFirstBatch) {
               pauseFirstBatch = false;
               claimFinished();
               await returnClaimPromise;
             }
+
             return results;
           };
         }
+
         const value = Reflect.get(target, property, target);
+
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
+
     const racingAttempt = {
       cycleRunId: "cycle-racing-attempt",
       attemptId: "attempt-racing",
     };
+
     const firstRuntime = createFeedPoller(
       pausingDb,
       { get: vi.fn() },
       { publish() {} },
       () => 1_735_732_800_001,
     ).poll(feed, racingAttempt);
+
     await claimFinishedPromise;
 
     releaseOwner(new Response(EMPTY_RSS));
     await ownerPoll;
     let releaseRetry: (response: Response) => void = () => {};
+
     const retryResponse = new Promise<Response>((resolve) => {
       releaseRetry = resolve;
     });
+
     const retryTransport = { get: vi.fn(() => retryResponse) };
+
     const retryPoll = createFeedPoller(
       env.DB,
       retryTransport,
       { publish() {} },
       () => 1_735_732_800_002,
     ).poll(feed, racingAttempt);
+
     await vi.waitFor(() => expect(retryTransport.get).toHaveBeenCalledOnce());
     returnClaim();
 
@@ -573,9 +620,11 @@ describe("durable Feed attempt outcomes", () => {
       status: "running",
     });
     let releaseStaleOwner: (response: Response) => void = () => {};
+
     const staleResponse = new Promise<Response>((resolve) => {
       releaseStaleOwner = resolve;
     });
+
     const stalePoll = createFeedPoller(
       env.DB,
       { get: vi.fn(() => staleResponse) },
@@ -585,6 +634,7 @@ describe("durable Feed attempt outcomes", () => {
       cycleRunId: "cycle-stale",
       attemptId: "attempt-stale",
     });
+
     await vi.waitFor(async () => {
       expect(await readAttempt("attempt-stale")).not.toBeNull();
     });
@@ -598,14 +648,17 @@ describe("durable Feed attempt outcomes", () => {
       cycleRunId: "cycle-recovery",
       attemptId: "attempt-recovery",
     });
+
     releaseStaleOwner(new Response(ONE_ITEM_RSS));
 
     expect(recoveryResult).toMatchObject({ outcome: "not_modified" });
     await expect(stalePoll).rejects.toThrow("lost ownership");
     expect(await readAttempt("attempt-stale")).toMatchObject({ outcome: null });
+
     const stored = await env.DB.prepare(
       "SELECT count(*) AS count FROM items",
     ).first<{ count: number }>();
+
     expect(stored?.count).toBe(0);
   });
 
@@ -619,6 +672,7 @@ describe("durable Feed attempt outcomes", () => {
       triggerReason: "scheduled",
       status: "running",
     });
+
     const failedTransport = {
       get: vi.fn(async () => new Response(null, { status: 503 })),
     };
@@ -647,6 +701,7 @@ describe("durable Feed attempt outcomes", () => {
     )
       .bind(selectedFeed.id)
       .first();
+
     expect(persistedFeed).toEqual({ consecutive_errors: 2 });
   });
 
@@ -654,25 +709,32 @@ describe("durable Feed attempt outcomes", () => {
     const feed = feedInput("resumed");
     await seedAttempt(feed, "cycle-resumed");
     let releaseOldRuntime: (response: Response) => void = () => {};
+
     let releaseRetry: (response: Response) => void = () => {};
+
     const oldResponse = new Promise<Response>((resolve) => {
       releaseOldRuntime = resolve;
     });
+
     const retryResponse = new Promise<Response>((resolve) => {
       releaseRetry = resolve;
     });
+
     const attempt = {
       cycleRunId: "cycle-resumed",
       attemptId: "attempt-resumed",
     };
+
     const oldTransport = { get: vi.fn(() => oldResponse) };
     const retryTransport = { get: vi.fn(() => retryResponse) };
+
     const oldPoll = createFeedPoller(
       env.DB,
       oldTransport,
       { publish() {} },
       () => 1_735_732_800_000,
     ).poll(feed, attempt);
+
     await vi.waitFor(() => expect(oldTransport.get).toHaveBeenCalledOnce());
 
     const retryPoll = createFeedPoller(
@@ -681,13 +743,16 @@ describe("durable Feed attempt outcomes", () => {
       { publish() {} },
       () => 1_735_733_100_001,
     ).poll(feed, attempt);
+
     await vi.waitFor(() => expect(retryTransport.get).toHaveBeenCalledOnce());
 
     releaseOldRuntime(new Response(null, { status: 304 }));
+
     const oldResult = await oldPoll.then(
       () => "committed",
       () => "rejected",
     );
+
     releaseRetry(new Response(ONE_ITEM_RSS));
 
     expect(oldResult).toBe("rejected");
@@ -695,11 +760,13 @@ describe("durable Feed attempt outcomes", () => {
       outcome: "new_items",
       newItems: 1,
     });
+
     const stored = await env.DB.prepare(
       `SELECT count(*) AS count,
               count(DISTINCT first_ingestion_attempt_id) AS attempts
          FROM items`,
     ).first();
+
     expect(stored).toEqual({ count: 1, attempts: 1 });
   });
 
@@ -708,6 +775,7 @@ describe("durable Feed attempt outcomes", () => {
       consecutiveErrors: 2,
       checkIntervalMinutes: 60,
     });
+
     await seedAttempt(feed, "cycle-atomic-failure");
     await env.DB.prepare(`CREATE TRIGGER fail_feed_completion
       BEFORE UPDATE ON feeds
@@ -716,12 +784,14 @@ describe("durable Feed attempt outcomes", () => {
         SELECT RAISE(ABORT, 'injected completion failure');
       END`).run();
     const transport = { get: vi.fn(async () => new Response(ONE_ITEM_RSS)) };
+
     const poller = createFeedPoller(
       env.DB,
       transport,
       { publish() {} },
       () => 1_735_732_800_000,
     );
+
     const attempt = {
       cycleRunId: "cycle-atomic-failure",
       attemptId: "attempt-atomic-failure",
@@ -735,12 +805,14 @@ describe("durable Feed attempt outcomes", () => {
     const itemCount = await env.DB.prepare(
       "SELECT count(*) AS count FROM items",
     ).first<{ count: number }>();
+
     const persistedFeed = await env.DB.prepare(
       `SELECT last_successful_poll_at, consecutive_errors, check_interval_minutes
          FROM feeds WHERE id = ?`,
     )
       .bind(feed.id)
       .first();
+
     expect(itemCount?.count).toBe(0);
     expect(await readAttempt(attempt.attemptId)).toMatchObject({
       outcome: null,
@@ -766,6 +838,7 @@ describe("durable Feed attempt outcomes", () => {
     const feed = feedInput("backload-policy");
     await seedAttempt(feed, "cycle-empty-backload");
     const transport = { get: vi.fn(async () => new Response(EMPTY_RSS)) };
+
     const poller = createFeedPoller(
       env.DB,
       transport,
@@ -795,6 +868,7 @@ describe("durable Feed attempt outcomes", () => {
           <guid>purged-old-item</guid><pubDate>${new Date(firstCheck - 25 * 60 * 60 * 1000).toUTCString()}</pubDate></item>
       </channel></rss>`),
     );
+
     const refreshedFeed = await getDb(env.DB)
       .select()
       .from(feeds)
@@ -813,7 +887,9 @@ describe("durable Feed attempt outcomes", () => {
     )
       .bind(feed.id)
       .all();
+
     expect(stored.results).toEqual([{ title: "Late Item" }]);
+
     const state = await env.DB.prepare(
       `SELECT last_successful_poll_at, last_new_item_discovered_at,
               initial_backload_completed_at, next_poll_at
@@ -821,6 +897,7 @@ describe("durable Feed attempt outcomes", () => {
     )
       .bind(feed.id)
       .first();
+
     expect(state).toEqual({
       last_successful_poll_at: currentTime,
       last_new_item_discovered_at: currentTime,
@@ -832,13 +909,16 @@ describe("durable Feed attempt outcomes", () => {
   it("atomically completes a large Feed and replays its committed result", async () => {
     const feed = feedInput("large");
     await seedAttempt(feed, "cycle-large");
+
     const transport = {
       get: vi.fn(async () => new Response(rssWithItems(250))),
     };
+
     const attempt = {
       cycleRunId: "cycle-large",
       attemptId: "attempt-large",
     };
+
     const poller = createFeedPoller(
       env.DB,
       transport,
@@ -860,6 +940,7 @@ describe("durable Feed attempt outcomes", () => {
               count(DISTINCT first_ingestion_attempt_id) AS attempts
          FROM items`,
     ).first<{ count: number; attempts: number }>();
+
     expect(stored).toEqual({ count: 250, attempts: 1 });
     expect(transport.get).toHaveBeenCalledTimes(1);
   });
@@ -898,6 +979,7 @@ describe("Cycle Run outcomes", () => {
     )
       .bind("empty-cycle")
       .first();
+
     const attempts = await env.DB.prepare(
       "SELECT count(*) AS count FROM feed_poll_attempts",
     ).first<{ count: number }>();
@@ -969,6 +1051,7 @@ describe("Cycle Run outcomes", () => {
               skipped_feeds, status, outcome
          FROM cycle_runs ORDER BY id`,
     ).all();
+
     expect(cycles.results).toEqual([
       {
         id: "forced-cycle",
@@ -1013,9 +1096,11 @@ describe("Cycle Run outcomes", () => {
       feedId: "overlap-feed",
     });
     let releaseScheduled: (response: Response) => void = () => {};
+
     const scheduledResponse = new Promise<Response>((resolve) => {
       releaseScheduled = resolve;
     });
+
     const fetchMock = vi.fn(() => scheduledResponse);
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1029,6 +1114,7 @@ describe("Cycle Run outcomes", () => {
       `SELECT id, checked_feeds, skipped_feeds, status
          FROM cycle_runs ORDER BY id`,
     ).all();
+
     expect(cycles.results).toEqual([
       {
         id: "forced-contender",
@@ -1067,6 +1153,7 @@ describe("Cycle Run outcomes", () => {
 
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+
     const step = {
       do: async (
         name: string,
@@ -1077,12 +1164,14 @@ describe("Cycle Run outcomes", () => {
           typeof configOrCallback === "function"
             ? configOrCallback
             : maybeCallback;
+
         if (name.startsWith("fetch-batch-")) {
           await db
             .update(feeds)
             .set({ deactivatedAt: now })
             .where(eq(feeds.id, "busy-feed"));
         }
+
         return (callback as () => Promise<unknown>)();
       },
     } as WorkflowStep;
@@ -1105,6 +1194,7 @@ describe("Cycle Run outcomes", () => {
     )
       .bind("skipped-cycle")
       .first();
+
     expect(cycle).toEqual({
       selected_feeds: 1,
       checked_feeds: 0,
@@ -1138,6 +1228,7 @@ describe("Cycle Run outcomes", () => {
     vi.stubGlobal("fetch", fetchMock);
     const completedSteps = new Map<string, unknown>();
     let loseFetchAcknowledgment = true;
+
     // Caches acknowledged Workflow steps while replaying the unacknowledged Feed step.
     const retryingStep = {
       do: async (
@@ -1146,25 +1237,32 @@ describe("Cycle Run outcomes", () => {
         maybeCallback?: unknown,
       ) => {
         if (completedSteps.has(name)) return completedSteps.get(name);
+
         const callback =
           typeof configOrCallback === "function"
             ? configOrCallback
             : maybeCallback;
+
         const result = await (callback as () => Promise<unknown>)();
+
         if (name.startsWith("fetch-batch-") && loseFetchAcknowledgment) {
           loseFetchAcknowledgment = false;
           throw new Error("acknowledgment lost after commit");
         }
+
         completedSteps.set(name, result);
+
         return result;
       },
     } as WorkflowStep;
+
     const event = {
       instanceId: "retry-cycle",
       workflowName: "feed-polling",
       timestamp: new Date(now),
       payload: { triggerReason: "scheduled" as const },
     };
+
     const workflowEnv = {
       ...env,
       ANALYTICS_ENABLED: "false",
@@ -1183,11 +1281,13 @@ describe("Cycle Run outcomes", () => {
     )
       .bind("retry-cycle")
       .first();
+
     const stored = await env.DB.prepare(
       `SELECT count(*) AS count,
               min(first_ingestion_attempt_id) AS attempt_id
          FROM items`,
     ).first();
+
     expect(cycle).toEqual({
       status: "completed",
       selected_feeds: 1,
@@ -1240,6 +1340,7 @@ describe("Cycle Run outcomes", () => {
       vi.fn(async () => new Response(null, { status: 304 })),
     );
     const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+
     const step = {
       do: async (
         name: string,
@@ -1250,12 +1351,14 @@ describe("Cycle Run outcomes", () => {
           typeof configOrCallback === "function"
             ? configOrCallback
             : maybeCallback;
+
         if (name.startsWith("fetch-batch-")) {
           await db
             .update(feeds)
             .set({ deactivatedAt: now })
             .where(eq(feeds.id, "skipped-feed"));
         }
+
         return (callback as () => Promise<unknown>)();
       },
     } as WorkflowStep;
@@ -1274,6 +1377,7 @@ describe("Cycle Run outcomes", () => {
     const attemptLogs = infoSpy.mock.calls.filter(
       ([message]) => message === "feed polling attempt completed",
     );
+
     expect(attemptLogs).toHaveLength(2);
     expect(attemptLogs.map(([, context]) => context)).toEqual(
       expect.arrayContaining([
@@ -1397,19 +1501,23 @@ describe("Cycle Run outcomes", () => {
     });
     const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
+
     const analytics = {
       writeDataPoint() {
         throw new Error("Analytics Engine unavailable");
       },
     } as unknown as AnalyticsEngineDataset;
+
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
     const event = {
       instanceId: "diagnostic-cycle",
       workflowName: "feed-polling",
       timestamp: new Date(now),
       payload: { triggerReason: "scheduled" as const },
     };
+
     const workflowEnv = {
       ...env,
       ANALYTICS: analytics,
@@ -1424,12 +1532,14 @@ describe("Cycle Run outcomes", () => {
     )
       .bind("diagnostic-cycle")
       .first();
+
     const attempts = await env.DB.prepare(
       `SELECT id, outcome, error_class, http_status
          FROM feed_poll_attempts WHERE cycle_run_id = ?`,
     )
       .bind("diagnostic-cycle")
       .all();
+
     expect(cycle).toEqual({
       status: "completed",
       outcome: "completed",
@@ -1448,6 +1558,7 @@ describe("Cycle Run outcomes", () => {
     const failureLogs = [...warnSpy.mock.calls, ...errorSpy.mock.calls].filter(
       ([message]) => message === "feed polling attempt completed",
     );
+
     expect(failureLogs).toHaveLength(1);
     expect(failureLogs[0]?.[1]).toMatchObject({
       cycleRunId: "diagnostic-cycle",
@@ -1475,6 +1586,7 @@ describe("Cycle Run outcomes", () => {
       userId: "user-a",
       feedId: "interrupted-feed",
     });
+
     const interruptedStep = {
       do: async (
         name: string,
@@ -1485,6 +1597,7 @@ describe("Cycle Run outcomes", () => {
           typeof configOrCallback === "function"
             ? configOrCallback
             : maybeCallback;
+
         if (name.startsWith("fetch-batch-")) {
           await env.DB.prepare(
             `INSERT INTO feed_poll_attempts
@@ -1500,6 +1613,7 @@ describe("Cycle Run outcomes", () => {
             .run();
           throw new Error("runtime stopped");
         }
+
         return (callback as () => Promise<unknown>)();
       },
     } as WorkflowStep;
@@ -1523,6 +1637,7 @@ describe("Cycle Run outcomes", () => {
     )
       .bind("interrupted-cycle")
       .first();
+
     const attempt = await env.DB.prepare(
       `SELECT outcome, completed_at FROM feed_poll_attempts WHERE cycle_run_id = ?`,
     )

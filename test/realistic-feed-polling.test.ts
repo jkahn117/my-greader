@@ -32,7 +32,9 @@ async function loadFeed(feedId: string): Promise<FeedToCheck> {
     .from(feeds)
     .where(eq(feeds.id, feedId))
     .get();
+
   if (!feed) throw new Error(`Feed ${feedId} was not created`);
+
   return feed;
 }
 
@@ -45,6 +47,7 @@ async function subscribeToFixture(feedUrl: string): Promise<string> {
     createdAt: POLLED_AT,
   });
   const lifecycle = createSubscriptionLifecycle(env.DB, { publish() {} });
+
   return (await lifecycle.subscribe("dev-user-id", feedUrl)).feedId;
 }
 
@@ -66,6 +69,7 @@ async function pollResponse(
       triggerReason: "scheduled",
       status: "running",
     });
+
   const poller = createFeedPoller(
     env.DB,
     typeof bodyOrTransport === "string"
@@ -74,6 +78,7 @@ async function pollResponse(
     { publish() {} },
     () => POLLED_AT + cycleNumber,
   );
+
   return poller.poll(await loadFeed(feedId), { cycleRunId, attemptId });
 }
 
@@ -97,13 +102,16 @@ async function storedItems(feedId: string) {
 /** Exercises the existing Feed tab to prove diagnostics are discoverable. */
 async function feedDashboard(): Promise<string> {
   const ctx = createExecutionContext();
+
   const response = await worker.fetch(
     new Request("http://localhost/app/api/feeds"),
     env as Env,
     ctx,
   );
+
   await waitOnExecutionContext(ctx);
   expect(response.status).toBe(200);
+
   return response.text();
 }
 
@@ -149,6 +157,7 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://blocked.example.test/rss",
       );
+
       await pollResponse(feedId, 1, rssNamespaces);
       const existing = await storedItems(feedId);
       await expect(
@@ -162,11 +171,13 @@ describe("realistic Feed Polling", () => {
         error: "HTTP 200: HTML document instead of RSS or Atom",
       });
       expect(await storedItems(feedId)).toEqual(existing);
+
       const attempt = await env.DB.prepare(
         "SELECT outcome, error_class, http_status, parser_status, new_items FROM feed_poll_attempts WHERE cycle_run_id = ?",
       )
         .bind("fixture-cycle-2")
         .first();
+
       expect(attempt).toEqual({
         outcome: "failed",
         error_class: "parse",
@@ -202,12 +213,15 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://denied.example.test/rss",
       );
+
       await pollResponse(feedId, 1, rssNamespaces);
       const existing = await storedItems(feedId);
+
       const body = htmlBlockPage.replace(
         "Verify access",
         "token=synthetic-sensitive-value",
       );
+
       const diagnostic = `HTTP ${status}${status === 403 ? " (permanent)" : ""}: HTML response instead of Feed content`;
       await expect(
         pollResponse(feedId, 2, body, {
@@ -232,11 +246,13 @@ describe("realistic Feed Polling", () => {
       expect(dashboard).toContain(diagnostic);
       expect(dashboard).not.toContain("synthetic-sensitive-value");
       expect(dashboard).not.toContain("Cloudflare-IP");
+
       const attempt = await env.DB.prepare(
         "SELECT http_status, diagnostic, new_items FROM feed_poll_attempts WHERE cycle_run_id = ?",
       )
         .bind("fixture-cycle-2")
         .first();
+
       expect(attempt).toEqual({
         http_status: status,
         diagnostic,
@@ -253,9 +269,11 @@ describe("realistic Feed Polling", () => {
 
   it("trims oversized multibyte Item content without exceeding 50 KiB or splitting characters", async () => {
     const feedId = await subscribeToFixture("https://large.example.test/rss");
+
     const body = `<rss version="2.0"><channel><title>Large content</title>
       <item><guid>large-content</guid><description>${"€".repeat(18_000)}</description></item>
       </channel></rss>`;
+
     await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
       outcome: "new_items",
       newItems: 1,
@@ -272,11 +290,13 @@ describe("realistic Feed Polling", () => {
 
   it("accepts a large body and more than 250 Items without partial writes or duplicates", async () => {
     const feedId = await subscribeToFixture("https://large.example.test/rss");
+
     const body = `<rss version="2.0"><channel><title>Large Feed</title>${Array.from(
       { length: 320 },
       (_, index) =>
         `<item><guid>large-${index}</guid><title>Item ${String(index).padStart(3, "0")}</title><description>${"z".repeat(8_000)}</description></item>`,
     ).join("")}</channel></rss>`;
+
     expect(new TextEncoder().encode(body).length).toBeGreaterThan(2_500_000);
     await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
       outcome: "new_items",
@@ -314,10 +334,12 @@ describe("realistic Feed Polling", () => {
       lastSuccessfulPollAt: POLLED_AT + 1,
     });
     expect(await feedDashboard()).toContain("Malformed XML");
+
     const recovered = rssNamespaces.replace(
       "</channel>",
       `<item><guid>after-recovery</guid><title>Discovered after recovery</title></item></channel>`,
     );
+
     await expect(pollResponse(feedId, 3, recovered)).resolves.toMatchObject({
       outcome: "new_items",
       newItems: 1,
@@ -347,6 +369,7 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://limited.example.test/rss",
       );
+
       await pollResponse(feedId, 1, rssNamespaces);
       const existing = await storedItems(feedId);
       await expect(
@@ -415,8 +438,10 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://unavailable.example.test/rss",
       );
+
       await pollResponse(feedId, 1, rssNamespaces);
       const existing = await storedItems(feedId);
+
       const transport: FeedTransport = {
         async get() {
           if (failure === "network") {
@@ -424,8 +449,10 @@ describe("realistic Feed Polling", () => {
               `Request failed for https://fixture:synthetic-password@unavailable.example.test/rss#synthetic-fragment https://unavailable.example.test/rss?token=synthetic-query Bearer synthetic-bearer auth=synthetic-auth ${"x".repeat(700)}`,
             );
           }
+
           if (failure === "transport-abort")
             throw new DOMException("Request aborted", "AbortError");
+
           return new Response(
             new ReadableStream({
               start(controller) {
@@ -437,6 +464,7 @@ describe("realistic Feed Polling", () => {
           );
         },
       };
+
       await expect(pollResponse(feedId, 2, transport)).resolves.toMatchObject({
         outcome: "failed",
         errorClass: "network",
@@ -447,6 +475,7 @@ describe("realistic Feed Polling", () => {
         consecutiveErrors: 1,
         lastSuccessfulPollAt: POLLED_AT + 1,
       });
+
       const attempt = await env.DB.prepare(
         "SELECT http_status, diagnostic, new_items, error_class FROM feed_poll_attempts WHERE cycle_run_id = ?",
       )
@@ -457,6 +486,7 @@ describe("realistic Feed Polling", () => {
           new_items: number;
           error_class: string;
         }>();
+
       expect(attempt).toMatchObject({
         http_status: failure === "body-abort" ? 200 : null,
         new_items: 0,
@@ -464,6 +494,7 @@ describe("realistic Feed Polling", () => {
       });
       expect(attempt?.diagnostic.length).toBeLessThanOrEqual(500);
       const dashboard = await feedDashboard();
+
       for (const value of [
         "synthetic-password",
         "synthetic-fragment",
@@ -474,6 +505,7 @@ describe("realistic Feed Polling", () => {
         expect(attempt?.diagnostic).not.toContain(value);
         expect(dashboard).not.toContain(value);
       }
+
       await expect(
         pollResponse(feedId, 3, rssNamespaces),
       ).resolves.toMatchObject({ outcome: "unchanged", newItems: 0 });
@@ -489,6 +521,7 @@ describe("realistic Feed Polling", () => {
     const feedId = await subscribeToFixture(
       "https://mislabeled.example.test/rss",
     );
+
     await expect(
       pollResponse(feedId, 1, rssNamespaces, {
         headers: { "Content-Type": "text/html" },
@@ -515,6 +548,7 @@ describe("realistic Feed Polling", () => {
     const expectedLinkId = await deriveItemId(
       "https://feeds.example.test/articles/link-identity",
     );
+
     const expectedGuidId = await deriveItemId("observed-alpha-id");
     expect(await storedItems(feedId)).toEqual([
       {
@@ -632,6 +666,7 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://identity.example.test/feed.xml",
       );
+
       const itemId = await deriveItemId(identity);
       const db = getDb(env.DB);
       await db.insert(items).values({
@@ -691,6 +726,7 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://identity.example.test/feed.xml",
       );
+
       await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
         outcome: "unchanged",
         newItems: 0,
@@ -734,9 +770,11 @@ describe("realistic Feed Polling", () => {
       const feedId = await subscribeToFixture(
         "https://dates.example.test/feed.xml",
       );
+
       const body = `<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
       <channel><title>Dates</title><item><guid>dated-item</guid><title>Dated Item</title>
       ${dates}</item></channel></rss>`;
+
       await expect(pollResponse(feedId, 1, body)).resolves.toMatchObject({
         outcome: "new_items",
         newItems: 1,
@@ -776,12 +814,14 @@ describe("realistic Feed Polling", () => {
         publishedAt: Date.parse("2024-04-03T12:00:00Z"),
       },
     ]);
+
     const attempt = await env.DB.prepare(
       `SELECT outcome, parser_status, diagnostic
          FROM feed_poll_attempts WHERE cycle_run_id = ?`,
     )
       .bind("fixture-cycle-1")
       .first();
+
     expect(attempt).toEqual({
       outcome: "new_items",
       parser_status: "fallback",
@@ -809,14 +849,13 @@ describe("realistic Feed Polling", () => {
     )
       .bind("fixture-cycle-1")
       .first<Record<string, unknown>>();
+
     expect(failedAttempt).toMatchObject({
       outcome: "failed",
       error_class: "parse",
       parser_status: "failure",
     });
-    expect(String(failedAttempt?.diagnostic).trim()).toMatch(
-      /^Malformed XML:/,
-    );
+    expect(String(failedAttempt?.diagnostic).trim()).toMatch(/^Malformed XML:/);
     expect(await loadFeed(feedId)).toMatchObject({
       consecutiveErrors: 1,
       lastSuccessfulPollAt: null,
@@ -832,11 +871,13 @@ describe("realistic Feed Polling", () => {
       consecutiveErrors: 0,
       lastSuccessfulPollAt: POLLED_AT + 2,
     });
+
     const recoveredHealth = await env.DB.prepare(
       "SELECT last_error, deactivated_at FROM feeds WHERE id = ?",
     )
       .bind(feedId)
       .first();
+
     expect(recoveredHealth).toEqual({ last_error: null, deactivated_at: null });
 
     await expect(pollResponse(feedId, 3, rssNamespaces)).resolves.toMatchObject(

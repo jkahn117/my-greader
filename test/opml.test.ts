@@ -109,6 +109,7 @@ describe("parseOpml", () => {
     const unfiled = result.find(
       (f) => f.feedUrl === "https://unfiled.example.com/feed.xml",
     );
+
     expect(unfiled?.folder).toBeNull();
   });
 
@@ -125,14 +126,17 @@ describe("parseOpml", () => {
     const result = parseOpml(MISSING_ATTRS_OPML);
 
     expect(result).toHaveLength(2);
+
     const noTitle = result.find(
       (f) => f.feedUrl === "https://notitle.example.com/feed.xml",
     );
+
     expect(noTitle?.title).toBeNull();
 
     const textOnly = result.find(
       (f) => f.feedUrl === "https://textonly.example.com/feed.xml",
     );
+
     expect(textOnly?.title).toBe("Has Text Only");
   });
 
@@ -165,6 +169,7 @@ describe("parseOpml", () => {
     <outline type="rss" text="Only Feed" xmlUrl="https://single.example.com/feed.xml"/>
   </body>
 </opml>`;
+
     const result = parseOpml(single);
     expect(result).toHaveLength(1);
     expect(result[0].feedUrl).toBe("https://single.example.com/feed.xml");

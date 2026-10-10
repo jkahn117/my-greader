@@ -24,13 +24,21 @@ import {
 } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
+
 const TRANSIENT_ERROR_THRESHOLD = 5;
+
 const PERMANENT_ERROR_THRESHOLD = 2;
+
 const MIN_INTERVAL_MINUTES = 30;
+
 const MAX_INTERVAL_MINUTES = 240;
+
 const MAX_TTL_MINUTES = 1440;
+
 const BACKOFF_MULTIPLIER = 2;
+
 const MAX_D1_JSON_PARAMETER_BYTES = 1_500_000;
+
 const POLL_LEASE_MS = 5 * 60 * 1000;
 
 const PERMANENT_ERROR_STATUSES = new Set([401, 403, 404, 410]);
@@ -168,6 +176,7 @@ export async function countEligibleFeeds(
   forced: boolean,
 ): Promise<number> {
   const db = getDb(dbBinding);
+
   const row = await db
     .select({ count: sql<number>`count(distinct ${feeds.id})` })
     .from(feeds)
@@ -181,6 +190,7 @@ export async function countEligibleFeeds(
           ),
     )
     .get();
+
   return Number(row?.count ?? 0);
 }
 
@@ -200,6 +210,7 @@ export function createPollingCycleManager(
   ): Promise<PollingCycleSelection> {
     const startedAt = now();
     const forced = triggerReason === "forced";
+
     const selectionQuery = db
       .selectDistinct({
         id: feeds.id,
@@ -235,6 +246,7 @@ export function createPollingCycleManager(
         .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
         .where(isNull(feeds.deactivatedAt)),
     ]);
+
     const totalActiveFeeds = Number(activeCount[0]?.count ?? 0);
     const empty = selectedFeeds.length === 0;
 
@@ -270,9 +282,11 @@ export function createPollingCycleManager(
       })
       .from(feedPollAttempts)
       .where(eq(feedPollAttempts.cycleRunId, cycleRunId));
+
     const terminalAttempts = attempts.filter(
       (attempt) => attempt.outcome != null,
     );
+
     if (
       attempts.length !== selectedFeeds ||
       terminalAttempts.length !== selectedFeeds
@@ -283,10 +297,13 @@ export function createPollingCycleManager(
     const skippedFeeds = terminalAttempts.filter(
       (attempt) => attempt.outcome === "skipped",
     ).length;
+
     const checkedFeeds = terminalAttempts.length - skippedFeeds;
+
     const failedFeeds = terminalAttempts.filter(
       (attempt) => attempt.outcome === "failed",
     ).length;
+
     const newItems = terminalAttempts.reduce(
       (sum, attempt) => sum + attempt.newItems,
       0,
@@ -329,6 +346,7 @@ export function createFeedHealth(
   /** Pauses a subscribed Feed and cancels work that could overwrite that decision. */
   async function deactivate(userId: string, feedId: string): Promise<boolean> {
     const changedAt = now();
+
     const results = await dbBinding.batch([
       cancelOwnedAttempt(
         userId,
@@ -349,12 +367,14 @@ export function createFeedHealth(
         )
         .bind(changedAt, feedId, userId),
     ]);
+
     return (results[1].meta.changes ?? 0) > 0;
   }
 
   /** Restores a subscribed Feed to immediate eligibility and initial Backoff. */
   async function reactivate(userId: string, feedId: string): Promise<boolean> {
     const changedAt = now();
+
     const results = await dbBinding.batch([
       cancelOwnedAttempt(
         userId,
@@ -377,6 +397,7 @@ export function createFeedHealth(
         )
         .bind(MIN_INTERVAL_MINUTES, feedId, userId),
     ]);
+
     return (results[1].meta.changes ?? 0) > 0;
   }
 
@@ -429,6 +450,7 @@ export function createFeedPoller(
     // Persist progress and claim the Feed in one D1 transaction. The fence is
     // stable for retries of this logical attempt and increases for a new owner.
     const leaseExpiresAt = start + POLL_LEASE_MS;
+
     const claimResults = await dbBinding.batch([
       dbBinding
         .prepare(
@@ -563,6 +585,7 @@ export function createFeedPoller(
         )
         .bind(feed.id),
     ]);
+
     const durableAttempt = claimResults[6].results[0] as
       | {
           cycle_run_id: string;
@@ -574,6 +597,7 @@ export function createFeedPoller(
           ownership_fence: number | null;
         }
       | undefined;
+
     const currentFeed = claimResults[7].results[0] as
       | {
           feed_url: string;
@@ -593,6 +617,7 @@ export function createFeedPoller(
           poll_fence: number;
         }
       | undefined;
+
     if (
       durableAttempt?.cycle_run_id !== attempt.cycleRunId ||
       durableAttempt.feed_id !== feed.id
@@ -601,6 +626,7 @@ export function createFeedPoller(
         `Logical attempt ${attempt.attemptId} has conflicting identity`,
       );
     }
+
     if (durableAttempt.outcome != null) {
       return resultFromAttempt(feed.id, feedTitle, {
         outcome: durableAttempt.outcome,
@@ -611,6 +637,7 @@ export function createFeedPoller(
     }
 
     const ownershipFence = durableAttempt.ownership_fence;
+
     if (
       ownershipFence == null ||
       currentFeed?.poll_owner_attempt_id !== attempt.attemptId ||
@@ -622,6 +649,7 @@ export function createFeedPoller(
           ? "Feed became ineligible after selection"
           : "Feed is owned by another Cycle Run",
       );
+
       return loadResult(attempt.attemptId, feed.id, feedTitle);
     }
 
@@ -648,16 +676,20 @@ export function createFeedPoller(
       Accept:
         "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     };
+
     if (feed.etag) headers["If-None-Match"] = feed.etag;
+
     if (feed.lastModified) headers["If-Modified-Since"] = feed.lastModified;
 
     let response: Response;
+
     try {
       response = await transport.get(feed.feedUrl, headers);
     } catch (err) {
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
+
       const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: "transient",
@@ -665,7 +697,9 @@ export function createFeedPoller(
         httpStatus: null,
         parserStatus: "not_attempted",
       });
+
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
       if (won && result.outcome === "failed") {
         publish({
           kind: "feedFetchFailed",
@@ -673,6 +707,7 @@ export function createFeedPoller(
           error: result.error,
         });
       }
+
       return result;
     }
 
@@ -681,7 +716,9 @@ export function createFeedPoller(
         feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
         MAX_INTERVAL_MINUTES,
       );
+
       const completedAt = now();
+
       const commitResults = await dbBinding.batch([
         dbBinding
           .prepare(
@@ -717,8 +754,10 @@ export function createFeedPoller(
           },
         ),
       ]);
+
       const won = didCommitTerminalAttempt(commitResults);
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
       if (won && result.outcome === "not_modified") {
         publish({
           kind: "feedNotModified",
@@ -726,21 +765,26 @@ export function createFeedPoller(
           newInterval,
         });
       }
+
       return result;
     }
 
     if (response.status === 429) {
       const retryAfter = response.headers.get("Retry-After");
+
       let backoffMinutes = Math.min(
         feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
         MAX_INTERVAL_MINUTES,
       );
+
       if (retryAfter) {
         const seconds = parseInt(retryAfter, 10);
+
         if (!isNaN(seconds)) {
           backoffMinutes = Math.max(Math.ceil(seconds / 60), backoffMinutes);
         } else {
           const retryMs = new Date(retryAfter).getTime();
+
           if (!isNaN(retryMs)) {
             backoffMinutes = Math.max(
               Math.ceil((retryMs - now()) / 60_000),
@@ -749,8 +793,10 @@ export function createFeedPoller(
           }
         }
       }
+
       const errorMessage = "HTTP 429 (rate limited)";
       const completedAt = now();
+
       const commitResults = await dbBinding.batch([
         dbBinding
           .prepare(
@@ -786,8 +832,10 @@ export function createFeedPoller(
           },
         ),
       ]);
+
       const won = didCommitTerminalAttempt(commitResults);
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
       if (won && result.outcome === "rate_limited") {
         publish({
           kind: "feedRateLimited",
@@ -795,20 +843,25 @@ export function createFeedPoller(
           backoffMinutes,
         });
       }
+
       return result;
     }
 
     if (!response.ok) {
       const isPermanent = PERMANENT_ERROR_STATUSES.has(response.status);
       const errorClass: ErrorClass = isPermanent ? "permanent" : "transient";
+
       const mediaType = response.headers
         .get("Content-Type")
         ?.split(";")[0]
         ?.trim()
         .toLowerCase();
+
       const htmlEvidence =
         mediaType === "text/html" || mediaType === "application/xhtml+xml";
+
       const errorMessage = `HTTP ${response.status}${isPermanent ? " (permanent)" : ""}${htmlEvidence ? ": HTML response instead of Feed content" : ""}`;
+
       const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: errorClass,
@@ -816,7 +869,9 @@ export function createFeedPoller(
         httpStatus: response.status,
         parserStatus: "not_attempted",
       });
+
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
       if (won && result.outcome === "failed") {
         publish({
           kind: "feedFetchFailed",
@@ -825,16 +880,19 @@ export function createFeedPoller(
           error: result.error,
         });
       }
+
       return result;
     }
 
     let xml: string;
+
     try {
       xml = await response.text();
     } catch (err) {
       const errorMessage = safeDiagnostic(
         err instanceof Error ? err.message : String(err),
       );
+
       const won = await commitFailure(feed, attempt.attemptId, ownershipFence, {
         diagnostic: errorMessage,
         healthClass: "transient",
@@ -842,7 +900,9 @@ export function createFeedPoller(
         httpStatus: response.status,
         parserStatus: "not_attempted",
       });
+
       const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
       if (won && result.outcome === "failed") {
         publish({
           kind: "feedFetchFailed",
@@ -851,23 +911,28 @@ export function createFeedPoller(
           error: result.error,
         });
       }
+
       return result;
     }
+
     let parsed;
     let parseStatus: "success" | "fallback" = "success";
 
     const htmlDocument = isHtmlDocument(xml);
+
     try {
       if (htmlDocument) {
         throw new Error(
           `HTTP ${response.status}: HTML document instead of RSS or Atom`,
         );
       }
+
       parsed = parseFeed(xml);
     } catch (e) {
       const parserError = safeDiagnostic((e as Error).message);
 
       const fallback = htmlDocument ? null : parseFeedLenient(xml);
+
       if (fallback && fallback.items.length > 0) {
         parsed = fallback;
         parseStatus = "fallback";
@@ -884,7 +949,9 @@ export function createFeedPoller(
             parserStatus: "failure",
           },
         );
+
         const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+
         if (won && result.outcome === "failed") {
           publish({
             kind: "feedParseFailed",
@@ -892,6 +959,7 @@ export function createFeedPoller(
             error: result.error,
           });
         }
+
         return result;
       }
     }
@@ -901,12 +969,15 @@ export function createFeedPoller(
     const time = now();
 
     const documentBaseUrl = resolveDocumentBaseUrl(xml, feed.feedUrl);
+
     const itemRows: ItemCommitRow[] = (
       await Promise.all(
         parsed.items.map(async (item) => {
           const itemUrl = resolveUrl(item.link, documentBaseUrl);
           const guid = item.guid ?? itemUrl;
+
           if (!guid) return null;
+
           return {
             id: await deriveItemId(guid),
             feedId: feed.id,
@@ -924,8 +995,10 @@ export function createFeedPoller(
                   (best, c) => (c.length > best.length ? c : best),
                   "",
                 );
+
               const cleaned =
                 raw.length > 500 ? (extractReadableContent(raw) ?? raw) : raw;
+
               return trimContent(cleaned, MAX_CONTENT_BYTES);
             })(),
             author: item.creator ?? item.author ?? null,
@@ -940,8 +1013,10 @@ export function createFeedPoller(
     // A completed initial backload gates later inserts to a moving 24-hour
     // window, even when the first successful parse contained no Items.
     const BACKLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
+
     const backloadAnchor =
       feed.lastNewItemDiscoveredAt ?? feed.initialBackloadCompletedAt;
+
     const toInsert =
       feed.initialBackloadCompletedAt != null && backloadAnchor != null
         ? itemRows.filter(
@@ -952,7 +1027,9 @@ export function createFeedPoller(
     const feedTtlMinutes = parsed.ttl
       ? Math.min(Math.round(Number(parsed.ttl)), MAX_TTL_MINUTES)
       : 0;
+
     const newItemsInterval = Math.max(MIN_INTERVAL_MINUTES, feedTtlMinutes);
+
     const unchangedInterval = Math.max(
       Math.min(
         feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
@@ -960,8 +1037,10 @@ export function createFeedPoller(
       ),
       feedTtlMinutes,
     );
+
     const completedAt = now();
     const itemJsonChunks = chunkItemRows(toInsert);
+
     const commitStatements = itemJsonChunks.map((itemJson) =>
       dbBinding
         .prepare(
@@ -999,6 +1078,7 @@ export function createFeedPoller(
           completedAt,
         ),
     );
+
     commitStatements.push(
       dbBinding
         .prepare(
@@ -1087,6 +1167,7 @@ export function createFeedPoller(
 
     const committed = await loadAttempt(attempt.attemptId);
     const result = resultFromAttempt(feed.id, feedTitle, committed);
+
     if (
       won &&
       (result.outcome === "new_items" || result.outcome === "unchanged")
@@ -1099,6 +1180,7 @@ export function createFeedPoller(
         parseStatus,
       });
     }
+
     return result;
   }
 
@@ -1138,11 +1220,13 @@ export function createFeedPoller(
       })
       .from(feedPollAttempts)
       .where(eq(feedPollAttempts.id, attemptId));
+
     if (rows[0]?.outcome == null) {
       throw new Error(
         `Logical attempt ${attemptId} did not complete because it lost ownership`,
       );
     }
+
     return { ...rows[0], outcome: rows[0].outcome };
   }
 
@@ -1172,8 +1256,10 @@ export function createFeedPoller(
       failure.healthClass === "permanent"
         ? PERMANENT_ERROR_THRESHOLD
         : TRANSIENT_ERROR_THRESHOLD;
+
     const nextErrorCount = feed.consecutiveErrors + 1;
     const completedAt = now();
+
     const commitResults = await dbBinding.batch([
       dbBinding
         .prepare(
@@ -1215,7 +1301,9 @@ export function createFeedPoller(
         diagnostic: failure.diagnostic,
       }),
     ]);
+
     const won = didCommitTerminalAttempt(commitResults);
+
     if (won && nextErrorCount >= threshold) {
       publish({
         kind: "feedDeactivated",
@@ -1223,6 +1311,7 @@ export function createFeedPoller(
         consecutiveErrors: nextErrorCount,
       });
     }
+
     return won;
   }
 
@@ -1292,6 +1381,7 @@ function chunkItemRows(rows: ItemCommitRow[]): string[] {
     const serialized = JSON.stringify(row);
     const rowBytes = encoder.encode(serialized).length;
     const separatorBytes = current.length === 0 ? 0 : 1;
+
     if (
       current.length > 0 &&
       currentBytes + separatorBytes + rowBytes > MAX_D1_JSON_PARAMETER_BYTES
@@ -1300,12 +1390,15 @@ function chunkItemRows(rows: ItemCommitRow[]): string[] {
       current = [];
       currentBytes = 2;
     }
+
     current.push(serialized);
     currentBytes += (current.length === 1 ? 0 : 1) + rowBytes;
   }
+
   if (current.length > 0) {
     chunks.push(`[${current.join(",")}]`);
   }
+
   return chunks;
 }
 
@@ -1339,6 +1432,7 @@ function resultFromAttempt(
           `Completed attempt for Feed ${feedId} lacks an error class`,
         );
       }
+
       return {
         feedId,
         feedTitle,
@@ -1355,6 +1449,7 @@ function isHtmlDocument(document: string): boolean {
     /^\s*(?:(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->)\s*)*/i,
     "",
   );
+
   // HTML permits omitted document tags; its doctype is still explicit evidence.
   return (
     /^<!DOCTYPE\s+html(?:\s|>)/i.test(withoutProlog) ||
@@ -1365,19 +1460,23 @@ function isHtmlDocument(document: string): boolean {
 /** Uses a root xml:base when present, otherwise the requested Feed URL. */
 function resolveDocumentBaseUrl(xml: string, feedUrl: string): string {
   const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, "");
+
   const rootAttributes =
     /<(?:[A-Za-z_][\w.-]*:)?(?:rss|feed)\b([^>]*)>/i.exec(
       withoutComments,
     )?.[1] ?? "";
+
   const declaredBase = /\bxml:base\s*=\s*(["'])(.*?)\1/i.exec(
     rootAttributes,
   )?.[2];
+
   return resolveUrl(declaredBase, feedUrl) ?? feedUrl;
 }
 
 /** Resolves parser-provided relative links while preserving malformed values for diagnostics. */
 function resolveUrl(value: unknown, baseUrl: string): string | null {
   if (typeof value !== "string" || value.length === 0) return null;
+
   try {
     return new URL(value, baseUrl).href;
   } catch {
@@ -1388,7 +1487,9 @@ function resolveUrl(value: unknown, baseUrl: string): string | null {
 /** Keeps stored Item content within its UTF-8 byte bound without partial characters. */
 function trimContent(content: string, maxBytes: number): string {
   const encoded = new TextEncoder().encode(content);
+
   if (encoded.length <= maxBytes) return content;
+
   return new TextDecoder().decode(encoded.slice(0, maxBytes), { stream: true });
 }
 
@@ -1399,5 +1500,6 @@ function safeDiagnostic(message: string): string {
     .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1?[redacted]")
     .replace(/\b(Bearer|GoogleLogin)\s+[^\s]+/gi, "$1 [redacted]")
     .replace(/\b(auth|token|key|secret)=([^\s&]+)/gi, "$1=[redacted]");
+
   return redacted.slice(0, 500);
 }

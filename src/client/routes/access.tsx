@@ -67,6 +67,7 @@ export function AccessPending() {
 
 export function AccessError({ status }: { status?: number }) {
   const unauthorized = status === 401 || status === 403;
+
   return (
     <div className="space-y-6">
       <PageHeader />
@@ -89,9 +90,11 @@ export function AccessError({ status }: { status?: number }) {
 /** Last use is only recorded hourly, so recent use is shown as a window. */
 function lastUsedLabel(lastUsedAt: number | null, resolutionMinutes: number) {
   if (lastUsedAt == null) return "Never";
+
   if (Date.now() - lastUsedAt < resolutionMinutes * 60_000) {
     return "Within the last hour";
   }
+
   return formatTime(lastUsedAt);
 }
 
@@ -113,6 +116,7 @@ function ConnectionInstructions({
     ["Username", data.connection.username, true],
     ["Password", "An API Token created above", false],
   ];
+
   return (
     <Collapsible defaultOpen={defaultOpen}>
       <Card className="gap-0 border-border py-0">
@@ -156,6 +160,7 @@ function TokenResult({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+
   const copyRef = useRef<HTMLButtonElement>(null);
   const codeRef = useRef<HTMLElement>(null);
 
@@ -170,6 +175,7 @@ function TokenResult({
     } catch {
       // Clipboard API unavailable/denied — select the text for manual copy.
       const range = document.createRange();
+
       if (codeRef.current) range.selectNodeContents(codeRef.current);
       window.getSelection()?.removeAllRanges();
       window.getSelection()?.addRange(range);
@@ -236,10 +242,12 @@ function CreateTokenForm({
     e.preventDefault();
     setBusy(true);
     setError(null);
+
     try {
       const res = await apiPost<GenerateTokenResponse>("/app/api/tokens", {
         name,
       });
+
       onCreated(res.rawToken);
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
@@ -325,6 +333,7 @@ function TokenRow({
 
   async function revoke() {
     setBusy(true);
+
     try {
       await apiDelete(`/app/api/tokens/${token.id}`);
       onRevoked(token);
@@ -342,6 +351,7 @@ function TokenRow({
   }
 
   const revoked = token.revokedAt != null;
+
   return (
     <TableRow className="border-border hover:bg-transparent">
       <TableCell
@@ -425,6 +435,7 @@ export function AccessPage({ data }: { data: TokensResponse }) {
 
   function handleRevoked(token: ApiTokenSummary, error?: string) {
     setNotice(error ?? `Revoked “${token.name}”.`);
+
     if (!error) {
       router.invalidate();
       // the row's controls disappear; keep focus within the list

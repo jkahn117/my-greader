@@ -127,6 +127,7 @@ export function createSubscriptionLifecycle(
       .from(feeds)
       .where(eq(feeds.feedUrl, feedUrl))
       .get();
+
     if (!feed) {
       await d
         .insert(feeds)
@@ -143,6 +144,7 @@ export function createSubscriptionLifecycle(
         .where(eq(feeds.feedUrl, feedUrl))
         .get();
     }
+
     return feed;
   }
 
@@ -163,9 +165,11 @@ export function createSubscriptionLifecycle(
       title: options?.feedTitle,
       htmlUrl: options?.feedHtmlUrl,
     });
+
     if (!feed) throw new Error("failed to ensure feed");
 
     const subId = crypto.randomUUID();
+
     const result = await d
       .insert(subscriptions)
       .values({
@@ -192,6 +196,7 @@ export function createSubscriptionLifecycle(
 
   async function unsubscribe(userId: string, feedRef: string): Promise<void> {
     const feed = await resolveFeed(feedRef);
+
     if (!feed) return;
 
     await d
@@ -212,10 +217,13 @@ export function createSubscriptionLifecycle(
     updates: EditUpdates,
   ): Promise<SubRow | null> {
     const feed = await resolveFeed(feedRef);
+
     if (!feed) return null;
 
     const set: Partial<typeof subscriptions.$inferInsert> = {};
+
     if (updates.title !== undefined) set.title = updates.title;
+
     if (updates.folder !== undefined) set.folder = updates.folder;
 
     if (Object.keys(set).length > 0) {
@@ -250,6 +258,7 @@ export function createSubscriptionLifecycle(
       .get();
 
     if (!row) throw new Error("subscription not found");
+
     return row;
   }
 
@@ -271,6 +280,7 @@ export function createSubscriptionLifecycle(
         and(eq(subscriptions.userId, userId), eq(subscriptions.feedId, feedId)),
       )
       .get();
+
     return row ?? null;
   }
 }

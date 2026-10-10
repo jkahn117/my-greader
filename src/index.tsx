@@ -23,8 +23,11 @@ app.use("*", observabilityMiddleware);
 // /reader/* requires token auth; /accounts/ClientLogin does not (it IS the auth entry point)
 // Both bare paths and the /api/greader.php/* prefix used by FreshRSS clients (e.g. Current) are supported.
 app.use("/reader/*", tokenMiddleware);
+
 app.use("/api/greader.php/reader/*", tokenMiddleware);
+
 app.route("/", greader);
+
 app.route("/api/greader.php", greader);
 
 // ---------------------------------------------------------------------------
@@ -37,11 +40,13 @@ app.use("/app/*", accessMiddleware);
 
 // Dashboard JSON API for the React management client (under /app/api/*)
 app.route("/", dashboardHandler);
+
 app.route("/", tokensApiHandler); // /app/api/tokens
 
 // Logout: redirect to Cloudflare Access logout endpoint on the same domain
 app.get("/auth/logout", (c) => {
   const { protocol, host } = new URL(c.req.url);
+
   return c.redirect(`${protocol}//${host}/cdn-cgi/access/logout`);
 });
 

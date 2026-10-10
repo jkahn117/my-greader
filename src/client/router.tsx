@@ -55,6 +55,7 @@ const overviewRoute = createRoute({
   loader: () => apiGet<OverviewResponse>("/app/api/overview"),
   component: function Overview() {
     const data = overviewRoute.useLoaderData();
+
     return <OverviewPage data={data} />;
   },
 });
@@ -69,6 +70,7 @@ const feedsRoute = createRoute({
   loader: () => apiGet<FeedsResponse>("/app/api/feeds"),
   component: function Feeds() {
     const data = feedsRoute.useLoaderData();
+
     return <FeedsPage data={data} />;
   },
 });
@@ -86,6 +88,7 @@ const feedDetailRoute = createRoute({
     apiGet<FeedDetailResponse>(`/app/api/feeds/${params.feedId}`),
   component: function FeedDetail() {
     const data = feedDetailRoute.useLoaderData();
+
     return <FeedDetailPage key={data.feedId} data={data} />;
   },
 });
@@ -105,6 +108,7 @@ const readingRoute = createRoute({
     apiGet<ReadingResponse>(`/app/api/reading?days=${deps.days}`),
   component: function Reading() {
     const data = readingRoute.useLoaderData();
+
     return <ReadingPage data={data} />;
   },
 });
@@ -121,6 +125,7 @@ const accessRoute = createRoute({
   loader: () => apiGet<TokensResponse>("/app/api/tokens"),
   component: function Access() {
     const data = accessRoute.useLoaderData();
+
     return <AccessPage data={data} />;
   },
 });

@@ -28,6 +28,7 @@ async function rebuildLegacyDatabase(migrations: D1Migration[]) {
   const baselineIndex = migrations.findIndex(
     (migration) => migration.name === LEGACY_MIGRATION,
   );
+
   expect(baselineIndex).toBeGreaterThanOrEqual(0);
 
   const baselineMigrations = migrations.slice(0, baselineIndex + 1);
@@ -42,6 +43,7 @@ describe("legacy data migration", () => {
     const migrations = JSON.parse(
       (env as unknown as Record<string, string>).TEST_MIGRATIONS,
     ) as D1Migration[];
+
     const additiveMigrations = await rebuildLegacyDatabase(migrations);
 
     await seedLegacyData(env.DB);
@@ -54,6 +56,7 @@ describe("legacy data migration", () => {
     const legacyItems = await env.DB.prepare(
       "SELECT first_ingestion_attempt_id FROM items ORDER BY id",
     ).all();
+
     expect(legacyItems.results).toEqual([
       { first_ingestion_attempt_id: null },
       { first_ingestion_attempt_id: null },
@@ -65,6 +68,7 @@ describe("legacy data migration", () => {
     )
       .bind("1700000300000")
       .first();
+
     expect(legacyCycle).toEqual({
       started_at: null,
       completed_at: null,
@@ -78,6 +82,7 @@ describe("legacy data migration", () => {
     )
       .bind("1700000300000")
       .first();
+
     expect(explicitOutcomeFields).toEqual({
       selected_feeds: 0,
       skipped_feeds: 0,
@@ -90,6 +95,7 @@ describe("legacy data migration", () => {
     )
       .bind("legacy-feed-active")
       .first();
+
     expect(ownershipFields).toEqual({
       poll_owner_attempt_id: null,
       poll_lease_expires_at: null,
@@ -102,6 +108,7 @@ describe("legacy data migration", () => {
               deactivation_reason
          FROM feeds ORDER BY id`,
     ).all();
+
     expect(explicitFeedState.results).toEqual([
       {
         id: "legacy-feed-active",
@@ -126,11 +133,13 @@ describe("legacy data migration", () => {
     const attempts = await env.DB.prepare(
       "SELECT count(*) AS count FROM feed_poll_attempts",
     ).first<{ count: number }>();
+
     expect(attempts?.count).toBe(0);
 
     const foreignKeyViolations = await env.DB.prepare(
       "PRAGMA foreign_key_check",
     ).all();
+
     expect(foreignKeyViolations.results).toEqual([]);
   });
 });

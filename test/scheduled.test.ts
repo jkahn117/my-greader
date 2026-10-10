@@ -18,6 +18,7 @@ import {
 } from "../src/db/schema";
 
 const NOW = Date.UTC(2026, 3, 6, 3);
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Seed eligible and protected records together so dispatch mistakes have observable effects.
@@ -122,6 +123,7 @@ async function seedCleanupJourney(): Promise<void> {
 // Compare complete persisted state before and after an unknown schedule, without fixed snapshots.
 async function persistedCleanupState() {
   const db = getDb(env.DB);
+
   return {
     tokens: await db.select().from(apiTokens).orderBy(apiTokens.id).all(),
     items: await db.select().from(items).orderBy(items.id).all(),
@@ -147,6 +149,7 @@ async function persistedCleanupState() {
 }
 
 let create: ReturnType<typeof vi.fn<Env["FEED_POLLING_WORKFLOW"]["create"]>>;
+
 let bindings: Env;
 
 // Fail loudly if dispatch expands beyond the agreed creation-only boundary.
@@ -250,6 +253,7 @@ describe("scheduled Worker dispatch", () => {
 
   it("preserves forced attribution through the authenticated sync route", async () => {
     const context = createExecutionContext();
+
     const response = await worker.fetch(
       new Request("http://localhost/app/api/feeds/sync", {
         method: "POST",
@@ -259,6 +263,7 @@ describe("scheduled Worker dispatch", () => {
       bindings,
       context,
     );
+
     await waitOnExecutionContext(context);
 
     expect(response.status).toBe(200);
@@ -275,6 +280,7 @@ describe("scheduled Worker dispatch", () => {
     const creation = Promise.withResolvers<WorkflowInstance>();
     create.mockReturnValue(creation.promise);
     let completed = false;
+
     const dispatch = worker
       .scheduled({ cron: "*/30 * * * *" } as ScheduledEvent, bindings)
       .then(() => {
@@ -292,6 +298,7 @@ describe("scheduled Worker dispatch", () => {
       creation.resolve({ id: "recorded-workflow" } as WorkflowInstance);
       await dispatch;
     }
+
     expect(completed).toBe(true);
   });
 

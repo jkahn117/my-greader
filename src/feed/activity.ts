@@ -33,8 +33,11 @@ import { getDb } from "../lib/db";
 import { zonedDays } from "./reading";
 
 const TIMELINE_CYCLE_LIMIT = 20;
+
 const METRICS_CYCLE_LIMIT = 48;
+
 const METRICS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 const NEEDS_ATTENTION_LIMIT = 8;
 
 export interface ActivityItem {
@@ -203,23 +206,29 @@ function publicAttemptDiagnostic(attempt: {
   if (attempt.outcome === "rate_limited") {
     return "HTTP 429, Feed server requested Backoff";
   }
+
   if (attempt.outcome === "failed") {
     if (attempt.errorClass === "http") {
       return attempt.httpStatus == null
         ? "HTTP request failed"
         : `HTTP ${attempt.httpStatus}`;
     }
+
     if (attempt.errorClass === "network") {
       return "Network request failed";
     }
+
     if (attempt.errorClass === "parse") {
       return "Feed content could not be parsed";
     }
+
     return "Feed polling failed";
   }
+
   if (attempt.outcome === "skipped") {
     return "Feed was skipped";
   }
+
   return null;
 }
 
@@ -234,23 +243,27 @@ function classifyAttention(
 ): { kind: AttentionItem["kind"]; detail: string } | "paused" | null {
   if (row.deactivatedAt !== null) {
     if (row.deactivationReason === "manual") return "paused";
+
     const streak =
       row.consecutiveErrors > 0
         ? `${row.consecutiveErrors} consecutive errors${
             row.lastError ? `: ${row.lastError}` : ""
           }`
         : "no recorded error streak";
+
     return {
       kind: "auto_deactivated",
       detail: `${streak} · cause unconfirmed`,
     };
   }
+
   if (row.latestOutcome === "rate_limited") {
     return {
       kind: "rate_limited",
       detail: "HTTP 429 on the latest check · Backoff active",
     };
   }
+
   if (row.consecutiveErrors > 0) {
     return {
       kind: "failing",
@@ -259,6 +272,7 @@ function classifyAttention(
       }`,
     };
   }
+
   return null;
 }
 
@@ -278,18 +292,24 @@ export function createActivityReader(
       .from(cycleRuns)
       .orderBy(desc(cycleRuns.ranAt), desc(cycleRuns.id))
       .limit(1);
+
     const latest = row[0];
+
     if (!latest) return { state: "missing", ranAt: null, checkedFeeds: null };
+
     if (latest.status === null)
       return { state: "unknown", ranAt: latest.ranAt, checkedFeeds: null };
+
     if (latest.status === "running")
       return {
         state: "running",
         ranAt: latest.ranAt,
         checkedFeeds: latest.checkedFeeds,
       };
+
     if (latest.outcome === "empty")
       return { state: "empty", ranAt: latest.ranAt, checkedFeeds: 0 };
+
     return {
       state: "completed",
       ranAt: latest.ranAt,
@@ -346,22 +366,27 @@ export function createActivityReader(
       autoDeactivated: 0,
       manuallyPaused: 0,
     };
+
     for (const row of rows) {
       const kind = classifyAttention(row);
+
       if (kind === "paused") summary.manuallyPaused++;
       else if (kind !== null) {
         summary.total++;
+
         if (kind.kind === "rate_limited") summary.rateLimited++;
         else if (kind.kind === "failing") summary.failing++;
         else summary.autoDeactivated++;
       }
     }
+
     return summary;
   }
 
   /** Builds User-scoped totals for the React dashboard overview. */
   async function overviewSummary(userId: string): Promise<OverviewSummary> {
     const cutoffMs = now() - METRICS_WINDOW_MS;
+
     const [feedRows, newItemsRow, readRow, attentionList, cycle] =
       await Promise.all([
         db
@@ -407,6 +432,7 @@ export function createActivityReader(
 
     const feedCount = Number(feedRows[0]?.total ?? 0);
     const deactivatedFeedCount = Number(feedRows[0]?.deactivated ?? 0);
+
     return {
       feedCount,
       activeFeedCount: feedCount - deactivatedFeedCount,
@@ -427,6 +453,7 @@ export function createActivityReader(
     const days = zonedDays(timestamp, 7, timezone);
     const cutoffMs = days[0].start;
     const windowEnd = days[days.length - 1].end;
+
     const latestPerFeed = db
       .select({
         feedId: feedPollAttempts.feedId,
@@ -531,11 +558,14 @@ export function createActivityReader(
       month: "2-digit",
       day: "2-digit",
     });
+
     const readCounts = new Map<string, number>();
+
     for (const row of readRows) {
       const day = dayFormat.format(new Date(row.readAt!));
       readCounts.set(day, (readCounts.get(day) ?? 0) + 1);
     }
+
     const daily: ReadingDay[] = days.map(({ date }) => ({
       date,
       count: readCounts.get(date) ?? 0,
@@ -550,10 +580,13 @@ export function createActivityReader(
       empty: 0,
       missing: 0,
     };
+
     const seenFeeds = new Set<string>();
+
     for (const attempt of latestAttemptRows) {
       if (seenFeeds.has(attempt.feedId)) continue;
       seenFeeds.add(attempt.feedId);
+
       if (attempt.completedAt === null) feedHealth.running++;
       else if (attempt.outcome === "skipped") feedHealth.skipped++;
       else if (attempt.outcome === "rate_limited") feedHealth.rateLimited++;
@@ -562,6 +595,7 @@ export function createActivityReader(
         feedHealth.successful++;
       else feedHealth.empty++;
     }
+
     feedHealth.missing = Math.max(
       0,
       Number(subscriptionCountRow[0]?.count ?? 0) - seenFeeds.size,
@@ -569,8 +603,10 @@ export function createActivityReader(
 
     const needsAttention: AttentionItem[] = [];
     let manuallyPaused = 0;
+
     for (const row of attentionList) {
       const classified = classifyAttention(row);
+
       if (classified === "paused") {
         manuallyPaused++;
       } else if (
@@ -607,6 +643,7 @@ export function createActivityReader(
   /** Builds current dashboard metrics with User-scoped activity where needed. */
   async function metrics(userId: string): Promise<ActivityMetrics> {
     const cutoffMs = now() - METRICS_WINDOW_MS;
+
     const [
       recentCycles,
       intervalRows,
@@ -738,6 +775,7 @@ export function createActivityReader(
         ),
       )
       .get();
+
     const unattributedItemCount = Number(unattributedRow?.count ?? 0);
 
     if (recentCycleRuns.length === 0) {
@@ -749,6 +787,7 @@ export function createActivityReader(
     }
 
     const cycleRunIds = recentCycleRuns.map((cycleRun) => cycleRun.id);
+
     const attemptRows = await db
       .select({
         id: feedPollAttempts.id,
@@ -796,6 +835,7 @@ export function createActivityReader(
       .orderBy(desc(feedPollAttempts.completedAt), desc(items.id));
 
     const attemptsByCycleRun = new Map<string, ActivityAttempt[]>();
+
     for (const row of attemptRows) {
       const attempts = attemptsByCycleRun.get(row.cycleRunId) ?? [];
       attempts.push({
@@ -812,6 +852,7 @@ export function createActivityReader(
     }
 
     const itemsByCycleRun = new Map<string, ActivityItem[]>();
+
     for (const row of itemRows) {
       const cycleRunItems = itemsByCycleRun.get(row.cycleRunId) ?? [];
       cycleRunItems.push({
@@ -827,6 +868,7 @@ export function createActivityReader(
     return {
       cycleRuns: recentCycleRuns.map((cycleRun) => {
         const subscribedItems = itemsByCycleRun.get(cycleRun.id) ?? [];
+
         return {
           cycleRunId: cycleRun.id,
           ranAt: cycleRun.ranAt,

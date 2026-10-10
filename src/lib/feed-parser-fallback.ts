@@ -50,30 +50,39 @@ export interface FallbackFeed {
 /** Recovers ordinary text and CDATA converted to comments by the HTML parser. */
 function elementText(element: FeedElement): string | null {
   const ordinaryText = element.textContent?.trim();
+
   if (ordinaryText) return ordinaryText;
+
   for (const child of element.childNodes) {
     if (child.nodeType !== 8) continue;
     const commentText = child.textContent?.trim() ?? "";
     const cdata = /^\[CDATA\[([\s\S]*)\]\]$/.exec(commentText);
+
     if (cdata?.[1]) return cdata[1];
   }
+
   return null;
 }
 
 function text(parent: FeedElement, selector: string): string | null {
   const element = parent.querySelector(selector);
+
   if (!element) return null;
   const value = elementText(element);
+
   if (value || selector !== "link") return value;
 
   // HTML parsing treats RSS <link> as a void element, leaving its value in the
   // following text node. Recover that standard RSS representation.
   let sibling = element.nextSibling;
+
   while (sibling?.nodeType === 3) {
     const siblingText = sibling.textContent?.trim();
+
     if (siblingText) return siblingText;
     sibling = sibling.nextSibling;
   }
+
   return null;
 }
 
@@ -81,14 +90,19 @@ function text(parent: FeedElement, selector: string): string | null {
 function textByName(parent: FeedElement, localName: string): string | null {
   const lower = localName.toLowerCase();
   const pending = [...parent.children];
+
   while (pending.length > 0) {
     const child = pending.shift();
+
     if (!child) continue;
+
     if (child.localName.toLowerCase() === lower) {
       return elementText(child);
     }
+
     pending.push(...child.children);
   }
+
   return null;
 }
 
@@ -98,6 +112,7 @@ function attr(
   attrName: string,
 ): string | null {
   const el = parent.querySelector(selector);
+
   return el?.getAttribute(attrName)?.trim() ?? null;
 }
 
@@ -108,6 +123,7 @@ function attr(
 function parseRssItems(root: FeedElement): FallbackFeedItem[] {
   const items: FallbackFeedItem[] = [];
   const itemEls = root.querySelectorAll("channel > item, item");
+
   for (const el of itemEls) {
     const contentEncoded = textByName(el, "content:encoded");
     const description = text(el, "description");
@@ -125,6 +141,7 @@ function parseRssItems(root: FeedElement): FallbackFeedItem[] {
       isoDate: text(el, "pubDate"),
     });
   }
+
   return items;
 }
 
@@ -135,6 +152,7 @@ function parseRssItems(root: FeedElement): FallbackFeedItem[] {
 function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
   const entries: FallbackFeedItem[] = [];
   const entryEls = root.querySelectorAll("feed > entry, entry");
+
   for (const el of entryEls) {
     const content = text(el, "content");
     const summary = text(el, "summary");
@@ -156,6 +174,7 @@ function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
       isoDate: text(el, "published") ?? text(el, "updated"),
     });
   }
+
   return entries;
 }
 
@@ -173,6 +192,7 @@ export function parseFeedLenient(xml: string): FallbackFeed | null {
     const hasAtom = body.querySelector("feed, entry");
 
     let items: FallbackFeedItem[];
+
     if (hasRss && !hasAtom) {
       items = parseRssItems(body);
     } else if (hasAtom && !hasRss) {
@@ -190,11 +210,13 @@ export function parseFeedLenient(xml: string): FallbackFeed | null {
 
     const title =
       text(body, "channel > title") ?? text(body, "feed > title") ?? null;
+
     const link =
       text(body, "channel > link") ??
       attr(body, 'feed > link[rel="alternate"]', "href") ??
       attr(body, "feed > link", "href") ??
       null;
+
     const ttl = text(body, "channel > ttl") ?? null;
 
     return { title, link, ttl, items };
@@ -206,6 +228,7 @@ export function parseFeedLenient(xml: string): FallbackFeed | null {
 function stripHtml(html: string): string {
   try {
     const { document } = parseHTML(`<html><body>${html}</body></html>`);
+
     return document.body.textContent?.trim() ?? "";
   } catch {
     return html.replace(/<[^>]*>/g, "").trim();

@@ -31,11 +31,16 @@ function cycleSubtitle(cycle: OverviewResponse["latestCycle"]): string {
 /** Sub-line for the attention card: kind breakdown or all-clear. */
 function attentionSubtitle(a: OverviewResponse["attention"]): string {
   const parts: string[] = [];
+
   if (a.rateLimited > 0) parts.push(`${a.rateLimited} rate limited`);
+
   if (a.failing > 0) parts.push(`${a.failing} failing`);
+
   if (a.autoDeactivated > 0)
     parts.push(`${a.autoDeactivated} auto-deactivated`);
+
   if (a.manuallyPaused > 0) parts.push(`${a.manuallyPaused} manually paused`);
+
   return parts.length > 0 ? parts.join(" · ") : "All feeds healthy";
 }
 
@@ -89,6 +94,7 @@ export function OverviewPending() {
 /** Safe failure / unauthorized state for the overview route. */
 export function OverviewError({ status }: { status?: number }) {
   const unauthorized = status === 401 || status === 403;
+
   return (
     <Card>
       <CardContent className="py-10 text-center">

@@ -32,6 +32,7 @@ export const logger = new Logger({
  */
 export function createLogger(ctx: Record<string, unknown> = {}): Logger {
   const correlationId = logger.getCorrelationId();
+
   return logger.child(correlationId ? { correlationId, ...ctx } : ctx);
 }
 

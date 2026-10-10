@@ -8,11 +8,17 @@ import { getDb } from "../src/lib/db";
 import { users } from "../src/db/schema";
 
 const ISSUER = "https://test-team.cloudflareaccess.com";
+
 const NOW = 1_800_000_000;
+
 let worker: typeof import("../src/index").default;
+
 let key: CryptoKeyPair;
+
 let jwk: JsonWebKey;
+
 let jwksFetch: ReturnType<typeof vi.fn>;
+
 // Simulate representative key-service failures at the external boundary.
 function failJwksWith(failure: "http" | "schema"): void {
   jwksFetch.mockImplementation(async () =>
@@ -42,11 +48,13 @@ async function assertion(
   signingKey = key.privateKey,
 ): Promise<string> {
   const input = `${encode(header)}.${encode({ iss: ISSUER, sub: "access-user", email: "josé@example.com", aud: "test-access-audience", iat: NOW - 60, exp: NOW + 60, ...claims })}`;
+
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     signingKey,
     new TextEncoder().encode(input),
   );
+
   return `${input}.${bytesToBase64Url(new Uint8Array(signature))}`;
 }
 
@@ -56,6 +64,7 @@ async function request(
   bindings: Env = { ...env, CF_ACCESS_ISSUER: ISSUER },
 ): Promise<Response> {
   const context = createExecutionContext();
+
   const response = await worker.fetch(
     new Request("http://localhost/app/api/tokens", {
       headers: token === undefined ? {} : { "Cf-Access-Jwt-Assertion": token },
@@ -63,7 +72,9 @@ async function request(
     bindings,
     context,
   );
+
   await waitOnExecutionContext(context);
+
   return response;
 }
 
@@ -79,14 +90,18 @@ async function generateRsaKey(): Promise<CryptoKeyPair> {
     true,
     ["sign", "verify"],
   );
+
   if (!("privateKey" in generated)) throw new Error("Expected an RSA key pair");
+
   return generated;
 }
 
 // Export only the public key used by the simulated JWKS service.
 async function publicJwk(pair: CryptoKeyPair): Promise<JsonWebKey> {
   const exported = await crypto.subtle.exportKey("jwk", pair.publicKey);
+
   if (exported instanceof ArrayBuffer) throw new Error("Expected a JWK");
+
   return exported;
 }
 
@@ -160,9 +175,11 @@ describe("production Access through protected Worker requests", () => {
 
   it("rejects malformed signature encoding", async () => {
     const token = await assertion();
+
     const response = await request(
       `${token.split(".").slice(0, 2).join(".")}.@`,
     );
+
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized");
   });
@@ -196,6 +213,7 @@ describe("production Access through protected Worker requests", () => {
       { alg: "RS256", kid: "rotated" },
       rotated.privateKey,
     );
+
     expect((await request(rotatedToken)).status).toBe(200);
     expect(jwksFetch).toHaveBeenCalledTimes(2);
     expect((await request(rotatedToken)).status).toBe(200);
@@ -206,6 +224,7 @@ describe("production Access through protected Worker requests", () => {
       email: "retired@example.com",
       exp: NOW + 7200,
     });
+
     const rejected = await request(retiredToken);
     expect(rejected.status).toBe(401);
     expect(await rejected.text()).toBe("Unauthorized");
@@ -242,6 +261,7 @@ describe("production Access through protected Worker requests", () => {
       ...env,
       CF_ACCESS_ISSUER: `${ISSUER}/path`,
     });
+
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Authentication unavailable");
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);

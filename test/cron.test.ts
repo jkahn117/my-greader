@@ -90,6 +90,7 @@ let attemptNumber = 0;
 /** Supplies a distinct logical attempt for existing FeedPoller behavior tests. */
 function attemptContext(): PollAttemptContext {
   attemptNumber += 1;
+
   return {
     cycleRunId: "test-cycle",
     attemptId: `test-attempt-${attemptNumber}`,
@@ -109,6 +110,7 @@ async function seedFeed(feedUrl: string, title = "Test Feed") {
   const db = getDb(env.DB);
   const feedId = crypto.randomUUID();
   await db.insert(feeds).values({ id: feedId, feedUrl, title, htmlUrl: null });
+
   return feedId;
 }
 
@@ -175,9 +177,11 @@ describe("FeedPoller", () => {
 
   it("skips a feed deactivated after selection (in-flight fence)", async () => {
     const transport = mockTransport(RSS_FEED);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
     const db = getDb(env.DB);
     await db
@@ -193,9 +197,11 @@ describe("FeedPoller", () => {
 
   it("parses RSS and stores items", async () => {
     const transport = mockTransport(RSS_FEED);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     await pollWithAttempt(poller, feedRow({ id: feedId }));
@@ -210,6 +216,7 @@ describe("FeedPoller", () => {
 
   it("attributes new items to the first successful logical attempt", async () => {
     const now = 1_735_732_800_000;
+
     const transport: FeedTransport = {
       get: vi
         .fn()
@@ -217,12 +224,14 @@ describe("FeedPoller", () => {
           async () => new Response(RSS_FEED, { status: 200 }),
         ),
     };
+
     const poller = createFeedPoller(
       env.DB,
       transport,
       noopObserver(),
       () => now,
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
     const db = getDb(env.DB);
 
@@ -259,6 +268,7 @@ describe("FeedPoller", () => {
     const attributedItems = await env.DB.prepare(
       "SELECT first_ingestion_attempt_id FROM items ORDER BY id",
     ).all();
+
     const attempts = await env.DB.prepare(
       `SELECT id, cycle_run_id, started_at, completed_at, outcome, new_items
        FROM feed_poll_attempts ORDER BY id`,
@@ -290,9 +300,11 @@ describe("FeedPoller", () => {
 
   it("parses Atom feeds", async () => {
     const transport = mockTransport(ATOM_FEED);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://atom.example.com/feed.xml");
 
     await pollWithAttempt(
@@ -308,15 +320,18 @@ describe("FeedPoller", () => {
 
   it("skips parsing on 304 and records a successful check", async () => {
     const transport = mockTransport304();
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const before = Date.now();
     await pollWithAttempt(poller, feedRow({ id: feedId, etag: "abc123" }));
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({ lastSuccessfulPollAt: feeds.lastSuccessfulPollAt })
       .from(feeds)
@@ -332,10 +347,13 @@ describe("FeedPoller", () => {
     const getFn = vi
       .fn()
       .mockResolvedValue(new Response(null, { status: 304 }));
+
     const transport: FeedTransport = { get: getFn };
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
     await getDb(env.DB)
       .update(feeds)
@@ -355,14 +373,17 @@ describe("FeedPoller", () => {
       ETag: 'W/"new-etag"',
       "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT",
     });
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     await pollWithAttempt(poller, feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({ etag: feeds.etag, lastModified: feeds.lastModified })
       .from(feeds)
@@ -379,9 +400,11 @@ describe("FeedPoller", () => {
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 }))
         .mockResolvedValueOnce(new Response(RSS_FEED, { status: 200 })),
     };
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
     const row = feedRow({ id: feedId });
 
@@ -395,6 +418,7 @@ describe("FeedPoller", () => {
 
   it("trims content exceeding 50KB", async () => {
     const bigContent = "x".repeat(60 * 1024);
+
     const bigFeed = `<?xml version="1.0"?><rss version="2.0"><channel>
       <title>Big Feed</title><link>https://example.com</link>
       <item>
@@ -406,27 +430,33 @@ describe("FeedPoller", () => {
     </channel></rss>`;
 
     const transport = mockTransport(bigFeed);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     await pollWithAttempt(poller, feedRow({ id: feedId }));
 
     const db = getDb(env.DB);
+
     const stored = await db
       .select({ content: items.content })
       .from(items)
       .get();
+
     const bytes = new TextEncoder().encode(stored?.content ?? "").length;
     expect(bytes).toBeLessThanOrEqual(50 * 1024);
   });
 
   it("handles non-OK HTTP status gracefully without throwing", async () => {
     const transport = mockTransport("", 500);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
@@ -451,6 +481,7 @@ describe("FeedPoller", () => {
 
     // Transport returns the standard feed (two items from Jan 2024)
     const transport = mockTransport(RSS_FEED);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
@@ -467,6 +498,7 @@ describe("FeedPoller", () => {
     // The RSS items are from Jan 2024, before the backload window.
     // They should be filtered out by the backload gate.
     expect(result.outcome).toBe("unchanged");
+
     if (result.outcome === "unchanged") expect(result.newItems).toBe(0);
 
     const stored = await db.select().from(items).all();
@@ -482,15 +514,18 @@ describe("FeedPoller", () => {
         }),
       ),
     };
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     const result = await pollWithAttempt(poller, feedRow({ id: feedId }));
     expect(result.outcome).toBe("rate_limited");
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({
         consecutiveErrors: feeds.consecutiveErrors,
@@ -509,9 +544,11 @@ describe("FeedPoller", () => {
 
   it("resets check interval when new items arrive", async () => {
     const transport = mockTransport(RSS_FEED);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://example.com/feed.xml");
 
     await pollWithAttempt(
@@ -520,10 +557,12 @@ describe("FeedPoller", () => {
     );
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({ checkIntervalMinutes: feeds.checkIntervalMinutes })
       .from(feeds)
       .get();
+
     expect(row?.checkIntervalMinutes).toBe(30);
   });
 });
@@ -553,9 +592,11 @@ describe("FeedPoller error handling", () => {
     const transport: FeedTransport = {
       get: vi.fn().mockRejectedValueOnce(new Error("Network error")),
     };
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed(
       "https://bad.example.com/feed.xml",
       "Bad Feed",
@@ -565,14 +606,17 @@ describe("FeedPoller error handling", () => {
       poller,
       feedRow({ id: feedId, feedUrl: "https://bad.example.com/feed.xml" }),
     );
+
     expect(result.outcome).toBe("failed");
   });
 
   it("deactivates after 5 transient errors", async () => {
     const transport = mockTransport("", 500);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://bad.example.com/feed.xml");
     await getDb(env.DB)
       .update(feeds)
@@ -587,9 +631,11 @@ describe("FeedPoller error handling", () => {
         consecutiveErrors: 4,
       }),
     );
+
     expect(result.outcome).toBe("failed");
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({
         consecutiveErrors: feeds.consecutiveErrors,
@@ -599,6 +645,7 @@ describe("FeedPoller error handling", () => {
       })
       .from(feeds)
       .get();
+
     expect(row?.consecutiveErrors).toBe(5);
     expect(row?.deactivatedAt).not.toBeNull();
     expect(row?.lastError).toContain("HTTP 500");
@@ -607,9 +654,11 @@ describe("FeedPoller error handling", () => {
 
   it("deactivates after 2 permanent errors", async () => {
     const transport = mockTransport("", 404);
+
     const poller = createFeedPoller(env.DB, transport, noopObserver(), () =>
       Date.now(),
     );
+
     const feedId = await seedFeed("https://gone.example.com/feed.xml");
     await getDb(env.DB)
       .update(feeds)
@@ -624,9 +673,11 @@ describe("FeedPoller error handling", () => {
         consecutiveErrors: 1,
       }),
     );
+
     expect(result.outcome).toBe("failed");
 
     const db = getDb(env.DB);
+
     const row = await db
       .select({
         consecutiveErrors: feeds.consecutiveErrors,
@@ -636,6 +687,7 @@ describe("FeedPoller error handling", () => {
       })
       .from(feeds)
       .get();
+
     expect(row?.consecutiveErrors).toBe(2);
     expect(row?.deactivatedAt).not.toBeNull();
     expect(row?.lastError).toContain("permanent");
@@ -652,6 +704,7 @@ describe("weekly retention", () => {
     const now = Date.UTC(2026, 3, 6, 3);
     vi.useFakeTimers();
     vi.setSystemTime(now);
+
     try {
       await seedUser();
       const db = getDb(env.DB);
@@ -692,6 +745,7 @@ describe("weekly retention", () => {
         })
         .from(itemState)
         .all();
+
       expect(stateRows).toEqual(
         expect.arrayContaining([
           { userId: "test-user", isRead: 1, isStarred: 0 },
@@ -708,6 +762,7 @@ describe("weekly retention", () => {
     const now = Date.UTC(2026, 3, 6, 3);
     vi.useFakeTimers();
     vi.setSystemTime(now);
+
     try {
       await seedUser();
       const feedId = await seedFeed("https://example.com/retained.xml");
@@ -760,10 +815,12 @@ describe("weekly retention", () => {
         .select({ id: cycleRuns.id })
         .from(cycleRuns)
         .all();
+
       const retainedItem = await db
         .select({ attemptId: items.firstIngestionAttemptId })
         .from(items)
         .get();
+
       const retainedFeed = await db
         .select({
           ownerAttemptId: feeds.pollOwnerAttemptId,
@@ -772,6 +829,7 @@ describe("weekly retention", () => {
         .from(feeds)
         .where(eq(feeds.id, feedId))
         .get();
+
       expect(cycleRunRows.map(({ id }) => id)).toContain("boundary-cycle-run");
       expect(cycleRunRows.map(({ id }) => id)).not.toContain(
         "expired-cycle-run",
@@ -781,9 +839,11 @@ describe("weekly retention", () => {
         ownerAttemptId: null,
         leaseExpiresAt: null,
       });
+
       const foreignKeyViolations = await env.DB.prepare(
         "PRAGMA foreign_key_check",
       ).all();
+
       expect(foreignKeyViolations.results).toEqual([]);
     } finally {
       vi.useRealTimers();

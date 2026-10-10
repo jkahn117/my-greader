@@ -11,6 +11,7 @@ import { sha256 } from "../../lib/crypto";
 import { getDb } from "../../lib/db";
 
 export const API_TOKEN_USAGE_WRITE_INTERVAL_MS = 60 * 60 * 1000;
+
 const REVOKED_TOKEN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface ApiTokenSummary {
@@ -65,9 +66,11 @@ export function createApiTokenLifecycle(
     name: string,
   ): Promise<GeneratedApiToken> {
     const rawBytes = crypto.getRandomValues(new Uint8Array(32));
+
     const rawToken = Array.from(rawBytes)
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
+
     const id = crypto.randomUUID();
 
     await db.insert(apiTokens).values({
@@ -169,9 +172,11 @@ export function createApiTokenLifecycle(
   /** Removes revoked tokens after the shared seven-day retention window. */
   async function purgeRevoked(): Promise<number> {
     const cutoff = clock() - REVOKED_TOKEN_RETENTION_MS;
+
     const result = await db
       .delete(apiTokens)
       .where(lte(apiTokens.revokedAt, cutoff));
+
     return result.meta.changes;
   }
 }

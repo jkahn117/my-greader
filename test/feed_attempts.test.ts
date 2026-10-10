@@ -32,6 +32,7 @@ async function fetchApi(
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -53,6 +54,7 @@ async function seedFeed(opts: {
     userId: opts.userId ?? "dev-user-id",
     feedId,
   });
+
   return feedId;
 }
 
@@ -79,6 +81,7 @@ async function seedAttempt(
     .values({ id: cycleRunId, ranAt: opts.startedAt })
     .onConflictDoNothing();
   const status = opts.status === undefined ? "ok" : opts.status;
+
   const outcome: FeedAttemptOutcome | null =
     status === null || status === "in_progress"
       ? null
@@ -89,6 +92,7 @@ async function seedAttempt(
         : status === "error"
           ? "failed"
           : (status as FeedAttemptOutcome);
+
   await db.insert(feedAttempts).values({
     id,
     feedId,
@@ -103,6 +107,7 @@ async function seedAttempt(
     parserStatus: (opts.parserState ?? "success") as FeedAttemptParserStatus,
     newItems: opts.itemsAdded ?? 0,
   });
+
   return id;
 }
 
@@ -122,10 +127,12 @@ beforeEach(async () => {
 describe("GET /app/api/feeds/:feedId/attempts", () => {
   it("returns attempts newest-first with diagnostics and items", async () => {
     const feedId = await seedFeed({ lastFetchedAt: 2000 });
+
     const a1 = await seedAttempt(feedId, {
       startedAt: 1000,
       itemsAdded: 2,
     });
+
     const a2 = await seedAttempt(feedId, {
       startedAt: 2000,
       status: "error",
@@ -134,6 +141,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
       errorMessage: "HTTP 500",
       parserState: "not_attempted",
     });
+
     const db = getDb(env.DB);
     await db.insert(items).values({
       id: "item-1",
@@ -179,6 +187,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     const page1res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?limit=2`,
     );
+
     const page1 = (await page1res.json()) as FeedAttemptsResponse;
     expect(page1.attempts.map((a) => a.id)).toEqual(["a-3", "a-2"]);
     expect(page1.nextCursor).not.toBeNull();
@@ -186,6 +195,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     const page2res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`,
     );
+
     const page2 = (await page2res.json()) as FeedAttemptsResponse;
     expect(page2.attempts.map((a) => a.id)).toEqual(["a-1"]);
     expect(page2.nextCursor).toBeNull();
@@ -193,9 +203,11 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
 
   it("rejects an invalid cursor", async () => {
     const feedId = await seedFeed({});
+
     const res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?cursor=not-a-cursor`,
     );
+
     expect(res.status).toBe(400);
   });
 
@@ -293,9 +305,11 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
     const body = (await res.json()) as FeedAttemptsResponse;
     expect(body.problemGroups.windowDays).toBe(30);
+
     const byKey = Object.fromEntries(
       body.problemGroups.groups.map((g) => [`${g.kind}:${g.httpStatus}`, g]),
     );
+
     expect(body.problemGroups.groups[0]).toMatchObject({
       kind: "http",
       httpStatus: 500,

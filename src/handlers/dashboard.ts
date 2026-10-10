@@ -93,6 +93,7 @@ handler.get("/app/api/overview", async (c) => {
   try {
     const activity = createActivityReader(c.env.DB);
     const summary = await activity.overviewSummary(userId);
+
     const timezone = isValidTimezone(c.env.DISPLAY_TIMEZONE || "UTC")
       ? c.env.DISPLAY_TIMEZONE || "UTC"
       : "UTC";
@@ -102,13 +103,16 @@ handler.get("/app/api/overview", async (c) => {
       timezone,
       generatedAt: Date.now(),
     };
+
     logger.info("overview summary served", { feedCount: summary.feedCount });
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "overview summary failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to load overview" }, 500);
   }
 });
@@ -133,6 +137,7 @@ handler.get("/app/api/overview/panels", async (c) => {
 
   const activity = createActivityReader(c.env.DB);
   let panels: Awaited<ReturnType<typeof activity.overviewPanels>>;
+
   try {
     panels = await activity.overviewPanels(userId, Date.now(), timezone);
   } catch (err) {
@@ -140,6 +145,7 @@ handler.get("/app/api/overview/panels", async (c) => {
       "overview panels failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to load overview panels" }, 500);
   }
 
@@ -148,21 +154,27 @@ handler.get("/app/api/overview/panels", async (c) => {
   let analyticsEngine: OverviewPanelsResponse["analyticsEngine"] = {
     status: "unavailable",
   };
+
   try {
     const cfApiToken = c.env.CF_API_TOKEN;
+
     const aeEnabled =
       String(c.env.ANALYTICS_ENABLED) !== "false" && !!cfApiToken;
+
     if (aeEnabled) {
       const { createAnalyticsReader } = await import("../feed/analytics");
+
       const reader = createAnalyticsReader({
         accountId: c.env.CF_ACCOUNT_ID,
         apiToken: cfApiToken,
         enabled: true,
       });
+
       // trend30d needs no feed-title map — pass an empty list. The
       // adapter swallows AE failures into empty results, so an empty
       // trend reads as unavailable rather than a real zero.
       const data = await reader.queryAll([]);
+
       if (data.trend30d.length > 0) {
         analyticsEngine = { status: "ok", trend30d: data.trend30d };
       }
@@ -179,6 +191,7 @@ handler.get("/app/api/overview/panels", async (c) => {
     analyticsEngine,
     generatedAt: Date.now(),
   };
+
   return c.json(response);
 });
 
@@ -198,13 +211,17 @@ handler.get("/app/api/feeds", async (c) => {
     const lifecycle = createSubscriptionLifecycle(c.env.DB, {
       publish: () => {},
     });
+
     const subscriptions = await lifecycle.list(userId);
+
     const latestAttempts = await createFeedHistory(c.env.DB).latestAttempts(
       subscriptions.map((subscription) => subscription.feedId),
     );
+
     const feeds = subscriptions.map((subscription) =>
       toFeedListItem(subscription, latestAttempts.get(subscription.feedId)),
     );
+
     const folders = [
       ...new Set(
         feeds
@@ -218,13 +235,16 @@ handler.get("/app/api/feeds", async (c) => {
       folders,
       generatedAt: Date.now(),
     };
+
     logger.info("feeds list served", { feedCount: feeds.length });
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "feeds list failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to load feeds" }, 500);
   }
 });
@@ -245,18 +265,23 @@ handler.get("/app/api/feeds/:feedId", async (c) => {
   const lifecycle = createSubscriptionLifecycle(c.env.DB, {
     publish: () => {},
   });
+
   const subscription = await lifecycle.get(userId, feedId);
+
   if (!subscription) {
     logger.info("feed detail rejected, not subscribed", { feedId });
+
     return c.json({ error: "feed not found" }, 404);
   }
 
   const latest = await createFeedHistory(c.env.DB).latestAttempts([feedId]);
   const row = toFeedListItem(subscription, latest.get(feedId));
+
   const response: FeedDetailResponse = {
     ...row,
     backloadComplete: subscription.initialBackloadCompletedAt !== null,
   };
+
   return c.json(response);
 });
 
@@ -269,6 +294,7 @@ for (const action of ["deactivate", "reactivate"] as const) {
   handler.post(`/app/api/feeds/:feedId/${action}`, async (c) => {
     const userId = c.get("userId");
     const { feedId } = c.req.param();
+
     const logger = createLogger({
       path: `/app/api/feeds/:feedId/${action}`,
       userId,
@@ -280,23 +306,30 @@ for (const action of ["deactivate", "reactivate"] as const) {
 
     const health = createFeedHealth(c.env.DB, Date.now);
     const changed = await health[action](userId, feedId);
+
     if (!changed) {
       return c.json({ error: "feed not found" }, 404);
     }
 
     logger.info(`feed ${action}d`, { feedId });
+
     const lifecycle = createSubscriptionLifecycle(c.env.DB, {
       publish: () => {},
     });
+
     const updated = await lifecycle.get(userId, feedId);
+
     if (!updated) {
       return c.json({ error: "feed not found" }, 404);
     }
+
     const latest = await createFeedHistory(c.env.DB).latestAttempts([feedId]);
+
     const response: FeedDetailResponse = {
       ...toFeedListItem(updated, latest.get(feedId)),
       backloadComplete: updated.initialBackloadCompletedAt !== null,
     };
+
     return c.json(response);
   });
 }
@@ -306,6 +339,7 @@ for (const action of ["deactivate", "reactivate"] as const) {
 // ---------------------------------------------------------------------------
 
 const ATTEMPTS_PAGE_LIMIT = 25;
+
 const ATTEMPTS_PAGE_MAX = 50;
 
 handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
@@ -315,30 +349,38 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
   const lifecycle = createSubscriptionLifecycle(c.env.DB, {
     publish: () => {},
   });
+
   const subscription = await lifecycle.get(userId, feedId);
+
   if (!subscription) {
     return c.json({ error: "feed not found" }, 404);
   }
 
   const rawLimit = Number(c.req.query("limit") ?? ATTEMPTS_PAGE_LIMIT);
+
   const limit =
     Number.isFinite(rawLimit) && rawLimit > 0
       ? Math.min(Math.floor(rawLimit), ATTEMPTS_PAGE_MAX)
       : ATTEMPTS_PAGE_LIMIT;
+
   const rawCursor = c.req.query("cursor");
   const cursor = rawCursor ? decodeCursor(rawCursor) : null;
+
   if (rawCursor && !cursor) {
     return c.json({ error: "invalid cursor" }, 400);
   }
 
   const history = createFeedHistory(c.env.DB);
+
   const [{ rows, nextCursor }, streaks, groups, total] = await Promise.all([
     history.listAttempts(feedId, cursor, limit),
     history.streaks(feedId),
     history.problemGroups(feedId, Date.now()),
     history.countAttempts(feedId),
   ]);
+
   const itemMap = await history.attemptItems(rows.map((row) => row.id));
+
   const attempts: FeedAttempt[] = rows.map((row) => ({
     id: row.id,
     cycleRunId: row.cycleRunId,
@@ -373,6 +415,7 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
     retentionDays: ATTEMPT_RETENTION_DAYS,
     generatedAt: Date.now(),
   };
+
   return c.json(response);
 });
 
@@ -397,31 +440,37 @@ handler.get("/app/api/reading", async (c) => {
   }
 
   const parsed = v.safeParse(ReadingQuery, c.req.query());
+
   if (!parsed.success) {
     return c.json(
       { error: `days must be one of ${READING_WINDOWS.join(", ")}` },
       400,
     );
   }
+
   const days = Number(parsed.output.days) as ReadingWindowDays;
 
   const vars = c.env as unknown as Record<string, string>;
   let timezone = vars.DISPLAY_TIMEZONE || "UTC";
+
   if (!isValidTimezone(timezone)) {
     logger.warn("invalid DISPLAY_TIMEZONE — falling back to UTC", {
       timezone,
     });
     timezone = "UTC";
   }
+
   const retentionDays = parseInt(vars.ITEM_RETENTION_DAYS ?? "30", 10);
 
   try {
     const now = Date.now();
     const window = zonedDays(now, days, timezone);
+
     const summary = await createReadingMetrics(c.env.DB).summary(
       userId,
       window,
     );
+
     const lastDate = window[window.length - 1].date;
 
     const response: ReadingResponse = {
@@ -440,16 +489,19 @@ handler.get("/app/api/reading", async (c) => {
       retentionDays,
       generatedAt: now,
     };
+
     logger.info("reading metrics served", {
       days,
       markedRead: response.markedRead,
     });
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "reading metrics failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to load reading metrics" }, 500);
   }
 });
@@ -468,11 +520,13 @@ handler.post("/app/api/import", async (c) => {
 
   const body = await c.req.parseBody();
   const file = body["opml"];
+
   if (!file || typeof file === "string") {
     return c.json({ error: "an OPML file is required" }, 400);
   }
 
   const parsedList = parseOpml(await file.text());
+
   if (parsedList.length === 0) {
     return c.json({ error: "no feeds found in the uploaded file" }, 400);
   }
@@ -493,6 +547,7 @@ handler.post("/app/api/import", async (c) => {
         feedTitle: parsed.title ?? undefined,
         feedHtmlUrl: parsed.htmlUrl ?? undefined,
       });
+
       if (result.created) imported++;
       else duplicates++;
     } catch (err) {
@@ -516,6 +571,7 @@ handler.post("/app/api/import", async (c) => {
   }
 
   const response: ImportResponse = { imported, duplicates, errors };
+
   return c.json(response);
 });
 
@@ -536,6 +592,7 @@ handler.post("/app/api/feeds/sync", async (c) => {
 
   let parsedBody: v.InferOutput<typeof SyncBody> = {};
   const raw = await c.req.text();
+
   if (raw.length > 0) {
     try {
       parsedBody = v.parse(SyncBody, JSON.parse(raw));
@@ -543,6 +600,7 @@ handler.post("/app/api/feeds/sync", async (c) => {
       return c.json({ error: "invalid request body" }, 400);
     }
   }
+
   const force = parsedBody.force === true;
 
   const eligible = await countEligibleFeeds(c.env.DB, Date.now(), force);
@@ -552,6 +610,7 @@ handler.post("/app/api/feeds/sync", async (c) => {
       c.env,
       force ? "forced" : "manual",
     );
+
     logger.info("manual sync triggered", { force, eligible });
 
     const response: SyncResponse = {
@@ -560,12 +619,14 @@ handler.post("/app/api/feeds/sync", async (c) => {
       forced: force,
       instanceId,
     };
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "manual sync failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to start sync" }, 503);
   }
 });

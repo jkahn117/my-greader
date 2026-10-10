@@ -270,6 +270,7 @@ export interface RevokeTokenResponse {
 
 /** Time windows offered by the Reading page, in display-timezone days. */
 export const READING_WINDOWS = [7, 14, 30] as const;
+
 export type ReadingWindowDays = (typeof READING_WINDOWS)[number];
 
 /** One display-timezone calendar day in the Reading daily series. */

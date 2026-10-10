@@ -37,6 +37,7 @@ describe("consequential Worker configuration", () => {
     const registrations = configuration.workflows.filter(
       (workflow) => workflow.binding === "FEED_POLLING_WORKFLOW",
     );
+
     expect(configuration.main).toBe("./src/index.tsx");
     expect(registrations).toEqual([
       { binding: "FEED_POLLING_WORKFLOW", class_name: "FeedPollingWorkflow" },
