@@ -42,6 +42,32 @@ import type { Variables } from "../types/context";
 
 const handler = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+const READING_WINDOW_PARAMS = ["7", "14", "30"] as const;
+
+function toAttemptStatus(outcome: string | null): AttemptStatus {
+  if (outcome === "new_items" || outcome === "unchanged") return "ok";
+
+  if (outcome === "failed") return "error";
+
+  if (outcome === "not_modified") return "not_modified";
+
+  if (outcome === "rate_limited") return "rate_limited";
+
+  if (outcome === "skipped") return "skipped";
+
+  return "in_progress";
+}
+
+function readingWindow(
+  value: (typeof READING_WINDOW_PARAMS)[number],
+): ReadingWindowDays {
+  if (value === "7") return 7;
+
+  if (value === "14") return 14;
+
+  return 30;
+}
+
 function toFeedListItem(
   subscription: SubRow,
   latestAttempt?: LatestFeedAttempt,
@@ -388,11 +414,7 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
     finishedAt: row.completedAt,
     durationMs:
       row.completedAt === null ? null : row.completedAt - row.startedAt,
-    status: (row.outcome === "new_items" || row.outcome === "unchanged"
-      ? "ok"
-      : row.outcome === "failed"
-        ? "error"
-        : (row.outcome ?? "in_progress")) as AttemptStatus,
+    status: toAttemptStatus(row.outcome),
     httpStatus: row.httpStatus,
     errorKind: row.errorClass,
     errorMessage: row.diagnostic,
@@ -425,10 +447,7 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
 // ---------------------------------------------------------------------------
 
 const ReadingQuery = v.object({
-  days: v.optional(
-    v.picklist(READING_WINDOWS.map(String) as [string, ...string[]]),
-    "7",
-  ),
+  days: v.optional(v.picklist(READING_WINDOW_PARAMS), "7"),
 });
 
 handler.get("/app/api/reading", async (c) => {
@@ -448,10 +467,9 @@ handler.get("/app/api/reading", async (c) => {
     );
   }
 
-  const days = Number(parsed.output.days) as ReadingWindowDays;
+  const days = readingWindow(parsed.output.days);
 
-  const vars = c.env as unknown as Record<string, string>;
-  let timezone = vars.DISPLAY_TIMEZONE || "UTC";
+  let timezone: string = c.env.DISPLAY_TIMEZONE || "UTC";
 
   if (!isValidTimezone(timezone)) {
     logger.warn("invalid DISPLAY_TIMEZONE — falling back to UTC", {
@@ -460,7 +478,7 @@ handler.get("/app/api/reading", async (c) => {
     timezone = "UTC";
   }
 
-  const retentionDays = parseInt(vars.ITEM_RETENTION_DAYS ?? "30", 10);
+  const retentionDays = parseInt(c.env.ITEM_RETENTION_DAYS ?? "30", 10);
 
   try {
     const now = Date.now();
@@ -521,7 +539,7 @@ handler.post("/app/api/import", async (c) => {
   const body = await c.req.parseBody();
   const file = body["opml"];
 
-  if (!file || typeof file === "string") {
+  if (!(file instanceof File)) {
     return c.json({ error: "an OPML file is required" }, 400);
   }
 

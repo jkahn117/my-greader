@@ -40,9 +40,7 @@ async function rebuildLegacyDatabase(migrations: D1Migration[]) {
 
 describe("legacy data migration", () => {
   it("preserves legacy identifiers, relationships, feed health, and token hashes", async () => {
-    const migrations = JSON.parse(
-      (env as unknown as Record<string, string>).TEST_MIGRATIONS,
-    ) as D1Migration[];
+    const migrations: D1Migration[] = JSON.parse(env.TEST_MIGRATIONS);
 
     const additiveMigrations = await rebuildLegacyDatabase(migrations);
 

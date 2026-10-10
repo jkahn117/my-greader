@@ -185,7 +185,7 @@ function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
 export function parseFeedLenient(xml: string): FallbackFeed | null {
   try {
     const { document } = parseHTML(`<html><body>${xml}</body></html>`);
-    const body = document.body as unknown as FeedElement;
+    const body: FeedElement = document.body;
 
     // Detect format: RSS has <channel>, Atom has <feed>
     const hasRss = body.querySelector("rss, channel, item");

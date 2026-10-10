@@ -126,11 +126,11 @@ async function seedUser() {
 /** Runs the public weekly cleanup entry point with the requested Item policy. */
 async function runWeeklyRetention(itemRetentionDays = "30"): Promise<void> {
   await worker.scheduled(
-    { cron: "0 3 * * 1" } as ScheduledEvent,
+    { cron: "0 3 * * 1" },
     {
       ...env,
       ITEM_RETENTION_DAYS: itemRetentionDays,
-    } as unknown as Env,
+    },
   );
 }
 
@@ -159,7 +159,7 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("FeedPoller", () => {
-  const feedRow = (overrides: Record<string, unknown> = {}) => ({
+  const feedRow = (overrides: Partial<FeedToCheck> = {}): FeedToCheck => ({
     id: "",
     feedUrl: "https://example.com/feed.xml",
     title: null,
@@ -572,7 +572,7 @@ describe("FeedPoller", () => {
 // ---------------------------------------------------------------------------
 
 describe("FeedPoller error handling", () => {
-  const feedRow = (overrides: Record<string, unknown> = {}) => ({
+  const feedRow = (overrides: Partial<FeedToCheck> = {}): FeedToCheck => ({
     id: "",
     feedUrl: "https://bad.example.com/feed.xml",
     title: null,

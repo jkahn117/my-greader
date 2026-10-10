@@ -29,7 +29,15 @@ function failJwksWith(failure: "http" | "schema"): void {
 }
 
 // Encode the actual UTF-8 signing input, including non-ASCII identity claims.
-function encode(value: unknown): string {
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+function encode(value: JsonValue): string {
   return bytesToBase64Url(new TextEncoder().encode(JSON.stringify(value)));
 }
 
@@ -43,8 +51,8 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 
 // Sign locally with real Web Crypto; only the external key service is replaced.
 async function assertion(
-  claims: Record<string, unknown> = {},
-  header: unknown = { alg: "RS256", kid: "primary" },
+  claims: Record<string, JsonValue> = {},
+  header: JsonValue = { alg: "RS256", kid: "primary" },
   signingKey = key.privateKey,
 ): Promise<string> {
   const input = `${encode(header)}.${encode({ iss: ISSUER, sub: "access-user", email: "josé@example.com", aud: "test-access-audience", iat: NOW - 60, exp: NOW + 60, ...claims })}`;
@@ -237,7 +245,7 @@ describe("production Access through protected Worker requests", () => {
   });
 
   it("rejects a missing assertion without contacting JWKS or provisioning", async () => {
-    expect((env as unknown as Record<string, string>).DEV_MODE).toBe("false");
+    expect(env.DEV_MODE).toBe("false");
     const response = await request();
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized");
