@@ -1,4 +1,4 @@
-import { env, type WorkflowStep } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "../src/lib/db";
@@ -9,7 +9,11 @@ import {
   type FeedToCheck,
   type FeedTransport,
 } from "../src/feed/poll";
-import { runFeedPollingWorkflow } from "../src/workflows/feed_polling";
+import {
+  runFeedPollingWorkflow,
+  type PollingWorkflowEnv,
+  type WorkflowStepRunner,
+} from "../src/workflows/feed_polling";
 
 const EMPTY_RSS = `<?xml version="1.0"?><rss version="2.0"><channel>
   <title>Empty Feed</title><link>https://example.com</link>
@@ -40,17 +44,43 @@ function rssWithItems(count: number): string {
 }
 
 /** Runs Workflow steps immediately while preserving their named execution boundary. */
-function immediateStep(): WorkflowStep {
+function immediateStep(): WorkflowStepRunner {
   return {
-    do: (_name: string, configOrCallback: unknown, maybeCallback?: unknown) => {
-      const callback =
-        typeof configOrCallback === "function"
-          ? configOrCallback
-          : maybeCallback;
-
-      return (callback as () => Promise<unknown>)();
+    do<T extends object | void>(
+      _name: string,
+      callback: () => Promise<T>,
+    ): Promise<T> {
+      return callback();
     },
-  } as WorkflowStep;
+  };
+}
+
+/** Runs a hook before each immediate Workflow step callback. */
+function stepWithBefore(
+  before: (name: string) => Promise<void>,
+): WorkflowStepRunner {
+  return {
+    async do<T extends object | void>(
+      name: string,
+      callback: () => Promise<T>,
+    ): Promise<T> {
+      await before(name);
+
+      return callback();
+    },
+  };
+}
+
+/** Creates the workflow binding set with test-specific configuration. */
+function workflowEnv(
+  overrides: Partial<PollingWorkflowEnv> = {},
+): PollingWorkflowEnv {
+  return {
+    DB: env.DB,
+    ANALYTICS: env.ANALYTICS,
+    ANALYTICS_ENABLED: "false",
+    ...overrides,
+  };
 }
 
 /** Creates the public FeedPoller input from a seeded Feed row. */
@@ -101,6 +131,17 @@ async function seedAttempt(feed: FeedToCheck, cycleRunId: string) {
   });
 }
 
+interface StoredAttempt {
+  outcome: string | null;
+  new_items: number;
+  error_class: string | null;
+  http_status: number | null;
+  parser_status: string | null;
+  diagnostic: string | null;
+  started_at: number;
+  completed_at: number | null;
+}
+
 /** Reads the persisted public outcome of one logical Feed attempt. */
 async function readAttempt(id: string) {
   return env.DB.prepare(
@@ -109,7 +150,7 @@ async function readAttempt(id: string) {
        FROM feed_poll_attempts WHERE id = ?`,
   )
     .bind(id)
-    .first<Record<string, unknown>>();
+    .first<StoredAttempt>();
 }
 
 beforeEach(async () => {
@@ -541,27 +582,31 @@ describe("durable Feed attempt outcomes", () => {
 
     let pauseFirstBatch = true;
 
-    const pausingDb = new Proxy(env.DB, {
-      get(target, property) {
-        if (property === "batch") {
-          return async (statements: D1PreparedStatement[]) => {
-            const results = await target.batch(statements);
+    const pausingDb: D1Database = {
+      prepare(query) {
+        return env.DB.prepare(query);
+      },
+      async batch<T>(statements: D1PreparedStatement[]) {
+        const results = await env.DB.batch<T>(statements);
 
-            if (pauseFirstBatch) {
-              pauseFirstBatch = false;
-              claimFinished();
-              await returnClaimPromise;
-            }
-
-            return results;
-          };
+        if (pauseFirstBatch) {
+          pauseFirstBatch = false;
+          claimFinished();
+          await returnClaimPromise;
         }
 
-        const value = Reflect.get(target, property, target);
-
-        return typeof value === "function" ? value.bind(target) : value;
+        return results;
       },
-    });
+      exec(query) {
+        return env.DB.exec(query);
+      },
+      withSession(constraintOrBookmark) {
+        return env.DB.withSession(constraintOrBookmark);
+      },
+      dump() {
+        return env.DB.dump();
+      },
+    };
 
     const racingAttempt = {
       cycleRunId: "cycle-racing-attempt",
@@ -875,8 +920,10 @@ describe("durable Feed attempt outcomes", () => {
       .where(eq(feeds.id, feed.id))
       .get();
 
+    if (!refreshedFeed) throw new Error("Expected the seeded Feed to exist");
+
     await expect(
-      poller.poll(refreshedFeed as FeedToCheck, {
+      poller.poll(refreshedFeed, {
         cycleRunId: "cycle-late-items",
         attemptId: "attempt-late-items",
       }),
@@ -953,10 +1000,7 @@ describe("Cycle Run outcomes", () => {
     triggerReason: "scheduled" | "manual" | "forced",
   ) {
     await runFeedPollingWorkflow(
-      {
-        ...env,
-        ANALYTICS_ENABLED: "false",
-      } as unknown as Env,
+      workflowEnv(),
       {
         instanceId,
         workflowName: "feed-polling",
@@ -1154,30 +1198,17 @@ describe("Cycle Run outcomes", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const step = {
-      do: async (
-        name: string,
-        configOrCallback: unknown,
-        maybeCallback?: unknown,
-      ) => {
-        const callback =
-          typeof configOrCallback === "function"
-            ? configOrCallback
-            : maybeCallback;
-
-        if (name.startsWith("fetch-batch-")) {
-          await db
-            .update(feeds)
-            .set({ deactivatedAt: now })
-            .where(eq(feeds.id, "busy-feed"));
-        }
-
-        return (callback as () => Promise<unknown>)();
-      },
-    } as WorkflowStep;
+    const step = stepWithBefore(async (name) => {
+      if (name.startsWith("fetch-batch-")) {
+        await db
+          .update(feeds)
+          .set({ deactivatedAt: now })
+          .where(eq(feeds.id, "busy-feed"));
+      }
+    });
 
     await runFeedPollingWorkflow(
-      { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+      workflowEnv(),
       {
         instanceId: "skipped-cycle",
         workflowName: "feed-polling",
@@ -1226,24 +1257,21 @@ describe("Cycle Run outcomes", () => {
     });
     const fetchMock = vi.fn(async () => new Response(ONE_ITEM_RSS));
     vi.stubGlobal("fetch", fetchMock);
-    const completedSteps = new Map<string, unknown>();
+    const completedSteps = new Map<string, object | void>();
     let loseFetchAcknowledgment = true;
 
     // Caches acknowledged Workflow steps while replaying the unacknowledged Feed step.
-    const retryingStep = {
-      do: async (
+    const retryingStep: WorkflowStepRunner = {
+      async do<T extends object | void>(
         name: string,
-        configOrCallback: unknown,
-        maybeCallback?: unknown,
-      ) => {
-        if (completedSteps.has(name)) return completedSteps.get(name);
+        callback: () => Promise<T>,
+      ): Promise<T> {
+        if (completedSteps.has(name)) {
+          // SAFETY: A Workflow step name always identifies the same callback and result type.
+          return completedSteps.get(name) as T;
+        }
 
-        const callback =
-          typeof configOrCallback === "function"
-            ? configOrCallback
-            : maybeCallback;
-
-        const result = await (callback as () => Promise<unknown>)();
+        const result = await callback();
 
         if (name.startsWith("fetch-batch-") && loseFetchAcknowledgment) {
           loseFetchAcknowledgment = false;
@@ -1254,7 +1282,7 @@ describe("Cycle Run outcomes", () => {
 
         return result;
       },
-    } as WorkflowStep;
+    };
 
     const event = {
       instanceId: "retry-cycle",
@@ -1263,16 +1291,13 @@ describe("Cycle Run outcomes", () => {
       payload: { triggerReason: "scheduled" as const },
     };
 
-    const workflowEnv = {
-      ...env,
-      ANALYTICS_ENABLED: "false",
-    } as unknown as Env;
+    const bindings = workflowEnv();
 
     await expect(
-      runFeedPollingWorkflow(workflowEnv, event, retryingStep),
+      runFeedPollingWorkflow(bindings, event, retryingStep),
     ).rejects.toThrow("acknowledgment lost after commit");
     await expect(
-      runFeedPollingWorkflow(workflowEnv, event, retryingStep),
+      runFeedPollingWorkflow(bindings, event, retryingStep),
     ).resolves.toBeUndefined();
 
     const cycle = await env.DB.prepare(
@@ -1341,30 +1366,17 @@ describe("Cycle Run outcomes", () => {
     );
     const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
 
-    const step = {
-      do: async (
-        name: string,
-        configOrCallback: unknown,
-        maybeCallback?: unknown,
-      ) => {
-        const callback =
-          typeof configOrCallback === "function"
-            ? configOrCallback
-            : maybeCallback;
-
-        if (name.startsWith("fetch-batch-")) {
-          await db
-            .update(feeds)
-            .set({ deactivatedAt: now })
-            .where(eq(feeds.id, "skipped-feed"));
-        }
-
-        return (callback as () => Promise<unknown>)();
-      },
-    } as WorkflowStep;
+    const step = stepWithBefore(async (name) => {
+      if (name.startsWith("fetch-batch-")) {
+        await db
+          .update(feeds)
+          .set({ deactivatedAt: now })
+          .where(eq(feeds.id, "skipped-feed"));
+      }
+    });
 
     await runFeedPollingWorkflow(
-      { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+      workflowEnv(),
       {
         instanceId: "terminal-log-cycle",
         workflowName: "feed-polling",
@@ -1457,7 +1469,7 @@ describe("Cycle Run outcomes", () => {
 
     await expect(
       runFeedPollingWorkflow(
-        { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+        workflowEnv(),
         {
           instanceId: "mixed-batch-cycle",
           workflowName: "feed-polling",
@@ -1502,11 +1514,11 @@ describe("Cycle Run outcomes", () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const analytics = {
+    const analytics: AnalyticsEngineDataset = {
       writeDataPoint() {
         throw new Error("Analytics Engine unavailable");
       },
-    } as unknown as AnalyticsEngineDataset;
+    };
 
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
@@ -1518,14 +1530,13 @@ describe("Cycle Run outcomes", () => {
       payload: { triggerReason: "scheduled" as const },
     };
 
-    const workflowEnv = {
-      ...env,
+    const bindings = workflowEnv({
       ANALYTICS: analytics,
       ANALYTICS_ENABLED: "true",
-    } as unknown as Env;
+    });
 
-    await runFeedPollingWorkflow(workflowEnv, event, immediateStep());
-    await runFeedPollingWorkflow(workflowEnv, event, immediateStep());
+    await runFeedPollingWorkflow(bindings, event, immediateStep());
+    await runFeedPollingWorkflow(bindings, event, immediateStep());
 
     const cycle = await env.DB.prepare(
       `SELECT status, outcome, failed_feeds FROM cycle_runs WHERE id = ?`,
@@ -1587,40 +1598,27 @@ describe("Cycle Run outcomes", () => {
       feedId: "interrupted-feed",
     });
 
-    const interruptedStep = {
-      do: async (
-        name: string,
-        configOrCallback: unknown,
-        maybeCallback?: unknown,
-      ) => {
-        const callback =
-          typeof configOrCallback === "function"
-            ? configOrCallback
-            : maybeCallback;
-
-        if (name.startsWith("fetch-batch-")) {
-          await env.DB.prepare(
-            `INSERT INTO feed_poll_attempts
+    const interruptedStep = stepWithBefore(async (name) => {
+      if (name.startsWith("fetch-batch-")) {
+        await env.DB.prepare(
+          `INSERT INTO feed_poll_attempts
               (id, cycle_run_id, feed_id, started_at, new_items)
              VALUES (?, ?, ?, ?, 0)`,
+        )
+          .bind(
+            "interrupted-cycle:interrupted-feed",
+            "interrupted-cycle",
+            "interrupted-feed",
+            now,
           )
-            .bind(
-              "interrupted-cycle:interrupted-feed",
-              "interrupted-cycle",
-              "interrupted-feed",
-              now,
-            )
-            .run();
-          throw new Error("runtime stopped");
-        }
-
-        return (callback as () => Promise<unknown>)();
-      },
-    } as WorkflowStep;
+          .run();
+        throw new Error("runtime stopped");
+      }
+    });
 
     await expect(
       runFeedPollingWorkflow(
-        { ...env, ANALYTICS_ENABLED: "false" } as unknown as Env,
+        workflowEnv(),
         {
           instanceId: "interrupted-cycle",
           workflowName: "feed-polling",

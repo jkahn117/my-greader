@@ -16,6 +16,19 @@ import {
 
 type Params = { triggerReason: PollTriggerReason };
 
+/** Bindings used by the polling workflow, including values overridden by tests. */
+export type PollingWorkflowEnv = Pick<Env, "DB" | "ANALYTICS"> & {
+  ANALYTICS_ENABLED: string;
+};
+
+/** Minimal Workflow step contract used by the adapter and its local tests. */
+export interface WorkflowStepRunner {
+  do<T extends object | void>(
+    name: string,
+    callback: () => Promise<T>,
+  ): Promise<T>;
+}
+
 // Each Feed uses up to four subrequests: attempt start/replay check, HTTP,
 // atomic D1 completion, and committed-result read. Eight concurrent Feeds stay
 // below the 50-subrequest budget with headroom for metrics delivery.
@@ -95,9 +108,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
 /** Runs the Workflow adapter through an exported seam shared with local tests. */
 export async function runFeedPollingWorkflow(
-  env: Env,
+  env: PollingWorkflowEnv,
   event: WorkflowEvent<Params>,
-  step: WorkflowStep,
+  step: WorkflowStepRunner,
 ): Promise<void> {
   using _ctx = logger.withRpcContext({
     correlationId: event.instanceId,
@@ -125,8 +138,8 @@ export async function runFeedPollingWorkflow(
       using analytics = asDisposable(env.ANALYTICS);
 
       const metrics = createMetrics(
-        analytics as unknown as Env["ANALYTICS"],
-        (env.ANALYTICS_ENABLED as string) !== "false",
+        analytics,
+        env.ANALYTICS_ENABLED !== "false",
       );
 
       metrics.recordCycleError({ error: errorMessage });
@@ -141,8 +154,8 @@ export async function runFeedPollingWorkflow(
 
 /** Coordinates selection and step placement while FeedPoller owns Feed policy. */
 async function pollWorkflow(
-  env: Env,
-  step: WorkflowStep,
+  env: PollingWorkflowEnv,
+  step: WorkflowStepRunner,
   triggerReason: PollTriggerReason,
   cycleRunId: string,
 ): Promise<void> {
@@ -199,8 +212,8 @@ async function pollWorkflow(
         using analytics = asDisposable(env.ANALYTICS);
 
         const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (env.ANALYTICS_ENABLED as string) !== "false",
+          analytics,
+          env.ANALYTICS_ENABLED !== "false",
         );
 
         const transport: FeedTransport = {
@@ -313,8 +326,8 @@ async function pollWorkflow(
       using analytics = asDisposable(env.ANALYTICS);
 
       const metrics = createMetrics(
-        analytics as unknown as Env["ANALYTICS"],
-        (env.ANALYTICS_ENABLED as string) !== "false",
+        analytics,
+        env.ANALYTICS_ENABLED !== "false",
       );
 
       const cycles = createPollingCycleManager(d1, () => Date.now());
