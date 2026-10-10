@@ -16,6 +16,17 @@ import type { Variables } from "./helpers";
 
 const stream = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+interface StreamContentsResponse {
+  id: string;
+  items: ReturnType<typeof toGReaderItem>[];
+  continuation?: string;
+}
+
+interface ItemRefsResponse {
+  itemRefs: Array<{ id: string; timestampUsec: string }>;
+  continuation?: string;
+}
+
 // ---------------------------------------------------------------------------
 // GET /reader/api/0/stream/contents
 // ---------------------------------------------------------------------------
@@ -52,11 +63,14 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
 
   logger.info("stream/contents", { stream: s, count: page.length, hasMore });
 
-  return c.json({
+  const response: StreamContentsResponse = {
     id: s,
     items: page.map(toGReaderItem),
-    ...(continuation ? { continuation } : {}),
-  });
+  };
+
+  if (continuation) response.continuation = continuation;
+
+  return c.json(response);
 });
 
 // ---------------------------------------------------------------------------
@@ -95,13 +109,16 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
   logger.info("stream/items/ids", { stream: s, count: page.length });
 
-  return c.json({
+  const response: ItemRefsResponse = {
     itemRefs: page.map((r) => ({
       id: toGreaderItemId(r.item.id),
       timestampUsec: String((r.item.publishedAt ?? 0) * 1000),
     })),
-    ...(continuation ? { continuation } : {}),
-  });
+  };
+
+  if (continuation) response.continuation = continuation;
+
+  return c.json(response);
 });
 
 // ---------------------------------------------------------------------------
@@ -115,6 +132,10 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
 type HonoCtx = Context<{ Bindings: Env; Variables: Variables }>;
 
+const itemIdsSchema = v.object({
+  i: v.union([v.string(), v.array(v.string())]),
+});
+
 async function handleStreamItemsContents(c: HonoCtx) {
   const logger = createLogger({
     path: "/reader/api/0/stream/items/contents",
@@ -126,9 +147,16 @@ async function handleStreamItemsContents(c: HonoCtx) {
   let rawIds: string[] = [];
 
   if (c.req.method === "POST") {
-    const body = await c.req.parseBody({ all: true });
-    const i = body["i"];
-    rawIds = Array.isArray(i) ? (i as string[]) : i ? [i as string] : [];
+    const parsed = v.safeParse(
+      itemIdsSchema,
+      await c.req.parseBody({ all: true }),
+    );
+
+    if (!parsed.success) return c.json({ error: "Bad request" }, 400);
+
+    rawIds = Array.isArray(parsed.output.i)
+      ? parsed.output.i
+      : [parsed.output.i];
   } else {
     rawIds = c.req.queries("i") ?? [];
   }

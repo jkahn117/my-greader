@@ -90,6 +90,11 @@ interface MetricsApi {
   flush(): Promise<void>;
 }
 
+/** Interprets the string-valued analytics feature binding. */
+export function analyticsEnabled(value: string): boolean {
+  return value !== "false";
+}
+
 // enabled defaults to true; pass false when ANALYTICS_ENABLED === "false"
 export function createMetrics(
   analyticsBinding: AnalyticsEngineDataset | undefined,

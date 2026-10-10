@@ -124,15 +124,15 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
 
     if (cursor !== null) {
       if (cursor.itemId) {
-        conditions.push(
-          or(
-            lt(items.publishedAt, cursor.publishedAt),
-            and(
-              sql`${items.publishedAt} = ${cursor.publishedAt}`,
-              lt(items.id, cursor.itemId),
-            ),
-          ) as SQL<unknown>,
+        const beforeCursor = or(
+          lt(items.publishedAt, cursor.publishedAt),
+          and(
+            sql`${items.publishedAt} = ${cursor.publishedAt}`,
+            lt(items.id, cursor.itemId),
+          ),
         );
+
+        if (beforeCursor) conditions.push(beforeCursor);
       } else {
         conditions.push(lt(items.publishedAt, cursor.publishedAt));
       }
@@ -177,7 +177,11 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
         ? encodeContinuation(lastItem.item.publishedAt, lastItem.item.id)
         : undefined;
 
-    return { page, hasMore, ...(continuation ? { continuation } : {}) };
+    const result: PageResult = { page, hasMore };
+
+    if (continuation) result.continuation = continuation;
+
+    return result;
   }
 
   /** Looks up requested Items while enforcing the User's Subscriptions. */

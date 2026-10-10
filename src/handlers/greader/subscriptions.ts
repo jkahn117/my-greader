@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { createLogger } from "../../lib/logger";
-import { createMetrics } from "../../lib/metrics";
+import { analyticsEnabled, createMetrics } from "../../lib/metrics";
 import {
   createSubscriptionLifecycle,
   type SubObserver,
@@ -75,6 +75,10 @@ subs.get("/reader/api/0/tag/list", async (c) => {
 // POST /reader/api/0/subscription/quickadd
 // ---------------------------------------------------------------------------
 
+const quickaddSchema = v.object({
+  quickadd: v.pipe(v.string(), v.trim(), v.minLength(1)),
+});
+
 subs.post("/reader/api/0/subscription/quickadd", async (c) => {
   const logger = createLogger({
     path: "/reader/api/0/subscription/quickadd",
@@ -83,17 +87,15 @@ subs.post("/reader/api/0/subscription/quickadd", async (c) => {
 
   const userId = c.get("userId");
 
-  const body = await c.req.parseBody();
+  const parsed = v.safeParse(quickaddSchema, await c.req.parseBody());
 
-  const feedUrl =
-    typeof body["quickadd"] === "string" ? body["quickadd"].trim() : null;
-
-  if (!feedUrl) {
+  if (!parsed.success) {
     logger.warn("quickadd missing feedUrl");
 
     return c.text("Error", 400);
   }
 
+  const feedUrl = parsed.output.quickadd;
   const noop: SubObserver = { publish: () => {} };
   const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
 
@@ -134,7 +136,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
 
   const metrics = createMetrics(
     c.env.ANALYTICS,
-    (c.env.ANALYTICS_ENABLED as string) !== "false",
+    analyticsEnabled(c.env.ANALYTICS_ENABLED),
   );
 
   const userId = c.get("userId");
