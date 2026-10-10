@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import { Link } from "@tanstack/react-router";
+import * as v from "valibot";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import type {
   ReadingDay,
@@ -24,17 +25,47 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Skeleton } from "../components/ui/skeleton";
 
-/** Coerce the `?days=` search param to a supported window (router validateSearch). */
-export function parseReadingSearch(search: Record<string, unknown>): {
-  days: ReadingWindowDays;
-} {
-  const days = Number(search.days);
+type RouterSearchValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RouterSearchValue[]
+  | { [key: string]: RouterSearchValue };
 
-  return {
-    days: (READING_WINDOWS as readonly number[]).includes(days)
-      ? (days as ReadingWindowDays)
-      : 7,
-  };
+interface ReadingSearch {
+  days: ReadingWindowDays;
+}
+
+const readingSearchSchema = v.object({
+  days: v.optional(
+    v.union([
+      v.literal(7),
+      v.literal(14),
+      v.literal(30),
+      v.literal("7"),
+      v.literal("14"),
+      v.literal("30"),
+    ]),
+    7,
+  ),
+});
+
+/** Coerce the `?days=` search param to a supported window (router validateSearch). */
+export function parseReadingSearch(
+  search: Record<string, RouterSearchValue>,
+): ReadingSearch {
+  const parsed = v.safeParse(readingSearchSchema, search);
+
+  if (!parsed.success) return { days: 7 };
+
+  if (parsed.output.days === 14 || parsed.output.days === "14")
+    return { days: 14 };
+
+  if (parsed.output.days === 30 || parsed.output.days === "30")
+    return { days: 30 };
+
+  return { days: 7 };
 }
 
 /** Format a YYYY-MM-DD display-timezone date without re-zoning it. */
@@ -131,8 +162,9 @@ function DailyChart({
             content={
               <ChartTooltipContent
                 labelFormatter={(_, payload) => {
+                  // SAFETY: BarChart receives the ReadingDay-derived data array above.
                   const row = (
-                    payload as { payload?: ReadingDay }[] | undefined
+                    payload as readonly { payload?: ReadingDay }[] | undefined
                   )?.[0]?.payload;
 
                   return row?.date

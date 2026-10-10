@@ -8,20 +8,60 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as v from "valibot";
 import { eq } from "drizzle-orm";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import { sha256 } from "../src/lib/crypto";
 import { apiTokens, users } from "../src/db/schema";
-import type {
-  GenerateTokenResponse,
-  RevokeTokenResponse,
-  TokensResponse,
-} from "../src/shared/dashboard-api";
 
 const BASE = "http://localhost";
 
 const HOUR_MS = 3_600_000;
+
+type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+type TokenRequestBody = string | { [key: string]: JsonValue };
+
+const tokenSummarySchema = v.object({
+  id: v.string(),
+  name: v.string(),
+  createdAt: v.number(),
+  lastUsedAt: v.nullable(v.number()),
+  revokedAt: v.nullable(v.number()),
+});
+
+const tokensResponseSchema = v.object({
+  tokens: v.array(tokenSummarySchema),
+  connection: v.object({
+    mode: v.literal("FreshRSS"),
+    serverUrl: v.string(),
+    username: v.string(),
+  }),
+  lastUsedResolutionMinutes: v.number(),
+  generatedAt: v.number(),
+});
+
+const generateTokenResponseSchema = v.object({
+  token: tokenSummarySchema,
+  rawToken: v.string(),
+});
+
+const revokeTokenResponseSchema = v.object({ token: tokenSummarySchema });
+
+/** Parses token API JSON at the HTTP test boundary. */
+async function parseJson<TSchema extends v.GenericSchema>(
+  response: Response,
+  schema: TSchema,
+): Promise<v.InferOutput<TSchema>> {
+  return v.parse(schema, await response.json());
+}
 
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
@@ -32,11 +72,13 @@ async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   return res;
 }
 
-function generate(body: unknown) {
+function generate(body: TokenRequestBody) {
+  const text = v.safeParse(v.string(), body);
+
   return fetch("/app/api/tokens", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
+    body: text.success ? text.output : JSON.stringify(body),
   });
 }
 
@@ -91,7 +133,7 @@ describe("GET /app/api/tokens", () => {
     expect(text).not.toContain(await sha256("tok-a"));
     expect(text).not.toMatch(/tokenHash|token_hash|rawToken/);
 
-    const body = JSON.parse(text) as TokensResponse;
+    const body = v.parse(tokensResponseSchema, JSON.parse(text));
     expect(body.tokens.map((t) => t.name).sort()).toEqual(["Old", "Phone"]);
     const phone = body.tokens.find((t) => t.id === "tok-a")!;
     expect(phone.lastUsedAt).toBe(1000);
@@ -101,9 +143,10 @@ describe("GET /app/api/tokens", () => {
   });
 
   it("includes FreshRSS connection instructions for this deployment", async () => {
-    const body = (await (
-      await fetch("/app/api/tokens")
-    ).json()) as TokensResponse;
+    const body = await parseJson(
+      await fetch("/app/api/tokens"),
+      tokensResponseSchema,
+    );
 
     expect(body.connection).toEqual({
       mode: "FreshRSS",
@@ -118,7 +161,7 @@ describe("POST /app/api/tokens", () => {
     const res = await generate({ name: "  Current on iPhone  " });
     expect(res.status).toBe(201);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    const body = (await res.json()) as GenerateTokenResponse;
+    const body = await parseJson(res, generateTokenResponseSchema);
     expect(body.rawToken).toMatch(/^[0-9a-f]{64}$/);
     expect(body.token.name).toBe("Current on iPhone");
     expect(body.token).not.toHaveProperty("tokenHash");
@@ -146,9 +189,10 @@ describe("POST /app/api/tokens", () => {
     );
 
     try {
-      const { rawToken } = (await (
-        await generate({ name: "Logged" })
-      ).json()) as GenerateTokenResponse;
+      const { rawToken } = await parseJson(
+        await generate({ name: "Logged" }),
+        generateTokenResponseSchema,
+      );
 
       await fetch("/app/api/tokens");
       expect(lines.length).toBeGreaterThan(0);
@@ -159,9 +203,10 @@ describe("POST /app/api/tokens", () => {
   });
 
   it("generated token authenticates GReader requests", async () => {
-    const { rawToken } = (await (
-      await generate({ name: "Reader" })
-    ).json()) as GenerateTokenResponse;
+    const { rawToken } = await parseJson(
+      await generate({ name: "Reader" }),
+      generateTokenResponseSchema,
+    );
 
     const info = await fetch("/reader/api/0/user-info", {
       headers: { Authorization: `GoogleLogin auth=${rawToken}` },
@@ -197,7 +242,7 @@ describe("DELETE /app/api/tokens/:id", () => {
 
     const res = await fetch("/app/api/tokens/tok-1", { method: "DELETE" });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as RevokeTokenResponse;
+    const body = await parseJson(res, revokeTokenResponseSchema);
     expect(body.token.id).toBe("tok-1");
     expect(body.token.revokedAt).not.toBeNull();
     expect(body.token).not.toHaveProperty("tokenHash");
@@ -273,9 +318,10 @@ describe("coarse last-used tracking", () => {
     await useToken("raw-use");
     expect((await tokenRow("tok-u"))!.lastUsedAt).toBeGreaterThan(stale);
 
-    const list = (await (
-      await fetch("/app/api/tokens")
-    ).json()) as TokensResponse;
+    const list = await parseJson(
+      await fetch("/app/api/tokens"),
+      tokensResponseSchema,
+    );
 
     expect(list.tokens[0].lastUsedAt).toBeGreaterThan(stale);
   });

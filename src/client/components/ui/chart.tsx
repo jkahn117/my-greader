@@ -1,11 +1,19 @@
 /** @jsxImportSource react */
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
+import type {
+  LegendPayload,
+  TooltipPayload,
+  TooltipPayloadEntry,
+} from "recharts";
+import * as v from "valibot";
 
 import { cn } from "../../lib/utils";
 
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const;
+
+const THEME_NAMES = ["light", "dark"] as const;
 
 export type ChartConfig = {
   [k in string]: {
@@ -79,23 +87,19 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   return (
     <style
       dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+        __html: THEME_NAMES.map(
+          (theme) => `
+${THEMES[theme]} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
-    const color =
-      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
-      itemConfig.color;
+    const color = itemConfig.theme?.[theme] || itemConfig.color;
 
     return color ? `  --color-${key}: ${color};` : null;
   })
   .join("\n")}
 }
 `,
-          )
-          .join("\n"),
+        ).join("\n"),
       }}
     />
   );
@@ -108,15 +112,20 @@ const ChartTooltipContent = React.forwardRef<
   React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
     React.ComponentProps<"div"> & {
       active?: boolean;
-      payload?: any[];
-      label?: any;
+      payload?: TooltipPayload;
+      label?: React.ReactNode;
       hideLabel?: boolean;
       hideIndicator?: boolean;
       indicator?: "line" | "dot" | "dashed";
       nameKey?: string;
       labelKey?: string;
-      formatter?: (...args: any[]) => React.ReactNode;
-      labelFormatter?: (value: unknown, payload: unknown[]) => React.ReactNode;
+      formatter?: NonNullable<
+        React.ComponentProps<typeof RechartsPrimitive.Tooltip>["formatter"]
+      >;
+      labelFormatter?: (
+        value: React.ReactNode,
+        payload: TooltipPayload,
+      ) => React.ReactNode;
       labelClassName?: string;
       color?: string;
     }
@@ -150,9 +159,11 @@ const ChartTooltipContent = React.forwardRef<
       const key = `${labelKey || item.dataKey || item.name || "value"}`;
       const itemConfig = getPayloadConfigFromPayload(config, item, key);
 
+      const parsedLabel = v.safeParse(v.string(), label);
+
       const value =
-        !labelKey && typeof label === "string"
-          ? config[label as keyof typeof config]?.label || label
+        !labelKey && parsedLabel.success
+          ? config[parsedLabel.output]?.label || parsedLabel.output
           : itemConfig?.label;
 
       if (labelFormatter) {
@@ -201,7 +212,7 @@ const ChartTooltipContent = React.forwardRef<
 
             return (
               <div
-                key={item.dataKey ?? index}
+                key={String(item.dataKey ?? index)}
                 className={cn(
                   "flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-muted-foreground",
                   indicator === "dot" && "items-center",
@@ -227,6 +238,7 @@ const ChartTooltipContent = React.forwardRef<
                             },
                           )}
                           style={
+                            // SAFETY: React accepts custom CSS properties at runtime although CSSProperties omits their names.
                             {
                               "--color-bg": indicatorColor,
                               "--color-border": indicatorColor,
@@ -271,7 +283,7 @@ const ChartLegend = RechartsPrimitive.Legend;
 const ChartLegendContent = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div"> & {
-    payload?: any[];
+    payload?: readonly LegendPayload[];
     verticalAlign?: "top" | "bottom" | "middle";
     hideIcon?: boolean;
     nameKey?: string;
@@ -329,42 +341,33 @@ const ChartLegendContent = React.forwardRef<
 ChartLegendContent.displayName = "ChartLegend";
 
 // Helper to extract item config from a payload.
+type ChartPayloadEntry = TooltipPayloadEntry | LegendPayload;
+
+function payloadString(
+  payload: ChartPayloadEntry,
+  key: string,
+): string | undefined {
+  const value = Object.entries(payload).find(([name]) => name === key)?.[1];
+  const parsed = v.safeParse(v.string(), value);
+
+  return parsed.success ? parsed.output : undefined;
+}
+
 function getPayloadConfigFromPayload(
   config: ChartConfig,
-  payload: unknown,
+  payload: ChartPayloadEntry,
   key: string,
 ) {
-  if (typeof payload !== "object" || payload === null) {
-    return undefined;
-  }
+  const directKey = payloadString(payload, key);
 
-  const payloadPayload =
-    "payload" in payload &&
-    typeof payload.payload === "object" &&
-    payload.payload !== null
-      ? payload.payload
+  const nestedKey =
+    "payload" in payload && payload.payload
+      ? payloadString(payload.payload, key)
       : undefined;
 
-  let configLabelKey: string = key;
+  const configLabelKey = directKey ?? nestedKey ?? key;
 
-  if (
-    key in payload &&
-    typeof payload[key as keyof typeof payload] === "string"
-  ) {
-    configLabelKey = payload[key as keyof typeof payload] as string;
-  } else if (
-    payloadPayload &&
-    key in payloadPayload &&
-    typeof payloadPayload[key as keyof typeof payloadPayload] === "string"
-  ) {
-    configLabelKey = payloadPayload[
-      key as keyof typeof payloadPayload
-    ] as string;
-  }
-
-  return configLabelKey in config
-    ? config[configLabelKey]
-    : config[key as keyof typeof config];
+  return config[configLabelKey] ?? config[key];
 }
 
 export {

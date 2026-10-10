@@ -207,6 +207,7 @@ export function createReadingMetrics(db: D1Database): ReadingMetrics {
           .bind(userId),
       ]);
 
+      // SAFETY: The daily query selects date and count with these aliases.
       const byDate = new Map(
         (dailyRes.results as { date: string; count: number }[]).map((r) => [
           r.date,
@@ -214,6 +215,7 @@ export function createReadingMetrics(db: D1Database): ReadingMetrics {
         ]),
       );
 
+      // SAFETY: The per-Feed query selects the fields declared below.
       const feedRows = feedRes.results as {
         feedId: string;
         title: string | null;
@@ -235,9 +237,11 @@ export function createReadingMetrics(db: D1Database): ReadingMetrics {
           count: Number(r.count),
         })),
         subscriptionCount: Number(
+          // SAFETY: The subscription query selects one count column.
           (subRes.results[0] as { count: number } | undefined)?.count ?? 0,
         ),
         starredCount: Number(
+          // SAFETY: The starred query selects one count column.
           (starRes.results[0] as { count: number } | undefined)?.count ?? 0,
         ),
       };

@@ -9,6 +9,7 @@
  * domain events through `PollObserver` and has no Powertools imports.
  */
 import { parseFeed } from "../lib/feed-parser";
+import * as v from "valibot";
 import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { deriveItemId } from "../lib/crypto";
@@ -24,6 +25,8 @@ import {
 } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
+
+const optionalUrlSchema = v.nullish(v.string());
 
 const TRANSIENT_ERROR_THRESHOLD = 5;
 
@@ -126,8 +129,12 @@ export type PollEvent =
   | { kind: "feedParseFailed"; feedId: string; error: string }
   | { kind: "feedDeactivated"; feedId: string; consecutiveErrors: number };
 
+export interface FeedRequestHeaders {
+  [header: string]: string;
+}
+
 export interface FeedTransport {
-  get(url: string, headers: Record<string, string>): Promise<Response>;
+  get(url: string, headers: FeedRequestHeaders): Promise<Response>;
 }
 
 export interface PollObserver {
@@ -586,6 +593,7 @@ export function createFeedPoller(
         .bind(feed.id),
     ]);
 
+    // SAFETY: Statement 6 selects the durable attempt columns declared below.
     const durableAttempt = claimResults[6].results[0] as
       | {
           cycle_run_id: string;
@@ -598,6 +606,7 @@ export function createFeedPoller(
         }
       | undefined;
 
+    // SAFETY: Statement 7 selects the Feed columns declared below.
     const currentFeed = claimResults[7].results[0] as
       | {
           feed_url: string;
@@ -671,7 +680,7 @@ export function createFeedPoller(
     };
     feedTitle = feed.title ?? feed.feedUrl;
 
-    const headers: Record<string, string> = {
+    const headers: FeedRequestHeaders = {
       "User-Agent": "my-greader/1.0 (+https://github.com)",
       Accept:
         "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
@@ -929,7 +938,9 @@ export function createFeedPoller(
 
       parsed = parseFeed(xml);
     } catch (e) {
-      const parserError = safeDiagnostic((e as Error).message);
+      const parserError = safeDiagnostic(
+        e instanceof Error ? e.message : String(e),
+      );
 
       const fallback = htmlDocument ? null : parseFeedLenient(xml);
 
@@ -1474,13 +1485,18 @@ function resolveDocumentBaseUrl(xml: string, feedUrl: string): string {
 }
 
 /** Resolves parser-provided relative links while preserving malformed values for diagnostics. */
-function resolveUrl(value: unknown, baseUrl: string): string | null {
-  if (typeof value !== "string" || value.length === 0) return null;
+function resolveUrl(
+  value: v.InferInput<typeof optionalUrlSchema>,
+  baseUrl: string,
+): string | null {
+  const parsed = v.safeParse(optionalUrlSchema, value);
+
+  if (!parsed.success || !parsed.output) return null;
 
   try {
-    return new URL(value, baseUrl).href;
+    return new URL(parsed.output, baseUrl).href;
   } catch {
-    return value;
+    return parsed.output;
   }
 }
 

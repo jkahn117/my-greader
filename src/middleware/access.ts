@@ -3,15 +3,11 @@ import * as v from "valibot";
 import { getDb } from "../lib/db";
 import { users } from "../db/schema";
 import { createLogger, Logger } from "../lib/logger";
+import type { Variables } from "../types/context";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-interface JwtHeader {
-  alg: string;
-  kid: string;
-}
 
 const nonEmptyString = v.pipe(
   v.string(),
@@ -19,6 +15,11 @@ const nonEmptyString = v.pipe(
 );
 
 const numericDate = v.pipe(v.number(), v.finite(), v.integer());
+
+const jwtHeaderSchema = v.object({
+  alg: v.literal("RS256"),
+  kid: nonEmptyString,
+});
 
 const accessClaims = v.object({
   iss: nonEmptyString,
@@ -75,9 +76,11 @@ const JWKS_TTL_MS = 60 * 60 * 1000; // 1 hour
  * Dev bypass: if DEV_MODE === 'true' (local only, never set in prod),
  * injects a hardcoded dev user without any JWT check.
  */
-export async function accessMiddleware(c: Context, next: Next) {
+type AccessContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+export async function accessMiddleware(c: AccessContext, next: Next) {
   const logger = createLogger({ path: c.req.path });
-  const env = c.env as Env;
+  const env = c.env;
 
   // Dev bypass — gated on DEV_MODE; never set in production
   if (env.DEV_MODE === "true") {
@@ -151,25 +154,14 @@ async function verifyAccessJwt(
 
   const [headerB64, payloadB64, sigB64] = parts;
 
-  let header: JwtHeader;
+  let header: v.InferOutput<typeof jwtHeaderSchema>;
   let payload: AccessJwtPayload;
 
   try {
-    header = JSON.parse(b64urlToUtf8(headerB64));
+    header = v.parse(jwtHeaderSchema, JSON.parse(b64urlToUtf8(headerB64)));
     payload = v.parse(accessClaims, JSON.parse(b64urlToUtf8(payloadB64)));
   } catch {
     logger.warn("failed to decode JWT segments");
-
-    return null;
-  }
-
-  if (
-    !header ||
-    header.alg !== "RS256" ||
-    typeof header.kid !== "string" ||
-    !header.kid.trim()
-  ) {
-    logger.warn("JWT algorithm or key ID is invalid");
 
     return null;
   }
@@ -265,9 +257,7 @@ async function verifyAccessJwt(
 // ---------------------------------------------------------------------------
 
 /** Accept only a configured HTTPS origin, without credentials or path components. */
-function isHttpsIssuer(issuer: unknown): issuer is string {
-  if (typeof issuer !== "string") return false;
-
+function isHttpsIssuer(issuer: string): boolean {
   try {
     const url = new URL(issuer);
 

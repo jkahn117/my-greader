@@ -46,6 +46,7 @@ export function parseOpml(xml: string): ParsedFeed[] {
   let doc: { opml?: { body?: { outline?: OutlineNode[] } } };
 
   try {
+    // SAFETY: The parser configuration preserves attributes and normalizes every outline collection to an array.
     doc = parser.parse(xml) as typeof doc;
   } catch {
     return [];

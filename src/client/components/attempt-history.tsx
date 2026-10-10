@@ -478,7 +478,9 @@ export function ErrorBreakdown({ state }: { state: FeedAttemptsState }) {
   );
 }
 
-type ResultsFilter = "all" | "problems" | "successful" | "skipped";
+const RESULTS_FILTERS = ["all", "problems", "successful", "skipped"] as const;
+
+type ResultsFilter = (typeof RESULTS_FILTERS)[number];
 
 const FILTER_LABELS: Record<ResultsFilter, string> = {
   all: "All results",
@@ -486,6 +488,10 @@ const FILTER_LABELS: Record<ResultsFilter, string> = {
   successful: "Successful checks",
   skipped: "Skipped",
 };
+
+function isResultsFilter(value: string): value is ResultsFilter {
+  return RESULTS_FILTERS.some((filter) => filter === value);
+}
 
 function matchesFilter(a: FeedAttempt, filter: ResultsFilter): boolean {
   if (filter === "problems")
@@ -702,9 +708,11 @@ export function Results({
           <DropdownMenuContent align="end">
             <DropdownMenuRadioGroup
               value={filter}
-              onValueChange={(v) => setFilter(v as ResultsFilter)}
+              onValueChange={(value) => {
+                if (isResultsFilter(value)) setFilter(value);
+              }}
             >
-              {(Object.keys(FILTER_LABELS) as ResultsFilter[]).map((key) => (
+              {RESULTS_FILTERS.map((key) => (
                 <DropdownMenuRadioItem key={key} value={key}>
                   {FILTER_LABELS[key]}
                 </DropdownMenuRadioItem>
