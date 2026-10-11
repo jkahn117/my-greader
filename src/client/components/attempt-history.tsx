@@ -517,7 +517,7 @@ function Detail({
   return (
     <div className={cn("min-w-0", className)}>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-words">{children}</dd>
+      <dd className="mt-0.5 wrap-break-word">{children}</dd>
     </div>
   );
 }
