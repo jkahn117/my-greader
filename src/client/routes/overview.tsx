@@ -1,5 +1,8 @@
 /** @jsxImportSource react */
-import type { OverviewResponse } from "../../shared/dashboard-api";
+import type {
+  OverviewPanelsResponse,
+  OverviewResponse,
+} from "../../shared/dashboard-api";
 import { OverviewPanels } from "../components/overview-panels";
 import { SyncButton } from "../components/sync-button";
 import { formatTime } from "../lib/time";
@@ -118,7 +121,13 @@ export function OverviewError({ status }: { status?: number }) {
  * (Feeds, New Items 7d, Items marked read 7d, Feeds needing attention), then
  * reading + feed health panels, then the compact Needs attention list.
  */
-export function OverviewPage({ data }: { data: OverviewResponse }) {
+export function OverviewPage({
+  data,
+  panels,
+}: {
+  data: OverviewResponse;
+  panels: OverviewPanelsResponse | null;
+}) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -159,7 +168,11 @@ export function OverviewPage({ data }: { data: OverviewResponse }) {
         />
       </div>
 
-      <OverviewPanels timezone={data.timezone} feedCount={data.feedCount} />
+      <OverviewPanels
+        data={panels}
+        timezone={data.timezone}
+        feedCount={data.feedCount}
+      />
     </div>
   );
 }

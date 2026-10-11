@@ -8,6 +8,7 @@ import {
 import type {
   FeedDetailResponse,
   FeedsResponse,
+  OverviewPanelsResponse,
   OverviewResponse,
   ReadingResponse,
   TokensResponse,
@@ -52,11 +53,20 @@ const overviewRoute = createRoute({
       status={error instanceof ApiError ? error.status : undefined}
     />
   ),
-  loader: () => apiGet<OverviewResponse>("/app/api/overview"),
+  loader: async () => {
+    const [summary, panels] = await Promise.all([
+      apiGet<OverviewResponse>("/app/api/overview"),
+      apiGet<OverviewPanelsResponse>("/app/api/overview/panels").catch(
+        () => null,
+      ),
+    ]);
+
+    return { summary, panels };
+  },
   component: function Overview() {
     const data = overviewRoute.useLoaderData();
 
-    return <OverviewPage data={data} />;
+    return <OverviewPage data={data.summary} panels={data.panels} />;
   },
 });
 

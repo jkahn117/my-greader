@@ -3,6 +3,46 @@ import { seed } from "./seed";
 
 test.beforeEach(() => seed("seed-feeds.sql"));
 
+function overviewSummary(feedCount: number) {
+  return {
+    feedCount,
+    activeFeedCount: feedCount,
+    deactivatedFeedCount: 0,
+    newItemsLast7Days: 0,
+    markedReadLast7Days: 0,
+    attention: {
+      total: 0,
+      rateLimited: 0,
+      failing: 0,
+      autoDeactivated: 0,
+      manuallyPaused: 0,
+    },
+    latestCycle: { state: "missing" as const, ranAt: null, checkedFeeds: null },
+    timezone: "UTC",
+    generatedAt: 1,
+  };
+}
+
+function overviewPanels(missing: number) {
+  return {
+    reading: { windowDays: 7, daily: [], total: 0, topFeeds: [] },
+    feedHealth: {
+      successful: 0,
+      rateLimited: 0,
+      failed: 0,
+      skipped: 0,
+      running: 0,
+      empty: 0,
+      missing,
+    },
+    cycle: { state: "missing" as const, ranAt: null, checkedFeeds: null },
+    needsAttention: [],
+    manuallyPaused: 0,
+    analyticsEngine: { status: "unavailable" as const },
+    generatedAt: 1,
+  };
+}
+
 test("routes through the dashboard shell and reloads a deep link", async ({
   page,
 }) => {
@@ -18,6 +58,88 @@ test("routes through the dashboard shell and reloads a deep link", async ({
   await expect(page.getByRole("heading", { name: "Reading" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Reading" })).toBeVisible();
+});
+
+test("refreshes the summary and panels after a Sync", async ({ page }) => {
+  let summaryRequests = 0;
+  let panelRequests = 0;
+
+  await page.route("**/app/api/overview", async (route) => {
+    summaryRequests += 1;
+    await route.fulfill({
+      json: overviewSummary(summaryRequests === 1 ? 10 : 11),
+    });
+  });
+  await page.route("**/app/api/overview/panels", async (route) => {
+    panelRequests += 1;
+    await route.fulfill({
+      json: overviewPanels(panelRequests === 1 ? 10 : 11),
+    });
+  });
+
+  await page.goto("/app/overview");
+  const feedsCard = page
+    .locator("[data-slot='card']")
+    .filter({ hasText: "Your Feeds" })
+    .first();
+  const healthCard = page
+    .locator("[data-slot='card']")
+    .filter({ hasText: "Feed health" });
+  await expect(feedsCard.getByText("10", { exact: true })).toBeVisible();
+  await expect(
+    healthCard
+      .getByRole("listitem")
+      .filter({ hasText: "No recorded activity" }),
+  ).toContainText("10");
+
+  const syncResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/app/api/feeds/sync") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Sync now" }).press("Enter");
+  await page.getByRole("menuitem", { name: "Sync now" }).press("Enter");
+  await syncResponse;
+  await expect(feedsCard.getByText("11", { exact: true })).toBeVisible();
+  await expect.poll(() => panelRequests).toBeGreaterThanOrEqual(2);
+  await expect(
+    healthCard
+      .getByRole("listitem")
+      .filter({ hasText: "No recorded activity" }),
+  ).toContainText("11");
+  expect(summaryRequests).toBeGreaterThanOrEqual(2);
+  expect(panelRequests).toBeGreaterThanOrEqual(2);
+});
+
+test("recovers failed panels on a later router refresh", async ({ page }) => {
+  let panelRequests = 0;
+  await page.route("**/app/api/overview/panels", async (route) => {
+    panelRequests += 1;
+    if (panelRequests === 1) {
+      await route.abort();
+      return;
+    }
+
+    await route.fulfill({ json: overviewPanels(12) });
+  });
+
+  await page.goto("/app/overview");
+  await expect(
+    page.getByText("Overview panels could not be loaded"),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync now" })).toBeVisible();
+  const syncResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/app/api/feeds/sync") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Sync now" }).press("Enter");
+  await page.getByRole("menuitem", { name: "Sync now" }).press("Enter");
+  await syncResponse;
+  await expect.poll(() => panelRequests).toBeGreaterThanOrEqual(2);
+  await expect(
+    page.getByText("Your reading activity", { exact: true }),
+  ).toBeVisible();
 });
 
 test("presents seeded reading, Feed health, and attention data", async ({

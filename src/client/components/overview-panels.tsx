@@ -1,5 +1,4 @@
 /** @jsxImportSource react */
-import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChevronRight } from "lucide-react";
@@ -7,7 +6,6 @@ import type {
   AttentionFeed,
   OverviewPanelsResponse,
 } from "../../shared/dashboard-api";
-import { apiGet } from "../lib/api";
 import { formatTime } from "../lib/time";
 import {
   Card,
@@ -128,41 +126,21 @@ const ATTENTION_PILL: Record<
 };
 
 export function OverviewPanels({
+  data,
   timezone,
   feedCount,
 }: {
+  data: OverviewPanelsResponse | null;
   timezone: string;
   feedCount: number;
 }) {
-  const [data, setData] = useState<OverviewPanelsResponse | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiGet<OverviewPanelsResponse>("/app/api/overview/panels")
-      .then((res) => {
-        if (!cancelled) setData(res);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (failed) {
+  if (!data) {
     return (
       <p className="text-sm text-muted-foreground">
         Overview panels could not be loaded — the summary above is still
         accurate.
       </p>
     );
-  }
-
-  if (!data) {
-    return <p className="text-sm text-muted-foreground">Loading panels…</p>;
   }
 
   const healthRows: [string, number, string?][] = [
