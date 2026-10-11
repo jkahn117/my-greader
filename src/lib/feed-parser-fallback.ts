@@ -120,6 +120,11 @@ function attr(
 // RSS 2.0 extraction
 // ---------------------------------------------------------------------------
 
+/** Keeps missing and invalid publication dates absent for ingestion fallback. */
+function validDate(value: string | null): string | null {
+  return value && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
 function parseRssItems(root: FeedElement): FallbackFeedItem[] {
   const items: FallbackFeedItem[] = [];
   const itemEls = root.querySelectorAll("channel > item, item");
@@ -138,7 +143,7 @@ function parseRssItems(root: FeedElement): FallbackFeedItem[] {
       contentSnippet: description ? stripHtml(description) : null,
       creator: textByName(el, "dc:creator") ?? text(el, "author"),
       author: text(el, "author"),
-      isoDate: text(el, "pubDate"),
+      isoDate: validDate(text(el, "pubDate")),
     });
   }
 
@@ -171,7 +176,7 @@ function parseAtomEntries(root: FeedElement): FallbackFeedItem[] {
           : null,
       creator: text(el, "author > name") ?? text(el, "author > email"),
       author: text(el, "author > name") ?? text(el, "author > email"),
-      isoDate: text(el, "published") ?? text(el, "updated"),
+      isoDate: validDate(text(el, "published") ?? text(el, "updated")),
     });
   }
 
