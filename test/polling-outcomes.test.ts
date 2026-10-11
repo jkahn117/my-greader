@@ -247,6 +247,115 @@ describe("durable Feed attempt outcomes", () => {
     });
   });
 
+  it("resets Feed error health on 304 before counting later transient failures", async () => {
+    const feed = feedInput("recovering", {
+      etag: 'W/"known"',
+      lastModified: "Wed, 01 Jan 2025 12:00:00 GMT",
+    });
+
+    await seedAttempt(feed, "cycle-recovering");
+    let checkedAt = 1_735_732_800_000;
+
+    const transport = {
+      get: vi.fn(async () => new Response(null, { status: 503 })),
+    };
+
+    const poller = createFeedPoller(
+      env.DB,
+      transport,
+      { publish() {} },
+      () => checkedAt,
+    );
+
+    for (let index = 1; index <= 4; index++) {
+      const attemptId = `attempt-failure-${index}`;
+
+      await expect(
+        poller.poll(feed, { cycleRunId: "cycle-recovering", attemptId }),
+      ).resolves.toMatchObject({ outcome: "failed" });
+      expect(await readAttempt(attemptId)).toMatchObject({
+        outcome: "failed",
+        error_class: "http",
+        http_status: 503,
+        completed_at: checkedAt,
+      });
+      checkedAt += 60_000;
+    }
+
+    const db = getDb(env.DB);
+
+    const [beforeRecovery] = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id));
+
+    expect(beforeRecovery).toMatchObject({
+      consecutiveErrors: 4,
+      deactivatedAt: null,
+    });
+    expect(beforeRecovery.lastError).toBeTruthy();
+
+    transport.get.mockResolvedValueOnce(new Response(null, { status: 304 }));
+    await expect(
+      poller.poll(feed, {
+        cycleRunId: "cycle-recovering",
+        attemptId: "attempt-recovery",
+      }),
+    ).resolves.toMatchObject({ outcome: "not_modified" });
+
+    const [recovered] = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id));
+
+    expect(recovered).toMatchObject({
+      consecutiveErrors: 0,
+      lastError: null,
+      deactivatedAt: null,
+      lastSuccessfulPollAt: checkedAt,
+      checkIntervalMinutes: 60,
+      nextPollAt: checkedAt + 3_600_000,
+      etag: feed.etag,
+      lastModified: feed.lastModified,
+      initialBackloadCompletedAt: null,
+      lastNewItemDiscoveredAt: null,
+    });
+    expect(await readAttempt("attempt-recovery")).toMatchObject({
+      outcome: "not_modified",
+      new_items: 0,
+      error_class: null,
+      diagnostic: null,
+      http_status: 304,
+      parser_status: "not_attempted",
+      completed_at: checkedAt,
+    });
+
+    checkedAt += 60_000;
+    await expect(
+      poller.poll(feed, {
+        cycleRunId: "cycle-recovering",
+        attemptId: "attempt-later-failure",
+      }),
+    ).resolves.toMatchObject({ outcome: "failed" });
+
+    const [afterFailure] = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id));
+
+    expect(afterFailure).toMatchObject({
+      consecutiveErrors: 1,
+      deactivatedAt: null,
+    });
+    expect(afterFailure.lastError).toBeTruthy();
+    expect(await readAttempt("attempt-later-failure")).toMatchObject({
+      outcome: "failed",
+      error_class: "http",
+      http_status: 503,
+      completed_at: checkedAt,
+    });
+  });
+
   it("commits rate limiting separately from classified Feed failures", async () => {
     const cases: Array<{
       id: string;
@@ -751,8 +860,12 @@ describe("durable Feed attempt outcomes", () => {
   });
 
   it("resumes an unfinished attempt after expiry and fences its old runtime", async () => {
-    const feed = feedInput("resumed");
+    const feed = feedInput("resumed", { consecutiveErrors: 2 });
     await seedAttempt(feed, "cycle-resumed");
+    await getDb(env.DB)
+      .update(feeds)
+      .set({ lastError: "HTTP 503" })
+      .where(eq(feeds.id, feed.id));
     let releaseOldRuntime: (response: Response) => void = () => {};
 
     let releaseRetry: (response: Response) => void = () => {};
@@ -798,6 +911,22 @@ describe("durable Feed attempt outcomes", () => {
       () => "rejected",
     );
 
+    const [stillOwned] = await getDb(env.DB)
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id));
+
+    expect(stillOwned).toMatchObject({
+      consecutiveErrors: 2,
+      lastError: "HTTP 503",
+      lastSuccessfulPollAt: null,
+      checkIntervalMinutes: 30,
+      pollOwnerAttemptId: attempt.attemptId,
+    });
+    expect(await readAttempt(attempt.attemptId)).toMatchObject({
+      outcome: null,
+      completed_at: null,
+    });
     releaseRetry(new Response(ONE_ITEM_RSS));
 
     expect(oldResult).toBe("rejected");
@@ -813,6 +942,12 @@ describe("durable Feed attempt outcomes", () => {
     ).first();
 
     expect(stored).toEqual({ count: 1, attempts: 1 });
+    expect(await readAttempt(attempt.attemptId)).toMatchObject({
+      outcome: "new_items",
+      new_items: 1,
+      http_status: 200,
+      completed_at: 1_735_733_100_001,
+    });
   });
 
   it("rolls back Items, Feed health and completion when the database commit fails", async () => {

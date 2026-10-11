@@ -733,7 +733,7 @@ export function createFeedPoller(
           .prepare(
             `UPDATE feeds
                 SET last_successful_poll_at = ?, check_interval_minutes = ?,
-                    next_poll_at = ?
+                    next_poll_at = ?, consecutive_errors = 0, last_error = NULL
               WHERE id = ? AND poll_owner_attempt_id = ? AND poll_fence = ?
                 AND poll_lease_expires_at > ?
                 AND EXISTS (
