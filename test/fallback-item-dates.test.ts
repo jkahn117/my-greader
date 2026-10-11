@@ -26,6 +26,7 @@ const MALFORMED_FEED = `<rss version="2.0"><channel><title>Date recovery</title>
     <pubDate>Sat, 01 Jun 2024 10:00:00 GMT</pubDate></item>
   </channel>`;
 
+/** Creates an authenticated User and Subscription for polling and Stream assertions. */
 async function createSubscribedFeed() {
   const db = getDb(env.DB);
   await db.insert(users).values({
@@ -48,6 +49,7 @@ async function createSubscribedFeed() {
   return feedId;
 }
 
+/** Polls malformed XML through a durable attempt with a fixed ingestion clock. */
 async function poll(feedId: string, cycleNumber: number) {
   const db = getDb(env.DB);
   const cycleRunId = `fallback-date-cycle-${cycleNumber}`;
@@ -76,6 +78,7 @@ async function poll(feedId: string, cycleNumber: number) {
   return poller.poll(feed as FeedToCheck, { cycleRunId, attemptId });
 }
 
+/** Exercises GReader endpoints with the fixture User's API Token. */
 async function request(path: string) {
   const context = createExecutionContext();
 
@@ -92,6 +95,7 @@ async function request(path: string) {
   return response;
 }
 
+/** Traverses both Stream endpoints to verify recovered Items remain pageable. */
 async function readStreams() {
   const contentsResponse = await request(
     "/reader/api/0/stream/contents?s=user/-/state/com.google/reading-list&n=1",
