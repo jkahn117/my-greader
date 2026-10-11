@@ -6,6 +6,7 @@ import {
 import worker from "../src/index";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as v from "valibot";
 import { cycleRuns, feeds, items, itemState, users } from "../src/db/schema";
 import {
   createFeedPoller,
@@ -70,11 +71,16 @@ async function pollResponse(
       status: "running",
     });
 
+  const parsedBody = v.safeParse(v.string(), bodyOrTransport);
+
+  // SAFETY: Rejecting the string branch of the declared union leaves a FeedTransport.
+  const transport = parsedBody.success
+    ? { get: async () => new Response(parsedBody.output, responseInit) }
+    : (bodyOrTransport as FeedTransport);
+
   const poller = createFeedPoller(
     env.DB,
-    typeof bodyOrTransport === "string"
-      ? { get: async () => new Response(bodyOrTransport, responseInit) }
-      : bodyOrTransport,
+    transport,
     { publish() {} },
     () => POLLED_AT + cycleNumber,
   );
@@ -105,7 +111,7 @@ async function feedDashboard(): Promise<string> {
 
   const response = await worker.fetch(
     new Request("http://localhost/app/api/feeds"),
-    env as Env,
+    env,
     ctx,
   );
 
@@ -843,12 +849,19 @@ describe("realistic Feed Polling", () => {
       pollResponse(feedId, 1, "This response is not RSS or Atom."),
     ).resolves.toMatchObject({ outcome: "failed", errorClass: "parse" });
 
+    interface FailedAttempt {
+      outcome: string;
+      error_class: string;
+      parser_status: string;
+      diagnostic: string;
+    }
+
     const failedAttempt = await env.DB.prepare(
       `SELECT outcome, error_class, parser_status, diagnostic
          FROM feed_poll_attempts WHERE cycle_run_id = ?`,
     )
       .bind("fixture-cycle-1")
-      .first<Record<string, unknown>>();
+      .first<FailedAttempt>();
 
     expect(failedAttempt).toMatchObject({
       outcome: "failed",

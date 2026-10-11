@@ -152,6 +152,12 @@ let create: ReturnType<typeof vi.fn<Env["FEED_POLLING_WORKFLOW"]["create"]>>;
 
 let bindings: Env;
 
+/** Builds the creation-only Workflow result observed by the cron adapter. */
+function recordedWorkflowInstance(): WorkflowInstance {
+  // SAFETY: The cron adapter only reads the instance ID; every operational method is outside this fake's boundary.
+  return { id: "recorded-workflow" } as WorkflowInstance;
+}
+
 // Fail loudly if dispatch expands beyond the agreed creation-only boundary.
 async function unsupportedWorkflowOperation(): Promise<never> {
   throw new Error("Only Workflow creation is supported by this recording fake");
@@ -166,7 +172,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM cycle_runs");
   await env.DB.exec("DELETE FROM api_tokens");
   await env.DB.exec("DELETE FROM users");
-  create = vi.fn(async () => ({ id: "recorded-workflow" }) as WorkflowInstance);
+  create = vi.fn(async () => recordedWorkflowInstance());
   bindings = {
     ...env,
     // Only creation is used at this boundary; the fake does not execute a Workflow.
@@ -189,7 +195,7 @@ describe("scheduled Worker dispatch", () => {
       await seedCleanupJourney();
       const before = await persistedCleanupState();
 
-      await worker.scheduled({ cron } as ScheduledEvent, bindings);
+      await worker.scheduled({ cron }, bindings);
 
       expect(create).not.toHaveBeenCalled();
       expect(await persistedCleanupState()).toEqual(before);
@@ -200,7 +206,7 @@ describe("scheduled Worker dispatch", () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     await seedCleanupJourney();
 
-    await worker.scheduled({ cron: "0 3 * * 1" } as ScheduledEvent, bindings);
+    await worker.scheduled({ cron: "0 3 * * 1" }, bindings);
 
     const state = await persistedCleanupState();
     expect(state.tokens.map((token) => token.id)).toEqual([
@@ -282,7 +288,7 @@ describe("scheduled Worker dispatch", () => {
     let completed = false;
 
     const dispatch = worker
-      .scheduled({ cron: "*/30 * * * *" } as ScheduledEvent, bindings)
+      .scheduled({ cron: "*/30 * * * *" }, bindings)
       .then(() => {
         completed = true;
       });
@@ -295,7 +301,7 @@ describe("scheduled Worker dispatch", () => {
       });
       expect(completed).toBe(false);
     } finally {
-      creation.resolve({ id: "recorded-workflow" } as WorkflowInstance);
+      creation.resolve(recordedWorkflowInstance());
       await dispatch;
     }
 
@@ -308,7 +314,7 @@ describe("scheduled Worker dispatch", () => {
     create.mockRejectedValue(failure);
 
     await expect(
-      worker.scheduled({ cron: "*/30 * * * *" } as ScheduledEvent, bindings),
+      worker.scheduled({ cron: "*/30 * * * *" }, bindings),
     ).rejects.toBe(failure);
 
     expect(create).toHaveBeenCalledExactlyOnceWith({

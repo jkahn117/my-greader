@@ -24,6 +24,12 @@ const BASE = "http://localhost";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Reads the response produced by the typed overview route under test. */
+async function overviewResponse(response: Response): Promise<OverviewResponse> {
+  // SAFETY: The request targets the in-process route whose handler returns OverviewResponse.
+  return (await response.json()) as OverviewResponse;
+}
+
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
   const ctx = createExecutionContext();
@@ -133,7 +139,7 @@ describe("GET /app/api/overview", () => {
 
     const res = await fetch("/app/api/overview");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.feedCount).toBe(2);
     expect(body.activeFeedCount).toBe(1);
     expect(body.deactivatedFeedCount).toBe(1);
@@ -174,7 +180,7 @@ describe("GET /app/api/overview", () => {
 
     const res = await fetch("/app/api/overview");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.feedCount).toBe(0);
     expect(body.newItemsLast7Days).toBe(0);
     expect(body.markedReadLast7Days).toBe(0);
@@ -188,7 +194,7 @@ describe("GET /app/api/overview", () => {
       consecutiveErrors: 2,
     });
     const res = await fetch("/app/api/overview");
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.attention.total).toBe(1);
     expect(body.attention.failing).toBe(1);
   });

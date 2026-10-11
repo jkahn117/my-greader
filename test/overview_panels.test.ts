@@ -33,13 +33,14 @@ async function fetchPanels(timezone = "UTC"): Promise<OverviewPanelsResponse> {
 
   const res = await worker.fetch(
     req,
-    { ...env, DISPLAY_TIMEZONE: timezone } as Env,
+    { ...env, DISPLAY_TIMEZONE: timezone },
     ctx,
   );
 
   await waitOnExecutionContext(ctx);
   expect(res.status).toBe(200);
 
+  // SAFETY: The request targets the in-process route whose handler returns OverviewPanelsResponse.
   return (await res.json()) as OverviewPanelsResponse;
 }
 
@@ -79,7 +80,7 @@ async function seedFeed(opts: {
 
 async function seedAttempt(
   feedId: string,
-  status: string | null,
+  status: "ok" | "error" | FeedAttemptOutcome | null,
   startedAt = Date.now(),
   itemsAdded: number | null = null,
 ) {
@@ -97,15 +98,16 @@ async function seedAttempt(
     feedId,
     startedAt,
     completedAt: status == null ? null : startedAt + 100,
-    outcome: (status === null
-      ? null
-      : status === "ok"
-        ? (itemsAdded ?? 0) > 0
-          ? "new_items"
-          : "unchanged"
-        : status === "error"
-          ? "failed"
-          : status) as FeedAttemptOutcome | null,
+    outcome:
+      status === null
+        ? null
+        : status === "ok"
+          ? (itemsAdded ?? 0) > 0
+            ? "new_items"
+            : "unchanged"
+          : status === "error"
+            ? "failed"
+            : status,
     newItems: itemsAdded ?? 0,
   });
 }

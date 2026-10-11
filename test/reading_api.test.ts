@@ -40,7 +40,7 @@ async function fetch(
 ): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
   const ctx = createExecutionContext();
-  const res = await worker.fetch(req, { ...env, ...vars } as Env, ctx);
+  const res = await worker.fetch(req, { ...env, ...vars }, ctx);
   await waitOnExecutionContext(ctx);
 
   return res;
@@ -55,6 +55,7 @@ async function reading(query = "", timezone = "UTC"): Promise<ReadingResponse> {
 
   expect(res.status).toBe(200);
 
+  // SAFETY: The request targets the in-process route whose handler returns ReadingResponse.
   return (await res.json()) as ReadingResponse;
 }
 

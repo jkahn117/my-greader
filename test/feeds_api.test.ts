@@ -37,6 +37,12 @@ async function fetchApi(
   return res;
 }
 
+/** Reads JSON produced by an in-process dashboard route under test. */
+async function responseJson<T>(response: Response): Promise<T> {
+  // SAFETY: Callers pair each in-process route with its exported response contract.
+  return (await response.json()) as T;
+}
+
 async function seedUser(id = "dev-user-id", email = "dev@localhost") {
   const db = getDb(env.DB);
   await db.insert(users).values({ id, email, createdAt: Date.now() });
@@ -48,9 +54,9 @@ async function seedFeedAndSub(opts: {
   title: string;
   folder?: string | null;
   deactivatedAt?: number | null;
-  deactivatedReason?: string | null;
+  deactivatedReason?: "transient" | "permanent" | "manual" | null;
   consecutiveErrors?: number;
-  lastStatus?: string | null;
+  lastStatus?: "ok" | "error" | FeedAttemptOutcome | null;
   lastFetchedAt?: number | null;
   lastSuccessfulAt?: number | null;
 }) {
@@ -67,7 +73,7 @@ async function seedFeedAndSub(opts: {
         ? "automatic_transient"
         : opts.deactivatedReason === "permanent"
           ? "automatic_permanent"
-          : (opts.deactivatedReason as "manual" | null | undefined),
+          : opts.deactivatedReason,
     pollStateOrigin:
       opts.deactivatedAt != null && opts.deactivatedReason == null
         ? "legacy_uncertain"
@@ -99,7 +105,7 @@ async function seedFeedAndSub(opts: {
         ? "unchanged"
         : opts.lastStatus === "error"
           ? "failed"
-          : (opts.lastStatus as FeedAttemptOutcome);
+          : opts.lastStatus;
 
     await db.insert(feedPollAttempts).values({
       id: `attempt-${feedId}`,
@@ -125,7 +131,12 @@ beforeEach(async () => {
 });
 
 describe("GET /app/api/feeds", () => {
-  it.each(["rate_limited", "error"])(
+  const projectedStatuses = ["rate_limited", "error"] satisfies readonly (
+    | "rate_limited"
+    | "error"
+  )[];
+
+  it.each(projectedStatuses)(
     "keeps %s detail and control projections consistent with list",
     async (lastStatus) => {
       const feedId = await seedFeedAndSub({
@@ -136,9 +147,9 @@ describe("GET /app/api/feeds", () => {
         lastStatus,
       });
 
-      const list = (await (
-        await fetchApi("/app/api/feeds")
-      ).json()) as FeedsResponse;
+      const list = await responseJson<FeedsResponse>(
+        await fetchApi("/app/api/feeds"),
+      );
 
       const detail = await (await fetchApi(`/app/api/feeds/${feedId}`)).json();
       expect(detail).toMatchObject({
@@ -175,7 +186,7 @@ describe("GET /app/api/feeds", () => {
 
     const res = await fetchApi("/app/api/feeds");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     expect(body.feeds.map((f) => f.feedId)).toEqual([mine]);
   });
 
@@ -213,7 +224,7 @@ describe("GET /app/api/feeds", () => {
     });
 
     const res = await fetchApi("/app/api/feeds");
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     const byStatus = new Map(body.feeds.map((f) => [f.title, f]));
 
     expect(byStatus.get("OK")?.status).toBe("active");
@@ -233,7 +244,7 @@ describe("GET /app/api/feeds", () => {
       folder: "Tech",
     });
     const res = await fetchApi("/app/api/feeds");
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     expect(body.folders).toEqual(["Tech"]);
   });
 });
@@ -264,7 +275,7 @@ describe("POST /app/api/import", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as ImportResponse;
+    const body = await responseJson<ImportResponse>(res);
     expect(body).toEqual({ imported: 1, duplicates: 1, errors: [] });
 
     const db = getDb(env.DB);
@@ -281,7 +292,7 @@ describe("POST /app/api/import", () => {
     });
 
     expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
+    const body = await responseJson<{ error: string }>(res);
     expect(body.error).toBeTruthy();
   });
 });
@@ -299,10 +310,10 @@ describe("feed detail + deactivation", () => {
     const res = await fetchApi(`/app/api/feeds/${feedId}`);
     expect(res.status).toBe(200);
 
-    const body = (await res.json()) as {
+    const body = await responseJson<{
       feedId: string;
       backloadComplete: boolean;
-    };
+    }>(res);
 
     expect(body.feedId).toBe(feedId);
     expect(body.backloadComplete).toBe(true);
@@ -330,12 +341,13 @@ describe("feed detail + deactivation", () => {
   it("reports each deactivation reason plus legacy-uncertain", async () => {
     const now = Date.now();
 
-    const cases: Array<[string | null, boolean]> = [
-      ["transient", false],
-      ["permanent", false],
-      ["manual", false],
-      [null, true], // pre-migration deactivation
-    ];
+    const cases: Array<["transient" | "permanent" | "manual" | null, boolean]> =
+      [
+        ["transient", false],
+        ["permanent", false],
+        ["manual", false],
+        [null, true], // pre-migration deactivation
+      ];
 
     for (const [reason, legacy] of cases) {
       const feedId = await seedFeedAndSub({
@@ -347,10 +359,10 @@ describe("feed detail + deactivation", () => {
 
       const res = await fetchApi(`/app/api/feeds/${feedId}`);
 
-      const body = (await res.json()) as {
+      const body = await responseJson<{
         deactivatedReason: string | null;
         legacyUncertain: boolean;
-      };
+      }>(res);
 
       expect(body.deactivatedReason).toBe(
         reason === "transient"
@@ -375,10 +387,10 @@ describe("feed detail + deactivation", () => {
 
     expect(off.status).toBe(200);
 
-    const offBody = (await off.json()) as {
+    const offBody = await responseJson<{
       deactivatedReason: string | null;
       status: string;
-    };
+    }>(off);
 
     expect(offBody.deactivatedReason).toBe("manual");
     expect(offBody.status).toBe("deactivated");
@@ -389,11 +401,11 @@ describe("feed detail + deactivation", () => {
 
     expect(on.status).toBe(200);
 
-    const onBody = (await on.json()) as {
+    const onBody = await responseJson<{
       deactivatedAt: number | null;
       deactivatedReason: string | null;
       consecutiveErrors: number;
-    };
+    }>(on);
 
     expect(onBody.deactivatedAt).toBeNull();
     expect(onBody.deactivatedReason).toBeNull();
@@ -422,7 +434,7 @@ describe("POST /app/api/feeds/sync", () => {
 
     const res = await fetchApi("/app/api/feeds/sync", { method: "POST" });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as SyncResponse;
+    const body = await responseJson<SyncResponse>(res);
     expect(body.triggered).toBe(true);
     expect(body.forced).toBe(false);
     expect(body.eligible).toBe(0);
@@ -456,7 +468,7 @@ describe("POST /app/api/feeds/sync", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as SyncResponse;
+    const body = await responseJson<SyncResponse>(res);
     expect(body.triggered).toBe(true);
     expect(body.forced).toBe(true);
     expect(body.eligible).toBe(1); // only the active subscribed feed
