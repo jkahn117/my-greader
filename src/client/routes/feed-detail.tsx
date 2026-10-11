@@ -83,14 +83,14 @@ function problemSummary(
           headline: "Polling is paused manually.",
           detail: `Manual Deactivation ${when}. No checks run until the Feed is reactivated. ${lastSuccess}`,
         };
-      case "transient":
+      case "automatic_transient":
         return {
           tone: "destructive",
           headline:
             "Automatically deactivated after repeated transient errors.",
           detail: `Automatic Deactivation ${when}. ${lastError}${lastSuccess}`,
         };
-      case "permanent":
+      case "automatic_permanent":
         return {
           tone: "destructive",
           headline: "Automatically deactivated after a permanent failure.",
