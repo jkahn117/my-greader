@@ -368,6 +368,19 @@ const ATTEMPTS_PAGE_LIMIT = 25;
 
 const ATTEMPTS_PAGE_MAX = 50;
 
+const AttemptsQuery = v.object({
+  limit: v.optional(
+    v.pipe(
+      v.string(),
+      v.regex(/^\d+$/, "limit must be a positive integer"),
+      v.transform(Number),
+      v.integer("limit must be a positive integer"),
+      v.minValue(1, "limit must be a positive integer"),
+    ),
+    String(ATTEMPTS_PAGE_LIMIT),
+  ),
+});
+
 handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
   const userId = c.get("userId");
   const { feedId } = c.req.param();
@@ -382,12 +395,13 @@ handler.get("/app/api/feeds/:feedId/attempts", async (c) => {
     return c.json({ error: "feed not found" }, 404);
   }
 
-  const rawLimit = Number(c.req.query("limit") ?? ATTEMPTS_PAGE_LIMIT);
+  const parsedQuery = v.safeParse(AttemptsQuery, c.req.query());
 
-  const limit =
-    Number.isFinite(rawLimit) && rawLimit > 0
-      ? Math.min(Math.floor(rawLimit), ATTEMPTS_PAGE_MAX)
-      : ATTEMPTS_PAGE_LIMIT;
+  if (!parsedQuery.success) {
+    return c.json({ error: "limit must be a positive integer" }, 400);
+  }
+
+  const limit = Math.min(parsedQuery.output.limit, ATTEMPTS_PAGE_MAX);
 
   const rawCursor = c.req.query("cursor");
   const cursor = rawCursor ? decodeCursor(rawCursor) : null;
