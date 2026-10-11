@@ -52,7 +52,7 @@ Items link to their first ingestion attempt through `items.first_ingestion_attem
 | `src/feed/subscriptions.ts` | Feed upsert and Subscription operations |
 | `src/feed/item-state.ts` and `src/feed/stream.ts` | User-scoped reading state and API Stream queries |
 | `src/feed/poll.ts` | Feed selection, ingestion, Backoff, error handling, and polling state |
-| `src/feed/activity.ts` | D1-backed Overview, activity, and Cycle Run projections |
+| `src/feed/activity.ts` | D1-backed Overview projections |
 | `src/feed/history.ts` | Durable attempt pagination, terminal-check streaks, problem groups, attributed Items |
 | `src/feed/reading.ts` | Display-timezone day boundaries and current-Subscription marked-read projections |
 | `src/feed/analytics.ts` | Optional Analytics Engine queries and mapping |
