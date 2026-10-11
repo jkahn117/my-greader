@@ -28,6 +28,7 @@ async function attemptsPage(response: Response): Promise<AttemptsPage> {
   return (await response.json()) as AttemptsPage;
 }
 
+// Exercise the dashboard API route in the Worker runtime, including deferred work.
 async function fetchApi(path: string): Promise<Response> {
   const req = new Request(`${BASE}${path}`);
   const ctx = createExecutionContext();
@@ -37,6 +38,7 @@ async function fetchApi(path: string): Promise<Response> {
   return response;
 }
 
+// Create a subscribed Feed with ordered poll attempts for pagination assertions.
 async function seedFeedWithAttempts(): Promise<string> {
   const db = getDb(env.DB);
   const feedId = crypto.randomUUID();

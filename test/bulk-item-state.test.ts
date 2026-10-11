@@ -19,6 +19,7 @@ const TOKEN = "bulk-item-state-test-token";
 
 const USER_ID = "bulk-item-state-user";
 
+// Submit an authenticated bulk read-state update through the GReader API.
 async function requestEditTag(itemIds: string[]): Promise<Response> {
   const body = new URLSearchParams();
 
@@ -45,6 +46,7 @@ async function requestEditTag(itemIds: string[]): Promise<Response> {
   return response;
 }
 
+// Seed subscribed Items in small inserts to stay within SQLite parameter limits.
 async function seedItems(count: number): Promise<string[]> {
   const db = getDb(env.DB);
   const feedId = "bulk-item-state-feed";

@@ -15,6 +15,7 @@ const BASE = "http://localhost";
 
 const USER_ID = "bulk-stream-user";
 
+// Run API requests through the Worker runtime and wait for background work to finish.
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const ctx = createExecutionContext();
 
@@ -29,6 +30,7 @@ async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   return response;
 }
 
+// Create a Feed and Subscription so its Items are visible in the requested Stream.
 async function seedFeed(userId: string, name: string) {
   const feedId = crypto.randomUUID();
 
@@ -52,6 +54,7 @@ async function seedFeed(userId: string, name: string) {
   return feedId;
 }
 
+// Insert one Item with stable content and timestamps for Stream response assertions.
 async function seedItem(feedId: string, index: number) {
   const guid = `https://example.com/article/${index}`;
   const itemId = await deriveItemId(guid);
@@ -106,7 +109,7 @@ function authHeaders(): HeadersInit {
 }
 
 describe("bounded GReader Stream requests", () => {
-  it.each([89, 101])(
+  it.each([87, 101])(
     "returns compatible full contents for %i requested IDs",
     async (count) => {
       const feedId = await seedFeed(USER_ID, "visible");
