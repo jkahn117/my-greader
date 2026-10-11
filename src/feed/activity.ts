@@ -333,7 +333,7 @@ export function createActivityReader(
       .groupBy(feedPollAttempts.feedId)
       .as("attention_latest_per_feed");
 
-    return db
+    const rows = await db
       .select({
         feedId: feeds.id,
         title: sql<string>`coalesce(${subscriptions.title}, ${feeds.title}, ${feeds.feedUrl})`,
@@ -354,7 +354,17 @@ export function createActivityReader(
         ),
       )
       .where(eq(subscriptions.userId, userId))
-      .orderBy(feeds.id);
+      .orderBy(desc(feedPollAttempts.id));
+
+    const latestRows = new Map<string, AttentionRow>();
+
+    for (const row of rows) {
+      if (!latestRows.has(row.feedId)) latestRows.set(row.feedId, row);
+    }
+
+    return [...latestRows.values()].sort((left, right) =>
+      left.feedId.localeCompare(right.feedId),
+    );
   }
 
   /** Aggregates classified attention rows into the summary breakdown. */

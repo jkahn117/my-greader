@@ -340,6 +340,85 @@ describe("GET /app/api/overview/panels", () => {
     expect((await fetchPanels()).cycle.state).toBe("running");
   });
 
+  it("counts tied latest attempts once and selects the greatest attempt ID", async () => {
+    const feedId = await seedFeed({ title: "Throttled" });
+    const db = getDb(env.DB);
+    await db.insert(cycleRuns).values({
+      id: `cycle-${feedId}-1000`,
+      ranAt: 1000,
+      status: "completed",
+      outcome: "completed",
+    });
+    await db.insert(feedAttempts).values([
+      {
+        id: "a",
+        cycleRunId: `cycle-${feedId}-1000`,
+        feedId,
+        startedAt: 1000,
+        completedAt: 1100,
+        outcome: "rate_limited",
+      },
+      {
+        id: "z",
+        cycleRunId: `cycle-${feedId}-1000`,
+        feedId,
+        startedAt: 1000,
+        completedAt: 1100,
+        outcome: "rate_limited",
+      },
+    ]);
+
+    const tiedFeedId = await seedFeed({ title: "Deterministic tie" });
+    const tiedCycleRunId = `cycle-${tiedFeedId}-2000`;
+    await db.insert(cycleRuns).values({
+      id: tiedCycleRunId,
+      ranAt: 2000,
+      status: "completed",
+      outcome: "completed",
+    });
+    await db.insert(feedAttempts).values([
+      {
+        id: "tie-a",
+        cycleRunId: tiedCycleRunId,
+        feedId: tiedFeedId,
+        startedAt: 2000,
+        completedAt: 2100,
+        outcome: "unchanged",
+      },
+      {
+        id: "tie-z",
+        cycleRunId: tiedCycleRunId,
+        feedId: tiedFeedId,
+        startedAt: 2000,
+        completedAt: 2100,
+        outcome: "rate_limited",
+      },
+    ]);
+
+    const summary = await createActivityReader(env.DB).overviewSummary(
+      "dev-user-id",
+    );
+
+    const panels = await fetchPanels();
+
+    expect(summary.attention).toMatchObject({
+      total: 2,
+      rateLimited: 2,
+      failing: 0,
+      autoDeactivated: 0,
+      manuallyPaused: 0,
+    });
+    expect(panels.needsAttention).toHaveLength(2);
+    expect(
+      panels.needsAttention.find((item) => item.feedId === feedId),
+    ).toMatchObject({
+      kind: "rate_limited",
+    });
+    expect(
+      panels.needsAttention.find((item) => item.feedId === tiedFeedId),
+    ).toMatchObject({ kind: "rate_limited" });
+  });
+
   it("lists needs-attention feeds with links and ignores plain backoff", async () => {
     const failing = await seedFeed({
       title: "Broken",
