@@ -53,6 +53,7 @@ const overviewRoute = createRoute({
       status={error instanceof ApiError ? error.status : undefined}
     />
   ),
+  // Router invalidation refreshes both projections; panel failure preserves the summary.
   loader: async () => {
     const [summary, panels] = await Promise.all([
       apiGet<OverviewResponse>("/app/api/overview"),
