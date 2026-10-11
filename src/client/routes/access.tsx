@@ -326,9 +326,15 @@ function TokenRow({
   const [busy, setBusy] = useState(false);
   const revokeRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusOnClose = useRef(false);
 
   useEffect(() => {
-    if (confirming) confirmRef.current?.focus();
+    if (confirming) {
+      confirmRef.current?.focus();
+    } else if (restoreFocusOnClose.current) {
+      restoreFocusOnClose.current = false;
+      revokeRef.current?.focus();
+    }
   }, [confirming]);
 
   async function revoke() {
@@ -343,8 +349,9 @@ function TokenRow({
         `Revoking “${token.name}” failed` +
           `${err instanceof ApiError ? ` (${err.status})` : ""}.`,
       );
+      // Restore focus after React remounts the Revoke control.
+      restoreFocusOnClose.current = true;
       setConfirming(false);
-      revokeRef.current?.focus();
     } finally {
       setBusy(false);
     }

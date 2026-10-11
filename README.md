@@ -133,7 +133,7 @@ pnpm check      # all of the above
 pnpm test:browser # Playwright acceptance tests against the local Vite server
 ```
 
-Browser tests automatically apply migrations in the isolated `.wrangler/e2e` store and supply local-only authentication overrides. Vitest applies migrations in its own isolated D1 stores. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
+Browser tests automatically apply migrations in the isolated `.wrangler/e2e` store and supply local-only authentication overrides. Vitest applies migrations in its own isolated D1 stores. The required CI workflow installs Chromium and runs the browser suite against the built Worker with `PLAYWRIGHT_BUILD=1`. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
 
 Other commands: `pnpm cf-typegen` regenerates Wrangler binding types, `pnpm studio` opens Drizzle Studio for local D1, and `pnpm format` formats TypeScript files.
 

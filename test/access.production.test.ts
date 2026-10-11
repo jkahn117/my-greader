@@ -20,12 +20,18 @@ let jwk: JsonWebKey;
 let jwksFetch: ReturnType<typeof vi.fn>;
 
 // Simulate representative key-service failures at the external boundary.
-function failJwksWith(failure: "http" | "schema"): void {
-  jwksFetch.mockImplementation(async () =>
-    failure === "http"
-      ? new Response("Unavailable", { status: 503 })
-      : Response.json({ keys: null }),
-  );
+function failJwksWith(
+  failure: "http" | "network" | "json" | "schema",
+): void {
+  jwksFetch.mockImplementation(async () => {
+    if (failure === "network") throw new Error("JWKS unavailable");
+
+    if (failure === "json") return new Response("{", { status: 200 });
+
+    if (failure === "http") return new Response("Unavailable", { status: 503 });
+
+    return Response.json({ keys: null });
+  });
 }
 
 // Encode the actual UTF-8 signing input, including non-ASCII identity claims.
@@ -307,7 +313,7 @@ describe("production Access through protected Worker requests", () => {
     expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);
   });
 
-  it.each(["http", "schema"] as const)(
+  it.each(["http", "network", "json", "schema"] as const)(
     "fails closed on a representative JWKS %s failure",
     async (failure) => {
       failJwksWith(failure);
@@ -315,8 +321,31 @@ describe("production Access through protected Worker requests", () => {
       expect(response.status).toBe(401);
       expect(await response.text()).toBe("Unauthorized");
       expect(await getDb(env.DB).select().from(users).all()).toHaveLength(0);
+      expect(jwksFetch).toHaveBeenCalledTimes(1);
+      expect(jwksFetch).toHaveBeenCalledWith(`${ISSUER}/cdn-cgi/access/certs`, {
+        redirect: "manual",
+      });
     },
   );
+
+  it("rejects an unknown key when refreshing cached keys fails", async () => {
+    expect((await request(await assertion())).status).toBe(200);
+    expect(jwksFetch).toHaveBeenCalledTimes(1);
+    failJwksWith("network");
+
+    const response = await request(
+      await assertion({}, { alg: "RS256", kid: "unknown" }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized");
+    expect(await getDb(env.DB).select().from(users).all()).toHaveLength(1);
+    expect(jwksFetch).toHaveBeenCalledTimes(2);
+    expect(jwksFetch).toHaveBeenLastCalledWith(
+      `${ISSUER}/cdn-cgi/access/certs`,
+      { redirect: "manual" },
+    );
+  });
 
   it("reuses keys before TTL and refetches exactly at the one-hour expiry boundary", async () => {
     expect((await request(await assertion({ exp: NOW + 7200 }))).status).toBe(
