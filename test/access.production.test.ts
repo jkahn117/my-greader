@@ -20,9 +20,7 @@ let jwk: JsonWebKey;
 let jwksFetch: ReturnType<typeof vi.fn>;
 
 // Simulate representative key-service failures at the external boundary.
-function failJwksWith(
-  failure: "http" | "network" | "json" | "schema",
-): void {
+function failJwksWith(failure: "http" | "network" | "json" | "schema"): void {
   jwksFetch.mockImplementation(async () => {
     if (failure === "network") throw new Error("JWKS unavailable");
 
