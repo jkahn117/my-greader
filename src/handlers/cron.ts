@@ -69,6 +69,10 @@ async function purgeRetention(
   const result = await retention.purge(itemRetentionDays);
 
   logger.info("purged retained data", { itemRetentionDays, ...result });
+
+  if (result.itemsBacklogRemaining || result.cycleRunsBacklogRemaining) {
+    logger.warn("retention backlog remains", { itemRetentionDays, ...result });
+  }
 }
 
 // ---------------------------------------------------------------------------
