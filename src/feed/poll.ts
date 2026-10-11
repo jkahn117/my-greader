@@ -454,8 +454,10 @@ export function createFeedPoller(
     let feed = selectedFeed;
     let feedTitle = feed.title ?? feed.feedUrl;
 
-    // Persist progress and claim the Feed in one D1 transaction. The fence is
-    // stable for retries of this logical attempt and increases for a new owner.
+    // Persist progress and claim the Feed in one D1 transaction. Terminate an
+    // expired predecessor before changing the owner, but not a lease renewal
+    // by another runtime of the same logical attempt. The fence is stable for
+    // retries of this logical attempt and increases for a new owner.
     const leaseExpiresAt = start + POLL_LEASE_MS;
 
     const claimResults = await dbBinding.batch([
@@ -467,6 +469,33 @@ export function createFeedPoller(
            ON CONFLICT(id) DO NOTHING`,
         )
         .bind(attempt.attemptId, attempt.cycleRunId, feed.id, start),
+      dbBinding
+        .prepare(
+          `UPDATE feed_poll_attempts
+              SET completed_at = ?, outcome = 'skipped',
+                  parser_status = 'not_attempted',
+                  diagnostic = 'Feed lease claimed by another Cycle Run'
+            WHERE id = (
+              SELECT poll_owner_attempt_id FROM feeds
+               WHERE id = ? AND poll_owner_attempt_id <> ?
+                 AND deactivated_at IS NULL AND poll_lease_expires_at <= ?
+                 AND EXISTS (
+                   SELECT 1 FROM feed_poll_attempts contender
+                    WHERE contender.id = ? AND contender.cycle_run_id = ?
+                      AND contender.feed_id = feeds.id
+                      AND contender.outcome IS NULL
+                      AND contender.ownership_fence IS NULL
+                 )
+            ) AND outcome IS NULL`,
+        )
+        .bind(
+          start,
+          feed.id,
+          attempt.attemptId,
+          start,
+          attempt.attemptId,
+          attempt.cycleRunId,
+        ),
       dbBinding
         .prepare(
           `UPDATE feeds
@@ -593,8 +622,8 @@ export function createFeedPoller(
         .bind(feed.id),
     ]);
 
-    // SAFETY: Statement 6 selects the durable attempt columns declared below.
-    const durableAttempt = claimResults[6].results[0] as
+    // SAFETY: Statement 7 selects the durable attempt columns declared below.
+    const durableAttempt = claimResults[7].results[0] as
       | {
           cycle_run_id: string;
           feed_id: string;
@@ -606,8 +635,8 @@ export function createFeedPoller(
         }
       | undefined;
 
-    // SAFETY: Statement 7 selects the Feed columns declared below.
-    const currentFeed = claimResults[7].results[0] as
+    // SAFETY: Statement 8 selects the Feed columns declared below.
+    const currentFeed = claimResults[8].results[0] as
       | {
           feed_url: string;
           title: string | null;

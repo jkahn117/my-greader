@@ -6,6 +6,7 @@ import { logger } from "../src/lib/logger";
 import { cycleRuns, feeds, subscriptions, users } from "../src/db/schema";
 import {
   createFeedPoller,
+  createPollingCycleManager,
   type FeedToCheck,
   type FeedTransport,
 } from "../src/feed/poll";
@@ -763,7 +764,7 @@ describe("durable Feed attempt outcomes", () => {
     });
   });
 
-  it("rejects a stale owner after an expired lease is claimed", async () => {
+  it("terminalizes a displaced attempt when another Cycle Run claims its expired lease", async () => {
     const feed = feedInput("expired-owner");
     await seedAttempt(feed, "cycle-stale");
     await getDb(env.DB).insert(cycleRuns).values({
@@ -793,9 +794,17 @@ describe("durable Feed attempt outcomes", () => {
       expect(await readAttempt("attempt-stale")).not.toBeNull();
     });
 
-    const recoveryResult = await createFeedPoller(
+    let releaseRecovery: (response: Response) => void = () => {};
+
+    const recoveryResponse = new Promise<Response>((resolve) => {
+      releaseRecovery = resolve;
+    });
+
+    const recoveryTransport = { get: vi.fn(() => recoveryResponse) };
+
+    const recoveryPoll = createFeedPoller(
       env.DB,
-      { get: vi.fn(async () => new Response(null, { status: 304 })) },
+      recoveryTransport,
       { publish() {} },
       () => 1_735_733_100_001,
     ).poll(feed, {
@@ -803,17 +812,82 @@ describe("durable Feed attempt outcomes", () => {
       attemptId: "attempt-recovery",
     });
 
+    await vi.waitFor(() =>
+      expect(recoveryTransport.get).toHaveBeenCalledOnce(),
+    );
+    expect(await readAttempt("attempt-stale")).toMatchObject({
+      outcome: "skipped",
+      new_items: 0,
+      parser_status: "not_attempted",
+      completed_at: 1_735_733_100_001,
+    });
+
+    const retryTransport = { get: vi.fn() };
+    await expect(
+      createFeedPoller(
+        env.DB,
+        retryTransport,
+        { publish() {} },
+        () => 1_735_733_100_002,
+      ).poll(feed, {
+        cycleRunId: "cycle-stale",
+        attemptId: "attempt-stale",
+      }),
+    ).resolves.toMatchObject({ outcome: "skipped" });
+    expect(retryTransport.get).not.toHaveBeenCalled();
+
+    releaseRecovery(new Response(null, { status: 304 }));
+    await expect(recoveryPoll).resolves.toMatchObject({
+      outcome: "not_modified",
+    });
+
+    const cycles = createPollingCycleManager(env.DB, () => 1_735_733_100_003);
+    await expect(cycles.complete("cycle-stale", 1, 1)).resolves.toEqual({
+      checkedFeeds: 0,
+      skippedFeeds: 1,
+      failedFeeds: 0,
+      newItems: 0,
+    });
+    await expect(cycles.complete("cycle-recovery", 1, 1)).resolves.toEqual({
+      checkedFeeds: 1,
+      skippedFeeds: 0,
+      failedFeeds: 0,
+      newItems: 0,
+    });
+
+    const db = getDb(env.DB);
+
+    const feedAfterRecovery = await db
+      .select()
+      .from(feeds)
+      .where(eq(feeds.id, feed.id));
+
     releaseStaleOwner(new Response(ONE_ITEM_RSS));
+    await expect(stalePoll).resolves.toMatchObject({ outcome: "skipped" });
 
-    expect(recoveryResult).toMatchObject({ outcome: "not_modified" });
-    await expect(stalePoll).rejects.toThrow("lost ownership");
-    expect(await readAttempt("attempt-stale")).toMatchObject({ outcome: null });
+    expect(await db.select().from(feeds).where(eq(feeds.id, feed.id))).toEqual(
+      feedAfterRecovery,
+    );
+    expect(
+      await env.DB.prepare("SELECT count(*) AS count FROM items").first(),
+    ).toEqual({
+      count: 0,
+    });
 
-    const stored = await env.DB.prepare(
-      "SELECT count(*) AS count FROM items",
-    ).first<{ count: number }>();
-
-    expect(stored?.count).toBe(0);
+    expect(await db.select().from(cycleRuns)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "cycle-stale",
+          status: "completed",
+          skippedFeeds: 1,
+        }),
+        expect.objectContaining({
+          id: "cycle-recovery",
+          status: "completed",
+          checkedFeeds: 1,
+        }),
+      ]),
+    );
   });
 
   it("uses current Feed policy after a delayed contender acquires ownership", async () => {
