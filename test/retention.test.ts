@@ -23,7 +23,11 @@ async function seedItems(count: number, prefix: string, fetchedAt: number) {
 }
 
 /** Seeds enough Cycle Runs to model the 30-minute polling schedule. */
-async function seedCycleRuns(count: number, ranAt: number, prefix = "expired-") {
+async function seedCycleRuns(
+  count: number,
+  ranAt: number,
+  prefix = "expired-",
+) {
   await env.DB.prepare(
     `WITH RECURSIVE n(i) AS (
        SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?
