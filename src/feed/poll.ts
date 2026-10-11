@@ -750,9 +750,12 @@ export function createFeedPoller(
     }
 
     if (response.status === 304) {
-      const newInterval = Math.min(
-        feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
-        MAX_INTERVAL_MINUTES,
+      const newInterval = Math.max(
+        feed.checkIntervalMinutes,
+        Math.min(
+          feed.checkIntervalMinutes * BACKOFF_MULTIPLIER,
+          MAX_INTERVAL_MINUTES,
+        ),
       );
 
       const completedAt = now();
