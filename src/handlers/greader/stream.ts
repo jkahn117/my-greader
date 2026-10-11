@@ -98,7 +98,7 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
   const mod = createStreamModule(c.env.DB);
 
-  const { page, continuation } = await mod.queryPage({
+  const { page, continuation } = await mod.queryIdPage({
     scope,
     userId,
     excludeRead: xt === "user/-/state/com.google/read",
@@ -111,8 +111,8 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
   const response: ItemRefsResponse = {
     itemRefs: page.map((r) => ({
-      id: toGreaderItemId(r.item.id),
-      timestampUsec: String((r.item.publishedAt ?? 0) * 1000),
+      id: toGreaderItemId(r.id),
+      timestampUsec: String((r.publishedAt ?? 0) * 1000),
     })),
   };
 

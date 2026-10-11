@@ -3,6 +3,9 @@ import { items, subscriptions } from "../db/schema";
 import { getDb } from "../lib/db";
 import type { StreamScope } from "./stream";
 
+// Leave one of D1's 100 query bindings for the User ID in eligibility lookup.
+const ITEM_ID_BATCH_SIZE = 99;
+
 export interface ItemStateUpdate {
   isRead?: boolean;
   isStarred?: boolean;
@@ -40,17 +43,29 @@ export function createItemStateModule(dbBinding: D1Database): ItemStateModule {
 
     if (itemIds.length === 0) return [];
 
-    const eligible = await db
-      .select({ itemId: items.id, feedId: items.feedId })
-      .from(items)
-      .innerJoin(
-        subscriptions,
-        and(
-          eq(subscriptions.feedId, items.feedId),
-          eq(subscriptions.userId, params.userId),
-        ),
-      )
-      .where(inArray(items.id, itemIds));
+    const eligible: UpdatedItem[] = [];
+
+    for (
+      let offset = 0;
+      offset < itemIds.length;
+      offset += ITEM_ID_BATCH_SIZE
+    ) {
+      const itemIdBatch = itemIds.slice(offset, offset + ITEM_ID_BATCH_SIZE);
+
+      const rows = await db
+        .select({ itemId: items.id, feedId: items.feedId })
+        .from(items)
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.feedId, items.feedId),
+            eq(subscriptions.userId, params.userId),
+          ),
+        )
+        .where(inArray(items.id, itemIdBatch));
+
+      eligible.push(...rows);
+    }
 
     if (eligible.length === 0) return [];
 
