@@ -22,6 +22,7 @@ import {
   subscriptions,
   type FeedAttemptErrorClass,
   type FeedAttemptOutcome,
+  type FeedAttemptParserStatus,
 } from "../db/schema";
 
 const MAX_CONTENT_BYTES = 50 * 1024;
@@ -110,7 +111,19 @@ export type FeedPollResult =
       error: string;
     };
 
+/** Durable terminal evidence supplied to polling and health-transition observers. */
+export type FeedAttemptCompletion = PollAttemptContext & {
+  feedId: string;
+  outcome: FeedAttemptOutcome;
+  newItems: number;
+  errorClass: FeedAttemptErrorClass | null;
+  httpStatus: number | null;
+  parserStatus: FeedAttemptParserStatus | null;
+  diagnostic: string | null;
+};
+
 export type PollEvent =
+  | ({ kind: "feedAttemptCompleted" } & FeedAttemptCompletion)
   | {
       kind: "feedPolled";
       feedId: string;
@@ -347,6 +360,7 @@ export interface FeedHealth {
 export function createFeedHealth(
   dbBinding: D1Database,
   now: () => number,
+  observe?: PollObserver,
 ): FeedHealth {
   return { deactivate, reactivate };
 
@@ -374,6 +388,8 @@ export function createFeedHealth(
         )
         .bind(changedAt, feedId, userId),
     ]);
+
+    reportCancellation(results);
 
     return (results[1].meta.changes ?? 0) > 0;
   }
@@ -405,7 +421,25 @@ export function createFeedHealth(
         .bind(MIN_INTERVAL_MINUTES, feedId, userId),
     ]);
 
+    reportCancellation(results);
+
     return (results[1].meta.changes ?? 0) > 0;
+  }
+
+  /** Reports only the attempt this transition durably cancelled, independently of delivery. */
+  function reportCancellation(results: D1Result[]): void {
+    // SAFETY: Statement 0 returns the cancelled attempt's terminal evidence.
+    const cancelled = results[0].results[0] as
+      | FeedAttemptCompletion
+      | undefined;
+
+    if (!cancelled) return;
+
+    try {
+      observe?.publish({ kind: "feedAttemptCompleted", ...cancelled });
+    } catch {
+      // Telemetry cannot undo or replay an authorized health transition.
+    }
   }
 
   /** Completes an authorized transition's in-flight attempt before revoking ownership. */
@@ -426,7 +460,11 @@ export function createFeedHealth(
                SELECT 1 FROM subscriptions
                 WHERE user_id = ? AND feed_id = feeds.id
              )
-          ) AND outcome IS NULL`,
+          ) AND outcome IS NULL
+          RETURNING cycle_run_id AS cycleRunId, id AS attemptId,
+                    feed_id AS feedId, outcome, new_items AS newItems,
+                    error_class AS errorClass, http_status AS httpStatus,
+                    parser_status AS parserStatus, diagnostic`,
       )
       .bind(completedAt, diagnostic, feedId, userId);
   }
@@ -486,7 +524,11 @@ export function createFeedPoller(
                       AND contender.outcome IS NULL
                       AND contender.ownership_fence IS NULL
                  )
-            ) AND outcome IS NULL`,
+            ) AND outcome IS NULL
+            RETURNING cycle_run_id AS cycleRunId, id AS attemptId,
+                      feed_id AS feedId, outcome, new_items AS newItems,
+                      error_class AS errorClass, http_status AS httpStatus,
+                      parser_status AS parserStatus, diagnostic`,
         )
         .bind(
           start,
@@ -622,6 +664,15 @@ export function createFeedPoller(
         .bind(feed.id),
     ]);
 
+    // SAFETY: Statement 1 returns the committed predecessor's terminal evidence.
+    const displaced = claimResults[1].results[0] as
+      | FeedAttemptCompletion
+      | undefined;
+
+    if (displaced) {
+      publish({ kind: "feedAttemptCompleted", ...displaced });
+    }
+
     // SAFETY: Statement 7 selects the durable attempt columns declared below.
     const durableAttempt = claimResults[7].results[0] as
       | {
@@ -681,14 +732,14 @@ export function createFeedPoller(
       currentFeed?.poll_owner_attempt_id !== attempt.attemptId ||
       currentFeed.poll_fence !== ownershipFence
     ) {
-      await skipAttempt(
+      const won = await skipAttempt(
         attempt.attemptId,
         currentFeed?.deactivated_at != null
           ? "Feed became ineligible after selection"
           : "Feed is owned by another Cycle Run",
       );
 
-      return loadResult(attempt.attemptId, feed.id, feedTitle);
+      return loadResult(attempt, feed.id, feedTitle, won);
     }
 
     // Selection can wait behind another Cycle Run. Once this attempt owns the
@@ -736,7 +787,7 @@ export function createFeedPoller(
         parserStatus: "not_attempted",
       });
 
-      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      const result = await loadResult(attempt, feed.id, feedTitle, won);
 
       if (won && result.outcome === "failed") {
         publish({
@@ -797,7 +848,7 @@ export function createFeedPoller(
       ]);
 
       const won = didCommitTerminalAttempt(commitResults);
-      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      const result = await loadResult(attempt, feed.id, feedTitle, won);
 
       if (won && result.outcome === "not_modified") {
         publish({
@@ -875,7 +926,7 @@ export function createFeedPoller(
       ]);
 
       const won = didCommitTerminalAttempt(commitResults);
-      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      const result = await loadResult(attempt, feed.id, feedTitle, won);
 
       if (won && result.outcome === "rate_limited") {
         publish({
@@ -911,7 +962,7 @@ export function createFeedPoller(
         parserStatus: "not_attempted",
       });
 
-      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      const result = await loadResult(attempt, feed.id, feedTitle, won);
 
       if (won && result.outcome === "failed") {
         publish({
@@ -942,7 +993,7 @@ export function createFeedPoller(
         parserStatus: "not_attempted",
       });
 
-      const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+      const result = await loadResult(attempt, feed.id, feedTitle, won);
 
       if (won && result.outcome === "failed") {
         publish({
@@ -993,7 +1044,7 @@ export function createFeedPoller(
           },
         );
 
-        const result = await loadResult(attempt.attemptId, feed.id, feedTitle);
+        const result = await loadResult(attempt, feed.id, feedTitle, won);
 
         if (won && result.outcome === "failed") {
           publish({
@@ -1208,8 +1259,7 @@ export function createFeedPoller(
     const commitResults = await dbBinding.batch(commitStatements);
     const won = didCommitTerminalAttempt(commitResults);
 
-    const committed = await loadAttempt(attempt.attemptId);
-    const result = resultFromAttempt(feed.id, feedTitle, committed);
+    const result = await loadResult(attempt, feed.id, feedTitle, won);
 
     if (
       won &&
@@ -1231,8 +1281,8 @@ export function createFeedPoller(
   async function skipAttempt(
     attemptId: string,
     diagnostic: string,
-  ): Promise<void> {
-    await dbBinding
+  ): Promise<boolean> {
+    const result = await dbBinding
       .prepare(
         `UPDATE feed_poll_attempts
             SET completed_at = ?, outcome = 'skipped',
@@ -1245,6 +1295,8 @@ export function createFeedPoller(
       )
       .bind(now(), diagnostic, attemptId)
       .run();
+
+    return result.meta.changes > 0;
   }
 
   /** Reads the terminal result after a commit, including after an ambiguous response. */
@@ -1252,6 +1304,8 @@ export function createFeedPoller(
     outcome: FeedAttemptOutcome;
     newItems: number;
     errorClass: FeedAttemptErrorClass | null;
+    httpStatus: number | null;
+    parserStatus: FeedAttemptParserStatus | null;
     diagnostic: string | null;
   }> {
     const rows = await d
@@ -1259,6 +1313,8 @@ export function createFeedPoller(
         outcome: feedPollAttempts.outcome,
         newItems: feedPollAttempts.newItems,
         errorClass: feedPollAttempts.errorClass,
+        httpStatus: feedPollAttempts.httpStatus,
+        parserStatus: feedPollAttempts.parserStatus,
         diagnostic: feedPollAttempts.diagnostic,
       })
       .from(feedPollAttempts)
@@ -1273,13 +1329,25 @@ export function createFeedPoller(
     return { ...rows[0], outcome: rows[0].outcome };
   }
 
-  /** Returns the winner when overlapping runtime retries race to completion. */
+  /** Reports terminal evidence only from the runtime that committed the outcome. */
   async function loadResult(
-    attemptId: string,
+    attempt: PollAttemptContext,
     feedId: string,
     feedTitle: string,
+    won: boolean,
   ): Promise<FeedPollResult> {
-    return resultFromAttempt(feedId, feedTitle, await loadAttempt(attemptId));
+    const committed = await loadAttempt(attempt.attemptId);
+
+    if (won) {
+      publish({
+        kind: "feedAttemptCompleted",
+        ...attempt,
+        feedId,
+        ...committed,
+      });
+    }
+
+    return resultFromAttempt(feedId, feedTitle, committed);
   }
 
   /** Commits Feed error health and its failed attempt in one D1 transaction. */

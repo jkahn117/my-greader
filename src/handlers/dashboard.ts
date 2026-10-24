@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { createLogger } from "../lib/logger";
+import { logFeedAttemptCompletion } from "../lib/polling-telemetry";
 import { createActivityReader } from "../feed/activity";
 import {
   ATTEMPT_RETENTION_DAYS,
@@ -330,7 +331,14 @@ for (const action of ["deactivate", "reactivate"] as const) {
       return c.json({ error: "database unavailable" }, 503);
     }
 
-    const health = createFeedHealth(c.env.DB, Date.now);
+    const health = createFeedHealth(c.env.DB, Date.now, {
+      publish(event) {
+        if (event.kind === "feedAttemptCompleted") {
+          logFeedAttemptCompletion(event);
+        }
+      },
+    });
+
     const changed = await health[action](userId, feedId);
 
     if (!changed) {

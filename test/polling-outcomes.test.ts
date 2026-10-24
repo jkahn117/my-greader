@@ -589,7 +589,9 @@ describe("durable Feed attempt outcomes", () => {
       outcome: "new_items",
       new_items: 1,
     });
-    expect(successObserver.publish).toHaveBeenCalledOnce();
+    expect(
+      successObserver.publish.mock.calls.map(([event]) => event.kind),
+    ).toEqual(["feedAttemptCompleted", "feedPolled"]);
     expect(notModifiedObserver.publish).not.toHaveBeenCalled();
   });
 
@@ -1467,6 +1469,7 @@ describe("Cycle Run outcomes", () => {
     const fetchMock = vi.fn(async () => new Response(ONE_ITEM_RSS));
     vi.stubGlobal("fetch", fetchMock);
     const completedSteps = new Map<string, object | void>();
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
     let loseFetchAcknowledgment = true;
 
     // Caches acknowledged Workflow steps while replaying the unacknowledged Feed step.
@@ -1534,7 +1537,168 @@ describe("Cycle Run outcomes", () => {
       attempt_id: "retry-cycle:retry-feed",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const terminalEvents = infoSpy.mock.calls.filter(
+      ([message]) => message === "feed polling attempt completed",
+    );
+
+    expect(terminalEvents).toHaveLength(1);
+    expect(terminalEvents[0]?.[1]).toMatchObject({
+      eventName: "feed_attempt_completed",
+      cycleRunId: "retry-cycle",
+      attemptId: "retry-cycle:retry-feed",
+      feedId: "retry-feed",
+      outcome: "new_items",
+      httpStatus: 200,
+      parserStatus: "success",
+      newItems: 1,
+    });
   });
+
+  it.each([
+    {
+      outcome: "new_items",
+      body: ONE_ITEM_RSS,
+      status: 200,
+      parserStatus: "success",
+      newItems: 1,
+      errorClass: null,
+      severity: "info",
+    },
+    {
+      outcome: "unchanged",
+      body: EMPTY_RSS,
+      status: 200,
+      parserStatus: "success",
+      newItems: 0,
+      errorClass: null,
+      severity: "info",
+    },
+    {
+      outcome: "not_modified",
+      body: null,
+      status: 304,
+      parserStatus: "not_attempted",
+      newItems: 0,
+      errorClass: null,
+      severity: "info",
+    },
+    {
+      outcome: "rate_limited",
+      body: null,
+      status: 429,
+      parserStatus: "not_attempted",
+      newItems: 0,
+      errorClass: null,
+      severity: "warn",
+    },
+    {
+      outcome: "failed",
+      body: null,
+      status: 503,
+      parserStatus: "not_attempted",
+      newItems: 0,
+      errorClass: "http",
+      severity: "error",
+    },
+    {
+      outcome: "failed",
+      body: "<not-a-feed/>",
+      status: 200,
+      parserStatus: "failure",
+      newItems: 0,
+      errorClass: "parse",
+      severity: "error",
+    },
+    {
+      outcome: "failed",
+      body: null,
+      status: null,
+      parserStatus: "not_attempted",
+      newItems: 0,
+      errorClass: "network",
+      severity: "error",
+    },
+  ] as const)(
+    "emits committed $outcome evidence with HTTP $status at $severity severity",
+    async (testCase) => {
+      const db = getDb(env.DB);
+      const now = Date.now();
+      await db.insert(users).values({
+        id: "event-user",
+        email: "event@example.test",
+        createdAt: now,
+      });
+      await db.insert(feeds).values({
+        id: "event-feed",
+        feedUrl: "https://event.example/feed.xml",
+      });
+      await db.insert(subscriptions).values({
+        id: "event-subscription",
+        userId: "event-user",
+        feedId: "event-feed",
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (testCase.status === null) throw new Error("Network unavailable");
+
+          return new Response(testCase.body, { status: testCase.status });
+        }),
+      );
+
+      const logs = {
+        info: vi.spyOn(logger, "info").mockImplementation(() => {}),
+        warn: vi.spyOn(logger, "warn").mockImplementation(() => {}),
+        error: vi.spyOn(logger, "error").mockImplementation(() => {}),
+      };
+
+      await runFeedPollingWorkflow(
+        workflowEnv(),
+        {
+          instanceId: "event-cycle",
+          workflowName: "feed-polling",
+          timestamp: new Date(now),
+          payload: { triggerReason: "scheduled" },
+        },
+        immediateStep(),
+      );
+
+      const terminalEvents = Object.values(logs)
+        .flatMap((log) => log.mock.calls)
+        .filter(([message]) => message === "feed polling attempt completed");
+
+      expect(terminalEvents).toHaveLength(1);
+
+      const expected = {
+        eventName: "feed_attempt_completed",
+        cycleRunId: "event-cycle",
+        attemptId: "event-cycle:event-feed",
+        feedId: "event-feed",
+        outcome: testCase.outcome,
+        errorClass: testCase.errorClass,
+        httpStatus: testCase.status,
+        parserStatus: testCase.parserStatus,
+        newItems: testCase.newItems,
+      };
+
+      expect(terminalEvents[0]?.[1]).toMatchObject(expected);
+      expect(
+        logs[testCase.severity].mock.calls.filter(
+          ([message]) => message === "feed polling attempt completed",
+        ),
+      ).toHaveLength(1);
+      expect(terminalEvents[0]?.[1]).not.toHaveProperty("userId");
+      expect(terminalEvents[0]?.[1]).not.toHaveProperty("feedTitle");
+      expect(await readAttempt("event-cycle:event-feed")).toMatchObject({
+        outcome: testCase.outcome,
+        error_class: testCase.errorClass,
+        http_status: testCase.status,
+        parser_status: testCase.parserStatus,
+        new_items: testCase.newItems,
+      });
+    },
+  );
 
   it("logs stable identifiers for not-modified and skipped attempts", async () => {
     const db = getDb(env.DB);
@@ -1604,18 +1768,108 @@ describe("Cycle Run outcomes", () => {
       expect.arrayContaining([
         expect.objectContaining({
           cycleRunId: "terminal-log-cycle",
+          eventName: "feed_attempt_completed",
           attemptId: "terminal-log-cycle:not-modified-feed",
           feedId: "not-modified-feed",
           outcome: "not_modified",
+          errorClass: null,
+          httpStatus: 304,
+          parserStatus: "not_attempted",
+          newItems: 0,
         }),
         expect.objectContaining({
           cycleRunId: "terminal-log-cycle",
+          eventName: "feed_attempt_completed",
           attemptId: "terminal-log-cycle:skipped-feed",
           feedId: "skipped-feed",
           outcome: "skipped",
+          errorClass: null,
+          httpStatus: null,
+          parserStatus: "not_attempted",
+          newItems: 0,
         }),
       ]),
     );
+  });
+
+  it("emits skipped evidence for an expired predecessor when a new Cycle Run claims the Feed", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "lease-user",
+      email: "lease@example.test",
+      createdAt: now,
+    });
+    await db.insert(feeds).values({
+      id: "lease-feed",
+      feedUrl: "https://lease.example/feed.xml",
+      pollOwnerAttemptId: "old-cycle:lease-feed",
+      pollFence: 1,
+      pollLeaseExpiresAt: now - 1,
+    });
+    await db.insert(subscriptions).values({
+      id: "lease-subscription",
+      userId: "lease-user",
+      feedId: "lease-feed",
+    });
+    await db.insert(cycleRuns).values({
+      id: "old-cycle",
+      ranAt: now - 600_000,
+      startedAt: now - 600_000,
+      triggerReason: "scheduled",
+      status: "running",
+    });
+    await env.DB.prepare(`INSERT INTO feed_poll_attempts
+      (id, cycle_run_id, feed_id, started_at, ownership_fence, new_items)
+      VALUES (?, ?, ?, ?, ?, 0)`)
+      .bind("old-cycle:lease-feed", "old-cycle", "lease-feed", now - 600_000, 1)
+      .run();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 304 })),
+    );
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => {});
+
+    await runFeedPollingWorkflow(
+      workflowEnv(),
+      {
+        instanceId: "new-cycle",
+        workflowName: "feed-polling",
+        timestamp: new Date(now),
+        payload: { triggerReason: "scheduled" },
+      },
+      immediateStep(),
+    );
+
+    const terminalEvents = infoSpy.mock.calls.filter(
+      ([message]) => message === "feed polling attempt completed",
+    );
+
+    expect(terminalEvents).toHaveLength(2);
+    expect(terminalEvents.map(([, context]) => context)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventName: "feed_attempt_completed",
+          cycleRunId: "old-cycle",
+          attemptId: "old-cycle:lease-feed",
+          feedId: "lease-feed",
+          outcome: "skipped",
+          errorClass: null,
+          httpStatus: null,
+          parserStatus: "not_attempted",
+          newItems: 0,
+        }),
+        expect.objectContaining({
+          cycleRunId: "new-cycle",
+          attemptId: "new-cycle:lease-feed",
+          outcome: "not_modified",
+        }),
+      ]),
+    );
+    expect(await readAttempt("old-cycle:lease-feed")).toMatchObject({
+      outcome: "skipped",
+      parser_status: "not_attempted",
+    });
   });
 
   it("logs committed attempts when another Feed in the batch rejects", async () => {
@@ -1781,11 +2035,169 @@ describe("Cycle Run outcomes", () => {
 
     expect(failureLogs).toHaveLength(1);
     expect(failureLogs[0]?.[1]).toMatchObject({
+      eventName: "feed_attempt_completed",
       cycleRunId: "diagnostic-cycle",
       attemptId: "diagnostic-cycle:diagnostic-feed",
       feedId: "diagnostic-feed",
+      outcome: "failed",
+      errorClass: "http",
+      httpStatus: 503,
+      parserStatus: "not_attempted",
+      newItems: 0,
     });
     expect(failureLogs[0]?.[1]).not.toHaveProperty("userId");
+  });
+
+  it("emits bounded, credential-redacted diagnostics without logging a credential-bearing Feed URL", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+
+    const feedUrl =
+      "https://private-user:private-password@diagnostic.example/feed.xml?token=private-query#private-fragment";
+
+    const diagnostic = `Cannot fetch ${feedUrl} Authorization: Bearer private-bearer GoogleLogin auth=private-google token=private-token ${"detail ".repeat(200)}`;
+    await db.insert(users).values({
+      id: "redaction-user",
+      email: "redaction@example.test",
+      createdAt: now,
+    });
+    await db.insert(feeds).values({ id: "redaction-feed", feedUrl });
+    await db.insert(subscriptions).values({
+      id: "redaction-subscription",
+      userId: "redaction-user",
+      feedId: "redaction-feed",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error(diagnostic);
+      }),
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runFeedPollingWorkflow(
+      workflowEnv(),
+      {
+        instanceId: "redaction-cycle",
+        workflowName: "feed-polling",
+        timestamp: new Date(now),
+        payload: { triggerReason: "scheduled" },
+      },
+      immediateStep(),
+    );
+
+    const terminalEvents = errorSpy.mock.calls
+      .map(([output]) => String(output))
+      .filter((output) =>
+        output.includes('"eventName":"feed_attempt_completed"'),
+      );
+
+    expect(terminalEvents).toHaveLength(1);
+    const output = terminalEvents[0]!;
+
+    for (const sensitive of [
+      "private-user",
+      "private-password",
+      "private-query",
+      "private-fragment",
+      "private-bearer",
+      "private-google",
+      "private-token",
+      "redaction-user",
+      "userId",
+    ]) {
+      expect(output).not.toContain(sensitive);
+    }
+
+    expect(output).toContain("[redacted]");
+    const stored = await readAttempt("redaction-cycle:redaction-feed");
+    expect(stored?.diagnostic).toHaveLength(500);
+    expect(output).toContain(JSON.stringify(stored?.diagnostic).slice(1, -1));
+    expect(output).toContain('"httpStatus":null');
+    expect(output).toContain('"errorClass":"network"');
+  });
+
+  it("does not replay polling or lose history when terminal logging throws", async () => {
+    const db = getDb(env.DB);
+    const now = Date.now();
+    await db.insert(users).values({
+      id: "log-failure-user",
+      email: "log-failure@example.test",
+      createdAt: now,
+    });
+    await db.insert(feeds).values({
+      id: "log-failure-feed",
+      feedUrl: "https://log-failure.example/feed.xml",
+    });
+    await db.insert(subscriptions).values({
+      id: "log-failure-subscription",
+      userId: "log-failure-user",
+      feedId: "log-failure-feed",
+    });
+    const fetchMock = vi.fn(async () => new Response(ONE_ITEM_RSS));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation((message) => {
+      if (message === "feed polling attempt completed")
+        throw new Error("Logging unavailable");
+    });
+
+    const completedSteps = new Map<string, object | void>();
+    let loseAcknowledgment = true;
+
+    // Replays an unacknowledged batch after its terminal logging failed.
+    const step: WorkflowStepRunner = {
+      async do<T extends object | void>(
+        name: string,
+        callback: () => Promise<T>,
+      ): Promise<T> {
+        if (completedSteps.has(name)) {
+          // SAFETY: A step name identifies one callback and result type.
+          return completedSteps.get(name) as T;
+        }
+
+        const result = await callback();
+
+        if (name.startsWith("fetch-batch-") && loseAcknowledgment) {
+          loseAcknowledgment = false;
+          throw new Error("Acknowledgment lost");
+        }
+
+        completedSteps.set(name, result);
+
+        return result;
+      },
+    };
+
+    const event = {
+      instanceId: "log-failure-cycle",
+      workflowName: "feed-polling",
+      timestamp: new Date(now),
+      payload: { triggerReason: "scheduled" as const },
+    };
+
+    await expect(
+      runFeedPollingWorkflow(workflowEnv(), event, step),
+    ).rejects.toThrow("Acknowledgment lost");
+    await expect(
+      runFeedPollingWorkflow(workflowEnv(), event, step),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(
+      infoSpy.mock.calls.filter(
+        ([message]) => message === "feed polling attempt completed",
+      ),
+    ).toHaveLength(1);
+    expect(
+      await readAttempt("log-failure-cycle:log-failure-feed"),
+    ).toMatchObject({ outcome: "new_items", new_items: 1 });
+    expect(
+      await env.DB.prepare(
+        "SELECT status, new_items FROM cycle_runs WHERE id = ?",
+      )
+        .bind("log-failure-cycle")
+        .first(),
+    ).toEqual({ status: "completed", new_items: 1 });
   });
 
   it("leaves interrupted work running instead of completing it as success", async () => {

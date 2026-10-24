@@ -6,7 +6,8 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runFeedPollingWorkflow } from "../src/workflows/feed_polling";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
@@ -128,6 +129,11 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM feeds");
   await env.DB.exec("DELETE FROM users");
   await seedUser();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("GET /app/api/feeds", () => {
@@ -411,6 +417,105 @@ describe("feed detail + deactivation", () => {
     expect(onBody.deactivatedReason).toBeNull();
     expect(onBody.consecutiveErrors).toBe(0);
   });
+
+  it.each([
+    { action: "deactivate", loggingFails: false },
+    { action: "reactivate", loggingFails: false },
+    { action: "deactivate", loggingFails: true },
+  ])(
+    "emits one cancellation event for $action despite repeated requests and late polling completion, loggingFails=$loggingFails",
+    async ({ action, loggingFails }) => {
+      const feedId = await seedFeedAndSub({
+        feedUrl: "https://cancel.example/feed",
+        title: "Cancel",
+      });
+
+      let resolveResponse: (response: Response) => void = () => {};
+
+      const pendingResponse = new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      });
+
+      const network = vi.fn(() => pendingResponse);
+      vi.stubGlobal("fetch", network);
+
+      const logs = vi.spyOn(console, "log").mockImplementation((output) => {
+        if (
+          loggingFails &&
+          String(output).includes(`"attemptId":"cancel-cycle:${feedId}"`)
+        ) {
+          throw new Error("Log delivery unavailable");
+        }
+      });
+
+      const polling = runFeedPollingWorkflow(
+        { DB: env.DB, ANALYTICS: env.ANALYTICS, ANALYTICS_ENABLED: "false" },
+        {
+          instanceId: "cancel-cycle",
+          workflowName: "feed-polling",
+          timestamp: new Date(),
+          payload: { triggerReason: "scheduled" },
+        },
+        { do: (_name, callback) => callback() },
+      );
+
+      await vi.waitFor(() => expect(network).toHaveBeenCalledOnce());
+
+      try {
+        const changed = await fetchApi(`/app/api/feeds/${feedId}/${action}`, {
+          method: "POST",
+        });
+
+        expect(changed.status).toBe(200);
+
+        const repeated = await fetchApi(`/app/api/feeds/${feedId}/${action}`, {
+          method: "POST",
+        });
+
+        expect(repeated.status).toBe(200);
+      } finally {
+        resolveResponse(new Response(null, { status: 304 }));
+        await polling;
+      }
+
+      const terminalEvents = logs.mock.calls
+        .map(([output]) => String(output))
+        .filter(
+          (output) =>
+            output.includes('"eventName":"feed_attempt_completed"') &&
+            output.includes(`"attemptId":"cancel-cycle:${feedId}"`),
+        );
+
+      expect(terminalEvents).toHaveLength(1);
+      const output = terminalEvents[0] ?? "";
+      expect(output).toContain('"level":"INFO"');
+      expect(output).toContain('"cycleRunId":"cancel-cycle"');
+      expect(output).toContain(`"attemptId":"cancel-cycle:${feedId}"`);
+      expect(output).toContain(`"feedId":"${feedId}"`);
+      expect(output).toContain('"outcome":"skipped"');
+      expect(output).toContain('"errorClass":null');
+      expect(output).toContain('"httpStatus":null');
+      expect(output).toContain('"parserStatus":"not_attempted"');
+      expect(output).toContain('"newItems":0');
+      expect(output).not.toContain("dev-user-id");
+      expect(output).not.toContain("userId");
+      expect(network).toHaveBeenCalledOnce();
+      expect(
+        await env.DB.prepare(
+          "SELECT outcome FROM feed_poll_attempts WHERE id = ?",
+        )
+          .bind(`cancel-cycle:${feedId}`)
+          .first(),
+      ).toEqual({ outcome: "skipped" });
+      expect(
+        await env.DB.prepare(
+          "SELECT status, skipped_feeds FROM cycle_runs WHERE id = ?",
+        )
+          .bind("cancel-cycle")
+          .first(),
+      ).toEqual({ status: "completed", skipped_feeds: 1 });
+    },
+  );
 
   it("returns 404 when mutating a nonexistent feed", async () => {
     const res = await fetchApi(`/app/api/feeds/nope/deactivate`, {

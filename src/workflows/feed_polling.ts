@@ -4,11 +4,11 @@ import {
   WorkflowStep,
 } from "cloudflare:workers";
 import { logger } from "../lib/logger";
+import { logFeedAttemptCompletion } from "../lib/polling-telemetry";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import {
   createFeedPoller,
   createPollingCycleManager,
-  type FeedPollResult,
   type FeedTransport,
   type PollObserver,
   type PollTriggerReason,
@@ -230,6 +230,9 @@ async function pollWorkflow(
         const observer: PollObserver = {
           publish(event) {
             switch (event.kind) {
+              case "feedAttemptCompleted":
+                logFeedAttemptCompletion(event, logger);
+                break;
               case "feedPolled":
                 metrics.recordParse({
                   feedId: event.feedId,
@@ -292,12 +295,6 @@ async function pollWorkflow(
             cycleRunId,
             error: err instanceof Error ? err.message : String(err),
           });
-        }
-
-        for (const result of settled) {
-          if (result.status === "fulfilled") {
-            logAttemptResult(cycleRunId, result.value);
-          }
         }
 
         const rejected = settled.find(
@@ -377,40 +374,6 @@ async function pollWorkflow(
     newArticles: summary.newItems,
     failedFeeds: summary.failedFeeds,
     skippedFeeds: summary.skippedFeeds,
-  });
-}
-
-/** Emits one searchable terminal log for every durable Feed attempt. */
-function logAttemptResult(cycleRunId: string, result: FeedPollResult): void {
-  const context = {
-    cycleRunId,
-    attemptId: attemptIdFor(cycleRunId, result.feedId),
-    feedId: result.feedId,
-    feedTitle: result.feedTitle,
-    outcome: result.outcome,
-  };
-
-  if (result.outcome === "failed") {
-    logger.error("feed polling attempt completed", {
-      ...context,
-      errorClass: result.errorClass,
-      error: result.error,
-    });
-
-    return;
-  }
-
-  if (result.outcome === "rate_limited") {
-    logger.warn("feed polling attempt completed", context);
-
-    return;
-  }
-
-  logger.info("feed polling attempt completed", {
-    ...context,
-    ...((result.outcome === "new_items" || result.outcome === "unchanged") && {
-      newItems: result.newItems,
-    }),
   });
 }
 
