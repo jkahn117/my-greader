@@ -2,7 +2,7 @@
 // Applies D1 migrations so tests have the correct schema.
 import { env } from "cloudflare:workers";
 import { applyD1Migrations } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
+import type { D1Migration } from "@cloudflare/vitest-plugin";
 import { beforeAll } from "vitest";
 
 beforeAll(async () => {

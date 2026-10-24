@@ -7,7 +7,7 @@ import {
 import {
   cloudflareTest,
   readD1Migrations,
-} from "@cloudflare/vitest-pool-workers";
+} from "@cloudflare/vitest-plugin";
 
 interface TestConfigOptions {
   developmentAuth: boolean;
@@ -37,8 +37,8 @@ export async function createWorkersTestConfig({
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
           // Tests replace outbound services explicitly and may never reach the public network.
-          outboundService: {
-            network: { deny: ["0.0.0.0/0", "::/0"] },
+          outboundService() {
+            throw new Error("Outbound network access is disabled in tests");
           },
           bindings: {
             TEST_MIGRATIONS: JSON.stringify(migrations),

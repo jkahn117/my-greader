@@ -1,6 +1,6 @@
 // GReader protocol tests modelled on the FreshRSS GReader test suite.
 // Each section mirrors a FreshRSS test group: auth, subscriptions, streams, tagging.
-// Tests run against the real Worker + in-memory D1 via @cloudflare/vitest-pool-workers.
+// Tests run against the real Worker + in-memory D1 via @cloudflare/vitest-plugin.
 
 import { env } from "cloudflare:workers";
 import {

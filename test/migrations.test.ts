@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { applyD1Migrations } from "cloudflare:test";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers";
+import type { D1Migration } from "@cloudflare/vitest-plugin";
 import { describe, expect, it } from "vitest";
 import {
   LEGACY_MIGRATION,
