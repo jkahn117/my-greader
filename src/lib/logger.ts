@@ -30,8 +30,13 @@ export const logger = new Logger({
  *
  * Drop-in replacement for all createLogger(ctx) call sites.
  */
-export function createLogger(ctx: Record<string, unknown> = {}): Logger {
+interface LoggerContext {
+  [key: string]: string | number | boolean | null | undefined;
+}
+
+export function createLogger(ctx: LoggerContext = {}): Logger {
   const correlationId = logger.getCorrelationId();
+
   return logger.child(correlationId ? { correlationId, ...ctx } : ctx);
 }
 

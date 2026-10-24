@@ -79,26 +79,35 @@ const STATUS_OPTIONS: [DisplayStatus | "deactivated" | "", string][] = [
 function displayStatus(f: FeedListItem): DisplayStatus {
   if (f.status === "deactivated") {
     if (f.deactivatedReason === "manual") return "paused";
+
     if (f.deactivatedReason?.startsWith("automatic")) return "auto_deactivated";
+
     return "legacy_deactivated";
   }
+
   if (f.status === "active") return "healthy";
+
   return f.status;
 }
 
 /** Whether a row matches the status filter ("deactivated" spans auto + legacy). */
 function matchesStatus(s: DisplayStatus, filter: string): boolean {
   if (filter === "") return true;
+
   if (filter === "deactivated")
     return s === "auto_deactivated" || s === "legacy_deactivated";
+
   return s === filter;
 }
 
 /** Next-eligibility cell text; deactivated Feeds are never scheduled. */
 function nextEligibility(f: FeedListItem): string {
   if (f.deactivatedAt != null) return "Not scheduled";
+
   if (f.nextCheckAt == null) return "Next cycle";
+
   if (f.nextCheckAt <= Date.now()) return "Eligible now";
+
   return formatTime(f.nextCheckAt);
 }
 
@@ -114,17 +123,23 @@ function feedDomain(feedUrl: string): string {
 /** Missing older timestamps are unknown, not proof that a check never happened. */
 function historyTime(timestamp: number | null): string {
   if (timestamp == null) return "Not recorded";
+
   return formatTime(timestamp);
 }
 
 /** Secondary evidence line under a Feed title (reason and last error). */
 function evidence(f: FeedListItem, s: DisplayStatus): string[] {
   const parts: string[] = [];
+
   if (s === "paused") parts.push("Manually paused");
+
   if (s === "legacy_deactivated")
     parts.push("Deactivated before reason tracking — cause unknown");
+
   if (s === "rate_limited") parts.push("HTTP 429 on latest check");
+
   if (f.lastError && s !== "healthy" && s !== "paused") parts.push(f.lastError);
+
   return parts;
 }
 
@@ -149,6 +164,7 @@ export function FeedsPending() {
 
 export function FeedsError({ status }: { status?: number }) {
   const unauthorized = status === 401 || status === 403;
+
   return (
     <Card>
       <CardContent className="py-10 text-center">
@@ -180,14 +196,17 @@ function ImportOpml() {
   async function importFile(file: File) {
     setBusy(true);
     setNotice(null);
+
     try {
       const form = new FormData();
       form.set("opml", file);
       const res = await apiPostForm<ImportResponse>("/app/api/import", form);
+
       const parts = [
         `${res.imported} imported`,
         `${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`,
       ];
+
       if (res.errors.length > 0)
         parts.push(`${res.errors.length} failed (${res.errors.join(", ")})`);
       setNotice(parts.join(" · "));
@@ -214,6 +233,7 @@ function ImportOpml() {
         tabIndex={-1}
         onChange={(e) => {
           const file = e.target.files?.[0];
+
           if (file) void importFile(file);
         }}
       />
@@ -261,6 +281,7 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+
     return rows.filter(
       ({ feed: f, status: s }) =>
         (q === "" ||
@@ -274,6 +295,7 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
   const attention = rows.filter(
     (r) => RANK[r.status] <= RANK.rate_limited,
   ).length;
+
   const paused = rows.filter((r) => r.status === "paused").length;
   const filtering = query !== "" || status !== "" || folder !== "";
 
@@ -403,6 +425,7 @@ export function FeedsPage({ data }: { data: FeedsResponse }) {
                   const pill = PILL[s];
                   const lines = evidence(f, s);
                   const domain = feedDomain(f.feedUrl);
+
                   return (
                     <TableRow key={f.subscriptionId}>
                       <TableCell className="max-w-0 py-3 pl-6 md:w-[38%]">

@@ -21,13 +21,21 @@ import { deriveItemId } from "../src/lib/crypto";
 import type { OverviewResponse } from "../src/shared/dashboard-api";
 
 const BASE = "http://localhost";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Reads the response produced by the typed overview route under test. */
+async function overviewResponse(response: Response): Promise<OverviewResponse> {
+  // SAFETY: The request targets the in-process route whose handler returns OverviewResponse.
+  return (await response.json()) as OverviewResponse;
+}
 
 async function fetch(path: string, init: RequestInit = {}): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -57,6 +65,7 @@ async function seedFeed(opts: {
     userId: opts.userId ?? "dev-user-id",
     feedId,
   });
+
   return feedId;
 }
 
@@ -71,6 +80,7 @@ async function seedItem(feedId: string, guid: string, fetchedAt: number) {
     fetchedAt,
     publishedAt: fetchedAt,
   });
+
   return id;
 }
 
@@ -88,10 +98,12 @@ beforeEach(async () => {
 describe("GET /app/api/overview", () => {
   it("returns user-scoped summary totals", async () => {
     const now = Date.now();
+
     const feedA = await seedFeed({
       feedUrl: "https://a.example.com/feed.xml",
       title: "Feed A",
     });
+
     const feedB = await seedFeed({
       feedUrl: "https://b.example.com/feed.xml",
       title: "Feed B",
@@ -99,11 +111,13 @@ describe("GET /app/api/overview", () => {
     });
 
     await seedItem(feedA, "https://a.example.com/1", now - DAY_MS);
+
     const recentItem = await seedItem(
       feedB,
       "https://b.example.com/1",
       now - 2 * DAY_MS,
     );
+
     // outside the 7-day window — must not count
     await seedItem(feedA, "https://a.example.com/old", now - 8 * DAY_MS);
 
@@ -125,7 +139,7 @@ describe("GET /app/api/overview", () => {
 
     const res = await fetch("/app/api/overview");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.feedCount).toBe(2);
     expect(body.activeFeedCount).toBe(1);
     expect(body.deactivatedFeedCount).toBe(1);
@@ -141,6 +155,7 @@ describe("GET /app/api/overview", () => {
   it("excludes other users' feeds and items", async () => {
     const now = Date.now();
     await seedUser("other-user", "other@example.com");
+
     const otherFeed = await seedFeed({
       userId: "other-user",
       feedUrl: "https://other.example.com/feed.xml",
@@ -148,11 +163,13 @@ describe("GET /app/api/overview", () => {
       deactivatedAt: now - DAY_MS,
       consecutiveErrors: 3,
     });
+
     const itemId = await seedItem(
       otherFeed,
       "https://other.example.com/1",
       now - DAY_MS,
     );
+
     const db = getDb(env.DB);
     await db.insert(itemState).values({
       itemId,
@@ -163,7 +180,7 @@ describe("GET /app/api/overview", () => {
 
     const res = await fetch("/app/api/overview");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.feedCount).toBe(0);
     expect(body.newItemsLast7Days).toBe(0);
     expect(body.markedReadLast7Days).toBe(0);
@@ -177,7 +194,7 @@ describe("GET /app/api/overview", () => {
       consecutiveErrors: 2,
     });
     const res = await fetch("/app/api/overview");
-    const body = (await res.json()) as OverviewResponse;
+    const body = await overviewResponse(res);
     expect(body.attention.total).toBe(1);
     expect(body.attention.failing).toBe(1);
   });

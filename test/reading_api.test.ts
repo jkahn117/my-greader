@@ -24,9 +24,13 @@ import { eq } from "drizzle-orm";
 import type { ReadingResponse } from "../src/shared/dashboard-api";
 
 const BASE = "http://localhost";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
+
 const HOUR_MS = 60 * 60 * 1000;
+
 const TOKEN = "reading-test-token";
+
 const USER = "dev-user-id";
 
 async function fetch(
@@ -36,8 +40,9 @@ async function fetch(
 ): Promise<Response> {
   const req = new Request(`${BASE}${path}`, init);
   const ctx = createExecutionContext();
-  const res = await worker.fetch(req, { ...env, ...vars } as Env, ctx);
+  const res = await worker.fetch(req, { ...env, ...vars }, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -47,7 +52,10 @@ async function reading(query = "", timezone = "UTC"): Promise<ReadingResponse> {
     {},
     { DISPLAY_TIMEZONE: timezone },
   );
+
   expect(res.status).toBe(200);
+
+  // SAFETY: The request targets the in-process route whose handler returns ReadingResponse.
   return (await res.json()) as ReadingResponse;
 }
 
@@ -60,6 +68,7 @@ async function editTag(itemId: string, op: "a" | "r", tag: string) {
     },
     body: new URLSearchParams({ i: itemId, [op]: tag }).toString(),
   });
+
   expect(res.status).toBe(200);
 }
 
@@ -78,6 +87,7 @@ async function seedFeed(opts: {
     title: opts.title,
     deactivatedAt: opts.deactivatedAt ?? null,
   });
+
   if (opts.userId !== null) {
     await db.insert(subscriptions).values({
       id: crypto.randomUUID(),
@@ -85,6 +95,7 @@ async function seedFeed(opts: {
       feedId,
     });
   }
+
   return feedId;
 }
 
@@ -98,6 +109,7 @@ async function seedItem(feedId: string, fetchedAt = Date.now()) {
     fetchedAt,
     publishedAt: fetchedAt,
   });
+
   return id;
 }
 
@@ -136,6 +148,7 @@ beforeEach(async () => {
   ]) {
     await env.DB.exec(`DELETE FROM ${table}`);
   }
+
   const db = getDb(env.DB);
   await db.insert(users).values([
     { id: USER, email: "dev@localhost", createdAt: 0 },
@@ -157,6 +170,7 @@ describe("GET /app/api/reading", () => {
       2,
       "America/Santiago",
     );
+
     expect(days[1].start).toBe(Date.parse("2026-09-06T04:00:00Z"));
     expect(days[0].end).toBe(days[1].start);
     expect(days[1].end - days[1].start).toBe(23 * HOUR_MS);
@@ -171,6 +185,7 @@ describe("GET /app/api/reading", () => {
     expect(empty.subscriptionCount).toBe(0);
 
     expect((await reading("?days=30")).daily).toHaveLength(30);
+
     for (const bad of ["10", "abc", "-7"]) {
       const res = await fetch(`/app/api/reading?days=${bad}`);
       expect(res.status).toBe(400);
@@ -273,6 +288,7 @@ describe("GET /app/api/reading", () => {
       .select()
       .from(itemState)
       .where(eq(itemState.itemId, unread));
+
     expect(row.isRead).toBe(0);
     expect(row.readAt).toBeNull();
   });
@@ -281,6 +297,7 @@ describe("GET /app/api/reading", () => {
     const feed = await seedFeed({ title: "Bulk" });
     await seedItem(feed);
     await seedItem(feed);
+
     const res = await fetch("/reader/api/0/mark-all-as-read", {
       method: "POST",
       headers: {
@@ -291,6 +308,7 @@ describe("GET /app/api/reading", () => {
         s: "user/-/state/com.google/reading-list",
       }).toString(),
     });
+
     expect(res.status).toBe(200);
     expect((await reading()).markedRead).toBe(2);
   });
@@ -303,10 +321,12 @@ describe("GET /app/api/reading", () => {
       userId: "other-user",
       feedId: shared,
     });
+
     const othersOnly = await seedFeed({
       title: "Others",
       userId: "other-user",
     });
+
     const unsubscribed = await seedFeed({ title: "Gone", userId: null });
     const dead = await seedFeed({ title: "Dead", deactivatedAt: now - DAY_MS });
 

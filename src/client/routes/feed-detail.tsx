@@ -53,6 +53,7 @@ interface ProblemSummary {
 /** "the last check" / "the last 3 checks" / "at least the last 500 checks". */
 function lastChecks(n: number, lowerBound: boolean): string {
   if (n <= 1 && !lowerBound) return "the last check";
+
   return `${lowerBound ? "at least " : ""}the last ${n} checks`;
 }
 
@@ -69,10 +70,12 @@ function problemSummary(
     detail.lastSuccessfulAt != null
       ? `Last successful check ${formatDateTime(detail.lastSuccessfulAt)}.`
       : "No successful check recorded.";
+
   const lastError = detail.lastError ? `Last error: ${detail.lastError}. ` : "";
 
   if (detail.deactivatedAt != null) {
     const when = formatDateTime(detail.deactivatedAt);
+
     switch (detail.deactivatedReason) {
       case "manual":
         return {
@@ -80,14 +83,14 @@ function problemSummary(
           headline: "Polling is paused manually.",
           detail: `Manual Deactivation ${when}. No checks run until the Feed is reactivated. ${lastSuccess}`,
         };
-      case "transient":
+      case "automatic_transient":
         return {
           tone: "destructive",
           headline:
             "Automatically deactivated after repeated transient errors.",
           detail: `Automatic Deactivation ${when}. ${lastError}${lastSuccess}`,
         };
-      case "permanent":
+      case "automatic_permanent":
         return {
           tone: "destructive",
           headline: "Automatically deactivated after a permanent failure.",
@@ -106,6 +109,7 @@ function problemSummary(
   if (detail.status === "rate_limited") {
     const streak = history?.streaks.rateLimited;
     const lead = `HTTP 429 on ${lastChecks(streak?.count ?? 1, streak?.lowerBound ?? false)}.`;
+
     return {
       tone: "warning",
       headline: `${lead} Backoff is active.`,
@@ -116,12 +120,15 @@ function problemSummary(
   if (detail.status === "failing") {
     const streak = history?.streaks.problem;
     const latestFailure = history?.attempts.find((a) => a.status === "error");
+
     const cause =
       latestFailure?.errorMessage ?? detail.lastError ?? "Failed checks";
+
     // Prefer check-based streaks; fall back to the persisted counter while
     // history loads or when no attempts are retained.
     const count = streak?.count || detail.consecutiveErrors || 1;
     const headline = `${cause} on ${lastChecks(count, streak?.lowerBound ?? false)}.`;
+
     return {
       tone: "destructive",
       headline,
@@ -187,6 +194,7 @@ export function FeedDetailPending() {
 
 export function FeedDetailError({ status }: { status?: number }) {
   const missing = status === 404;
+
   return (
     <Card>
       <CardContent className="py-10 text-center">
@@ -230,10 +238,12 @@ export function FeedDetailPage({ data }: { data: FeedDetailResponse }) {
   async function runAction(action: "deactivate" | "reactivate") {
     setBusy(true);
     setNotice(null);
+
     try {
       const res = await apiPost<FeedDetailResponse>(
         `/app/api/feeds/${detail.feedId}/${action}`,
       );
+
       setDetail(res);
       setNotice(`Feed ${action}d.`);
       router.invalidate();
@@ -251,8 +261,10 @@ export function FeedDetailPage({ data }: { data: FeedDetailResponse }) {
   function setOpen(id: string, open: boolean) {
     setOpenIds((prev) => {
       const next = new Set(prev);
+
       if (open) next.add(id);
       else next.delete(id);
+
       return next;
     });
   }

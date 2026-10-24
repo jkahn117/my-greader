@@ -1,5 +1,4 @@
 /** @jsxImportSource react */
-import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { ChevronRight } from "lucide-react";
@@ -7,7 +6,6 @@ import type {
   AttentionFeed,
   OverviewPanelsResponse,
 } from "../../shared/dashboard-api";
-import { apiGet } from "../lib/api";
 import { formatTime } from "../lib/time";
 import {
   Card,
@@ -30,6 +28,7 @@ const readingChartConfig = {
 /** Weekday label for a display-timezone YYYY-MM-DD day key. */
 function dayLabel(date: string): string {
   const d = new Date(`${date}T12:00:00`);
+
   return d.toLocaleDateString("en-US", { weekday: "short" });
 }
 
@@ -44,6 +43,7 @@ function ReadingChart({
   timezone: string;
 }) {
   const data = daily.map((d) => ({ day: dayLabel(d.date), ...d }));
+
   return (
     <div>
       <ChartContainer
@@ -126,39 +126,21 @@ const ATTENTION_PILL: Record<
 };
 
 export function OverviewPanels({
+  data,
   timezone,
   feedCount,
 }: {
+  data: OverviewPanelsResponse | null;
   timezone: string;
   feedCount: number;
 }) {
-  const [data, setData] = useState<OverviewPanelsResponse | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiGet<OverviewPanelsResponse>("/app/api/overview/panels")
-      .then((res) => {
-        if (!cancelled) setData(res);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (failed) {
+  if (!data) {
     return (
       <p className="text-sm text-muted-foreground">
         Overview panels could not be loaded — the summary above is still
         accurate.
       </p>
     );
-  }
-  if (!data) {
-    return <p className="text-sm text-muted-foreground">Loading panels…</p>;
   }
 
   const healthRows: [string, number, string?][] = [
@@ -283,6 +265,7 @@ export function OverviewPanels({
                             )
                           : [1]),
                       );
+
                       return (
                         <div
                           key={d.day}
@@ -327,6 +310,7 @@ export function OverviewPanels({
                 <ul className="divide-y">
                   {data.needsAttention.map((f) => {
                     const pill = ATTENTION_PILL[f.kind];
+
                     return (
                       <li key={f.feedId}>
                         <Link

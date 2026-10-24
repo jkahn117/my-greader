@@ -51,6 +51,65 @@ test("creates a token that is shown once and persists", async ({
   expect(await page.content()).not.toContain(raw);
 });
 
+test("keeps keyboard focus predictable when cancelling token actions and reports failures", async ({
+  page,
+}) => {
+  await page.goto("/app/access");
+
+  await page.getByRole("button", { name: "Create API Token" }).click();
+  const name = page.getByLabel("Token name");
+  await expect(name).toBeFocused();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  const cancelCreate = page.getByRole("button", { name: "Cancel" });
+  await expect(cancelCreate).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "Create API Token" }),
+  ).toBeFocused();
+
+  await page.getByRole("button", { name: "Create API Token" }).click();
+  await page.getByLabel("Token name").fill("Unavailable token");
+  await page.route("**/app/api/tokens", (route) =>
+    route.fulfill({ status: 500, body: "internal error with private details" }),
+  );
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Token creation failed (500). Try again.",
+  );
+  await expect(page.getByLabel("Token name")).toBeFocused();
+  await expect(page.getByText("private details")).toHaveCount(0);
+  await page.unroute("**/app/api/tokens");
+
+  const doomed = page.getByRole("row", { name: /Seeded Doomed/ });
+  await doomed.getByRole("button", { name: "Revoke Seeded Doomed" }).click();
+  const confirmation = page.getByRole("group", {
+    name: "Confirm revoking Seeded Doomed",
+  });
+  const confirm = confirmation.getByRole("button", { name: "Confirm revoke" });
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press("Tab");
+  const cancelRevoke = confirmation.getByRole("button", { name: "Cancel" });
+  await expect(cancelRevoke).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    doomed.getByRole("button", { name: "Revoke Seeded Doomed" }),
+  ).toBeFocused();
+
+  await doomed.getByRole("button", { name: "Revoke Seeded Doomed" }).click();
+  await page.route("**/app/api/tokens/*", (route) =>
+    route.fulfill({ status: 500, body: "internal error with private details" }),
+  );
+  await page.getByRole("button", { name: "Confirm revoke" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Revoking “Seeded Doomed” failed (500).",
+  );
+  await expect(
+    doomed.getByRole("button", { name: "Revoke Seeded Doomed" }),
+  ).toBeFocused();
+  await expect(page.getByText("private details")).toHaveCount(0);
+});
+
 test("revokes one token and leaves the others active", async ({ page }) => {
   await page.goto("/app/access");
   const doomed = page.getByRole("row", { name: /Seeded Doomed/ });

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { createLogger } from "../../lib/logger";
-import { createMetrics } from "../../lib/metrics";
+import { analyticsEnabled, createMetrics } from "../../lib/metrics";
 import {
   createSubscriptionLifecycle,
   type SubObserver,
@@ -19,6 +19,7 @@ subs.get("/reader/api/0/subscription/list", async (c) => {
     path: "/reader/api/0/subscription/list",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
   const noop: SubObserver = { publish: () => {} };
@@ -49,9 +50,11 @@ subs.get("/reader/api/0/tag/list", async (c) => {
     path: "/reader/api/0/tag/list",
     userId: c.get("userId"),
   });
+
   const lifecycle = createSubscriptionLifecycle(c.env.DB, {
     publish: () => {},
   });
+
   const folders = new Set(
     (await lifecycle.list(c.get("userId")))
       .map((subscription) => subscription.folder)
@@ -72,22 +75,27 @@ subs.get("/reader/api/0/tag/list", async (c) => {
 // POST /reader/api/0/subscription/quickadd
 // ---------------------------------------------------------------------------
 
+const quickaddSchema = v.object({
+  quickadd: v.pipe(v.string(), v.trim(), v.minLength(1)),
+});
+
 subs.post("/reader/api/0/subscription/quickadd", async (c) => {
   const logger = createLogger({
     path: "/reader/api/0/subscription/quickadd",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
-  const body = await c.req.parseBody();
-  const feedUrl =
-    typeof body["quickadd"] === "string" ? body["quickadd"].trim() : null;
+  const parsed = v.safeParse(quickaddSchema, await c.req.parseBody());
 
-  if (!feedUrl) {
+  if (!parsed.success) {
     logger.warn("quickadd missing feedUrl");
+
     return c.text("Error", 400);
   }
 
+  const feedUrl = parsed.output.quickadd;
   const noop: SubObserver = { publish: () => {} };
   const lifecycle = createSubscriptionLifecycle(c.env.DB, noop);
 
@@ -97,6 +105,7 @@ subs.post("/reader/api/0/subscription/quickadd", async (c) => {
       feedUrl,
       feedId: result.feedId,
     });
+
     return c.json({
       numResults: 1,
       query: feedUrl,
@@ -124,10 +133,12 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     path: "/reader/api/0/subscription/edit",
     userId: c.get("userId"),
   });
+
   const metrics = createMetrics(
     c.env.ANALYTICS,
-    (c.env.ANALYTICS_ENABLED as string) !== "false",
+    analyticsEnabled(c.env.ANALYTICS_ENABLED),
   );
+
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
@@ -137,6 +148,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     logger.warn("subscription/edit bad request", {
       errors: parsed.issues,
     });
+
     return c.text("Error", 400);
   }
 
@@ -189,6 +201,7 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
     const folder = a?.startsWith("user/-/label/")
       ? a.slice("user/-/label/".length)
       : null;
+
     try {
       await lifecycle.subscribe(userId, feedRef, {
         title: t,
@@ -205,17 +218,22 @@ subs.post("/reader/api/0/subscription/edit", async (c) => {
 
   if (ac === "edit") {
     let folder: string | null | undefined = undefined;
+
     if (r?.startsWith("user/-/label/")) folder = null;
+
     if (a?.startsWith("user/-/label/"))
       folder = a.slice("user/-/label/".length);
+
     const result = await lifecycle.edit(userId, feedRef, {
       title: t,
       folder,
     });
+
     if (!result) return c.text("Error", 404);
   }
 
   c.executionCtx.waitUntil(metrics.flush());
+
   return c.text("OK");
 });
 

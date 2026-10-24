@@ -1,9 +1,12 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { createLogger } from "../../lib/logger";
-import { createMetrics } from "../../lib/metrics";
+import { analyticsEnabled, createMetrics } from "../../lib/metrics";
 import { normalizeItemId } from "../../lib/crypto";
-import { createItemStateModule } from "../../feed/item-state";
+import {
+  createItemStateModule,
+  type ItemStateUpdate,
+} from "../../feed/item-state";
 import { parseStreamId } from "./helpers";
 import type { Variables } from "./helpers";
 
@@ -16,6 +19,7 @@ const state = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 const editTagSchema = v.object({
   // `i` may appear multiple times — parsed with { all: true }
+  i: v.union([v.string(), v.array(v.string())]),
   a: v.optional(v.string()), // add tag
   r: v.optional(v.string()), // remove tag
 });
@@ -25,33 +29,43 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     path: "/reader/api/0/edit-tag",
     userId: c.get("userId"),
   });
+
   const metrics = createMetrics(
     c.env.ANALYTICS,
-    (c.env.ANALYTICS_ENABLED as string) !== "false",
+    analyticsEnabled(c.env.ANALYTICS_ENABLED),
   );
+
   const userId = c.get("userId");
 
   const body = await c.req.parseBody({ all: true });
   const parsed = v.safeParse(editTagSchema, body);
+
   if (!parsed.success) return c.text("Error", 400);
 
-  const { a, r } = parsed.output;
+  const { a, r, i } = parsed.output;
 
   // Collect item IDs — may be a single string or array
-  const rawIds = Array.isArray(body["i"])
-    ? (body["i"] as string[])
-    : [body["i"] as string];
+  const rawIds = Array.isArray(i) ? i : [i];
+
   const itemIds = rawIds.filter(Boolean).map(normalizeItemId);
 
   if (itemIds.length === 0) return c.text("Error", 400);
 
-  const updates: { isRead?: number; isStarred?: number } = {};
+  interface TagUpdates {
+    isRead?: number;
+    isStarred?: number;
+  }
+
+  const updates: TagUpdates = {};
   const addTag = a ?? "";
   const removeTag = r ?? "";
 
   if (addTag === "user/-/state/com.google/read") updates.isRead = 1;
+
   if (removeTag === "user/-/state/com.google/read") updates.isRead = 0;
+
   if (addTag === "user/-/state/com.google/starred") updates.isStarred = 1;
+
   if (removeTag === "user/-/state/com.google/starred") updates.isStarred = 0;
 
   if (Object.keys(updates).length === 0) {
@@ -59,18 +73,21 @@ state.post("/reader/api/0/edit-tag", async (c) => {
       addTag,
       removeTag,
     });
+
     return c.text("OK");
   }
+
+  const changes: ItemStateUpdate = {};
+
+  if (updates.isRead !== undefined) changes.isRead = updates.isRead === 1;
+
+  if (updates.isStarred !== undefined)
+    changes.isStarred = updates.isStarred === 1;
 
   const changedItems = await createItemStateModule(c.env.DB).update({
     userId,
     itemIds,
-    changes: {
-      ...(updates.isRead !== undefined ? { isRead: updates.isRead === 1 } : {}),
-      ...(updates.isStarred !== undefined
-        ? { isStarred: updates.isStarred === 1 }
-        : {}),
-    },
+    changes,
   });
 
   if (updates.isRead === 1) {
@@ -90,6 +107,7 @@ state.post("/reader/api/0/edit-tag", async (c) => {
     removeTag,
   });
   c.executionCtx.waitUntil(metrics.flush());
+
   return c.text("OK");
 });
 
@@ -107,10 +125,12 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
     path: "/reader/api/0/mark-all-as-read",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
   const body = await c.req.parseBody();
   const parsed = v.safeParse(markAllReadSchema, body);
+
   if (!parsed.success) return c.text("Error", 400);
 
   const { s, ts } = parsed.output;
@@ -118,6 +138,7 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
 
   // GReader timestamps use microseconds while Item timestamps use milliseconds.
   const cutoffMs = ts ? Math.floor(ts / 1000) : null;
+
   const count = await createItemStateModule(c.env.DB).markAllRead({
     userId,
     scope,
@@ -125,6 +146,7 @@ state.post("/reader/api/0/mark-all-as-read", async (c) => {
   });
 
   logger.info("mark-all-as-read", { stream: s, count });
+
   return c.text("OK");
 });
 

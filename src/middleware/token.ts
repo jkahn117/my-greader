@@ -1,5 +1,8 @@
 import type { Context, Next } from "hono";
 import { createApiTokenLifecycle } from "../domain/tokens";
+import type { Variables } from "../types/context";
+
+type TokenContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 /**
  * GReader API token middleware.
@@ -7,16 +10,16 @@ import { createApiTokenLifecycle } from "../domain/tokens";
  * Parses the `Authorization: GoogleLogin auth=<token>` header, then delegates
  * validation and usage policy to the API Token lifecycle module.
  */
-export async function tokenMiddleware(c: Context, next: Next) {
+export async function tokenMiddleware(c: TokenContext, next: Next) {
   const auth = c.req.header("Authorization") ?? "";
+
   const raw = auth.startsWith("GoogleLogin auth=")
     ? auth.slice("GoogleLogin auth=".length).trim()
     : null;
 
   if (!raw) return c.text("Unauthorized", 401);
 
-  const env = c.env as Env;
-  const tokenLifecycle = createApiTokenLifecycle(env.DB);
+  const tokenLifecycle = createApiTokenLifecycle(c.env.DB);
   const tokenRow = await tokenLifecycle.findActive(raw);
 
   if (!tokenRow) return c.text("Unauthorized", 401);

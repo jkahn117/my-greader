@@ -36,36 +36,51 @@ const STRIP_CHECKS = 10;
 /** Short outcome label used across strip, results and badges. */
 export function attemptLabel(a: FeedAttempt): string {
   if (a.status === "ok") return a.itemsAdded ? "New items" : "Unchanged";
+
   if (a.status === "not_modified") return "Not modified";
+
   if (a.status === "rate_limited") return "Rate limited";
+
   if (a.status === "error") return "Failed";
+
   if (a.status === "skipped") return "Skipped";
+
   return "In progress";
 }
 
 /** Outcome plus the structured HTTP status when it adds evidence. */
 function outcomeLine(a: FeedAttempt): string {
   const label = attemptLabel(a);
+
   if (a.status === "rate_limited" || a.status === "error") {
     if (a.httpStatus != null && a.httpStatus !== 200)
       return `${label} · HTTP ${a.httpStatus}`;
+
     if (a.errorKind) return `${label} · ${errorKindLabel(a.errorKind)}`;
   }
+
   if (a.status === "not_modified") return `${label} · HTTP 304`;
+
   return label;
 }
 
 function outcomeTextClass(a: FeedAttempt): string {
   if (a.status === "rate_limited") return "text-warning-foreground";
+
   if (a.status === "error") return "text-destructive";
+
   if (a.status === "ok" && a.itemsAdded) return "text-primary";
+
   return "text-muted-foreground";
 }
 
 function errorKindLabel(kind: string): string {
   if (kind === "http") return "HTTP error";
+
   if (kind === "network") return "Network error";
+
   if (kind === "parse") return "Parse failure";
+
   return "Unclassified error";
 }
 
@@ -97,10 +112,13 @@ function attemptExplanation(a: FeedAttempt): string {
     case "error":
       if (a.errorKind === "network")
         return "The request did not complete at the network level. No response was received to classify.";
+
       if (a.errorKind === "parse")
         return "A response was received but could not be parsed as a Feed. This alone does not prove the publisher's XML is malformed.";
+
       if (a.httpStatus != null)
         return `The server responded with HTTP ${a.httpStatus}. The status alone does not identify why.`;
+
       return "The check failed without a recorded classification.";
     case "skipped":
       return "Deliberately skipped — not a check and not a failure.";
@@ -118,10 +136,14 @@ function attemptExplanation(a: FeedAttempt): string {
 /** Outcome strip colors: blue ingestion, amber warning, red failure, neutral otherwise. */
 function tickClass(a: FeedAttempt): string {
   if (a.status === "ok" && a.itemsAdded) return "bg-primary text-white";
+
   if (a.status === "rate_limited") return "bg-warning text-warning-foreground";
+
   if (a.status === "error") return "bg-destructive text-white";
+
   if (a.status === "in_progress")
     return "border-2 border-dashed border-primary bg-card text-primary";
+
   return "bg-muted-foreground/30 text-foreground";
 }
 
@@ -129,13 +151,16 @@ function tickText(a: FeedAttempt): string {
   if (a.status === "rate_limited" || a.status === "error") {
     if (a.httpStatus != null && a.httpStatus !== 200)
       return String(a.httpStatus);
+
     return a.errorKind === "network"
       ? "NET"
       : a.errorKind === "parse"
         ? "XML"
         : "ERR";
   }
+
   if (a.status === "in_progress") return "…";
+
   return "";
 }
 
@@ -166,6 +191,7 @@ export function useFeedAttempts(feedId: string): FeedAttemptsState {
       .catch(() => {
         if (!cancelled) setError(true);
       });
+
     return () => {
       cancelled = true;
     };
@@ -174,10 +200,12 @@ export function useFeedAttempts(feedId: string): FeedAttemptsState {
   async function loadMore() {
     if (!data?.nextCursor) return;
     setLoadingMore(true);
+
     try {
       const res = await apiGet<FeedAttemptsResponse>(
         `/app/api/feeds/${feedId}/attempts?cursor=${encodeURIComponent(data.nextCursor)}`,
       );
+
       setData({ ...res, attempts: [...data.attempts, ...res.attempts] });
     } catch {
       setError(true);
@@ -197,25 +225,34 @@ export function useFeedAttempts(feedId: string): FeedAttemptsState {
 export function currentProblem(data: FeedAttemptsResponse): string | null {
   const { problem, rateLimited } = data.streaks;
   const streak = problem.count > 0 ? problem : rateLimited;
+
   if (streak.count === 0) return null;
+
   const noun =
     problem.count > 0 ? "consecutive failed" : "consecutive rate-limited";
+
   const checks = data.attempts.filter(
     (a) => a.status !== "skipped" && a.status !== "in_progress",
   );
+
   const count = `${streak.lowerBound ? "at least " : ""}${streak.count} ${noun} check${streak.count === 1 ? "" : "s"}`;
+
   if (streak.lowerBound) {
     return `Current problem started before retained history · ${count}`;
   }
+
   const first = checks[streak.count - 1];
+
   if (!first) {
     return `Current problem started before the loaded results · ${count}`;
   }
+
   return `Current problem started ${formatDateTime(first.startedAt)} · ${count}`;
 }
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
+
   return (
     <Button
       type="button"
@@ -254,9 +291,11 @@ export function CheckHistory({
   const { data, error } = state;
   const checks = (data?.attempts ?? []).filter((a) => a.status !== "skipped");
   const strip = checks.slice(0, STRIP_CHECKS).reverse();
+
   const skipped = (data?.attempts ?? []).filter(
     (a) => a.status === "skipped",
   ).length;
+
   const selected = strip.find((a) => a.id === selectedId) ?? null;
 
   return (
@@ -346,10 +385,12 @@ export function CheckHistory({
 
 function groupLabel(g: { kind: string; httpStatus: number | null }): string {
   if (g.kind === "rate_limited") return "HTTP 429 · rate limited";
+
   if (g.kind === "http")
     return g.httpStatus != null && g.httpStatus !== 200
       ? `HTTP ${g.httpStatus}`
       : "HTTP error";
+
   return errorKindLabel(g.kind);
 }
 
@@ -359,6 +400,7 @@ export function ErrorBreakdown({ state }: { state: FeedAttemptsState }) {
   const groups = data?.problemGroups.groups ?? [];
   const total = groups.reduce((sum, g) => sum + g.count, 0);
   const max = groups.reduce((m, g) => Math.max(m, g.count), 0);
+
   const hasNetworkOrParse = groups.some(
     (g) => g.kind === "network" || g.kind === "parse",
   );
@@ -436,7 +478,9 @@ export function ErrorBreakdown({ state }: { state: FeedAttemptsState }) {
   );
 }
 
-type ResultsFilter = "all" | "problems" | "successful" | "skipped";
+const RESULTS_FILTERS = ["all", "problems", "successful", "skipped"] as const;
+
+type ResultsFilter = (typeof RESULTS_FILTERS)[number];
 
 const FILTER_LABELS: Record<ResultsFilter, string> = {
   all: "All results",
@@ -445,12 +489,19 @@ const FILTER_LABELS: Record<ResultsFilter, string> = {
   skipped: "Skipped",
 };
 
+function isResultsFilter(value: string): value is ResultsFilter {
+  return RESULTS_FILTERS.some((filter) => filter === value);
+}
+
 function matchesFilter(a: FeedAttempt, filter: ResultsFilter): boolean {
   if (filter === "problems")
     return a.status === "error" || a.status === "rate_limited";
+
   if (filter === "successful")
     return a.status === "ok" || a.status === "not_modified";
+
   if (filter === "skipped") return a.status === "skipped";
+
   return true;
 }
 
@@ -466,7 +517,7 @@ function Detail({
   return (
     <div className={cn("min-w-0", className)}>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-words">{children}</dd>
+      <dd className="mt-0.5 wrap-break-word">{children}</dd>
     </div>
   );
 }
@@ -482,6 +533,7 @@ function ResultRow({
   onOpenChange: (open: boolean) => void;
 }) {
   const time = formatDateTime(attempt.startedAt);
+
   return (
     <Collapsible asChild open={open} onOpenChange={onOpenChange}>
       <TableBody id={`attempt-${attempt.id}`} className="border-b">
@@ -656,9 +708,11 @@ export function Results({
           <DropdownMenuContent align="end">
             <DropdownMenuRadioGroup
               value={filter}
-              onValueChange={(v) => setFilter(v as ResultsFilter)}
+              onValueChange={(value) => {
+                if (isResultsFilter(value)) setFilter(value);
+              }}
             >
-              {(Object.keys(FILTER_LABELS) as ResultsFilter[]).map((key) => (
+              {RESULTS_FILTERS.map((key) => (
                 <DropdownMenuRadioItem key={key} value={key}>
                   {FILTER_LABELS[key]}
                 </DropdownMenuRadioItem>

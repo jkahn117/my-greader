@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import { Link } from "@tanstack/react-router";
+import * as v from "valibot";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import type {
   ReadingDay,
@@ -24,21 +25,53 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Skeleton } from "../components/ui/skeleton";
 
-/** Coerce the `?days=` search param to a supported window (router validateSearch). */
-export function parseReadingSearch(search: Record<string, unknown>): {
+type RouterSearchValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RouterSearchValue[]
+  | { [key: string]: RouterSearchValue };
+
+interface ReadingSearch {
   days: ReadingWindowDays;
-} {
-  const days = Number(search.days);
-  return {
-    days: (READING_WINDOWS as readonly number[]).includes(days)
-      ? (days as ReadingWindowDays)
-      : 7,
-  };
+}
+
+const readingSearchSchema = v.object({
+  days: v.optional(
+    v.union([
+      v.literal(7),
+      v.literal(14),
+      v.literal(30),
+      v.literal("7"),
+      v.literal("14"),
+      v.literal("30"),
+    ]),
+    7,
+  ),
+});
+
+/** Coerce the `?days=` search param to a supported window (router validateSearch). */
+export function parseReadingSearch(
+  search: Record<string, RouterSearchValue>,
+): ReadingSearch {
+  const parsed = v.safeParse(readingSearchSchema, search);
+
+  if (!parsed.success) return { days: 7 };
+
+  if (parsed.output.days === 14 || parsed.output.days === "14")
+    return { days: 14 };
+
+  if (parsed.output.days === 30 || parsed.output.days === "30")
+    return { days: 30 };
+
+  return { days: 7 };
 }
 
 /** Format a YYYY-MM-DD display-timezone date without re-zoning it. */
 function formatDate(date: string, opts: Intl.DateTimeFormatOptions): string {
   const [y, m, d] = date.split("-").map(Number);
+
   return new Intl.DateTimeFormat("en-US", { ...opts, timeZone: "UTC" }).format(
     Date.UTC(y, m - 1, d),
   );
@@ -90,6 +123,7 @@ function DailyChart({
   timezone: string;
 }) {
   const weekly = daily.length <= 8;
+
   const data = daily.map((d) => ({
     ...d,
     tick: formatDate(
@@ -97,6 +131,7 @@ function DailyChart({
       weekly ? { weekday: "short" } : { month: "short", day: "numeric" },
     ),
   }));
+
   return (
     <div>
       <ChartContainer
@@ -127,9 +162,11 @@ function DailyChart({
             content={
               <ChartTooltipContent
                 labelFormatter={(_, payload) => {
+                  // SAFETY: BarChart receives the ReadingDay-derived data array above.
                   const row = (
-                    payload as { payload?: ReadingDay }[] | undefined
+                    payload as readonly { payload?: ReadingDay }[] | undefined
                   )?.[0]?.payload;
+
                   return row?.date
                     ? `${formatDate(row.date, { weekday: "short", month: "short", day: "numeric" })}${row.partial ? " · today (partial)" : ""}`
                     : "";
@@ -218,6 +255,7 @@ export function ReadingPending() {
 export function ReadingError({ status }: { status?: number }) {
   const unauthorized = status === 401 || status === 403;
   const unavailable = status === 503;
+
   return (
     <Card>
       <CardContent className="py-10 text-center">
@@ -249,10 +287,12 @@ export function ReadingError({ status }: { status?: number }) {
 export function ReadingPage({ data }: { data: ReadingResponse }) {
   const first = data.daily[0]?.date;
   const last = data.daily[data.daily.length - 1]?.date;
+
   const range =
     first && last
       ? `${formatDate(first, { month: "short", day: "numeric" })} – ${formatDate(last, { month: "short", day: "numeric" })}`
       : "";
+
   const scope = `past ${data.days} days in ${data.timezone}, across your ${data.subscriptionCount} subscription${data.subscriptionCount === 1 ? "" : "s"}`;
 
   return (

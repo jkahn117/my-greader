@@ -32,6 +32,7 @@ async function fetchApi(
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
 }
 
@@ -53,8 +54,24 @@ async function seedFeed(opts: {
     userId: opts.userId ?? "dev-user-id",
     feedId,
   });
+
   return feedId;
 }
+
+/** Reads the response produced by the typed dashboard route under test. */
+async function attemptsResponse(
+  response: Response,
+): Promise<FeedAttemptsResponse> {
+  // SAFETY: The request targets the in-process route whose handler returns FeedAttemptsResponse.
+  return (await response.json()) as FeedAttemptsResponse;
+}
+
+type FixtureAttemptStatus =
+  | "in_progress"
+  | "ok"
+  | "error"
+  | FeedAttemptOutcome
+  | null;
 
 async function seedAttempt(
   feedId: string,
@@ -62,11 +79,11 @@ async function seedAttempt(
     id?: string;
     startedAt: number;
     finishedAt?: number | null;
-    status?: string | null;
+    status?: FixtureAttemptStatus;
     httpStatus?: number | null;
-    errorKind?: string | null;
+    errorKind?: FeedAttemptErrorClass | null;
     errorMessage?: string | null;
-    parserState?: string | null;
+    parserState?: FeedAttemptParserStatus | null;
     itemsAdded?: number | null;
     cycleRunId?: string | null;
   },
@@ -79,6 +96,7 @@ async function seedAttempt(
     .values({ id: cycleRunId, ranAt: opts.startedAt })
     .onConflictDoNothing();
   const status = opts.status === undefined ? "ok" : opts.status;
+
   const outcome: FeedAttemptOutcome | null =
     status === null || status === "in_progress"
       ? null
@@ -88,7 +106,8 @@ async function seedAttempt(
           : "unchanged"
         : status === "error"
           ? "failed"
-          : (status as FeedAttemptOutcome);
+          : status;
+
   await db.insert(feedAttempts).values({
     id,
     feedId,
@@ -98,11 +117,12 @@ async function seedAttempt(
       opts.finishedAt === undefined ? opts.startedAt + 500 : opts.finishedAt,
     outcome,
     httpStatus: opts.httpStatus === undefined ? 200 : opts.httpStatus,
-    errorClass: (opts.errorKind ?? null) as FeedAttemptErrorClass | null,
+    errorClass: opts.errorKind ?? null,
     diagnostic: opts.errorMessage ?? null,
-    parserStatus: (opts.parserState ?? "success") as FeedAttemptParserStatus,
+    parserStatus: opts.parserState ?? "success",
     newItems: opts.itemsAdded ?? 0,
   });
+
   return id;
 }
 
@@ -122,10 +142,12 @@ beforeEach(async () => {
 describe("GET /app/api/feeds/:feedId/attempts", () => {
   it("returns attempts newest-first with diagnostics and items", async () => {
     const feedId = await seedFeed({ lastFetchedAt: 2000 });
+
     const a1 = await seedAttempt(feedId, {
       startedAt: 1000,
       itemsAdded: 2,
     });
+
     const a2 = await seedAttempt(feedId, {
       startedAt: 2000,
       status: "error",
@@ -134,6 +156,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
       errorMessage: "HTTP 500",
       parserState: "not_attempted",
     });
+
     const db = getDb(env.DB);
     await db.insert(items).values({
       id: "item-1",
@@ -145,7 +168,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
 
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as FeedAttemptsResponse;
+    const body = await attemptsResponse(res);
 
     expect(body.attempts.map((a) => a.id)).toEqual([a2, a1]);
     expect(body.attempts[0].status).toBe("error");
@@ -179,23 +202,27 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     const page1res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?limit=2`,
     );
-    const page1 = (await page1res.json()) as FeedAttemptsResponse;
+
+    const page1 = await attemptsResponse(page1res);
     expect(page1.attempts.map((a) => a.id)).toEqual(["a-3", "a-2"]);
     expect(page1.nextCursor).not.toBeNull();
 
     const page2res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`,
     );
-    const page2 = (await page2res.json()) as FeedAttemptsResponse;
+
+    const page2 = await attemptsResponse(page2res);
     expect(page2.attempts.map((a) => a.id)).toEqual(["a-1"]);
     expect(page2.nextCursor).toBeNull();
   });
 
   it("rejects an invalid cursor", async () => {
     const feedId = await seedFeed({});
+
     const res = await fetchApi(
       `/app/api/feeds/${feedId}/attempts?cursor=not-a-cursor`,
     );
+
     expect(res.status).toBe(400);
   });
 
@@ -215,7 +242,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     });
 
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
-    const body = (await res.json()) as FeedAttemptsResponse;
+    const body = await attemptsResponse(res);
     expect(body.streaks.problem.count).toBe(2);
     expect(body.streaks.problem.lowerBound).toBe(false);
     expect(body.streaks.rateLimited.count).toBe(0);
@@ -238,7 +265,7 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     });
 
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
-    const body = (await res.json()) as FeedAttemptsResponse;
+    const body = await attemptsResponse(res);
     expect(body.streaks.rateLimited.count).toBe(2);
     expect(body.streaks.problem.count).toBe(0);
   });
@@ -291,11 +318,13 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
     });
 
     const res = await fetchApi(`/app/api/feeds/${feedId}/attempts`);
-    const body = (await res.json()) as FeedAttemptsResponse;
+    const body = await attemptsResponse(res);
     expect(body.problemGroups.windowDays).toBe(30);
+
     const byKey = Object.fromEntries(
       body.problemGroups.groups.map((g) => [`${g.kind}:${g.httpStatus}`, g]),
     );
+
     expect(body.problemGroups.groups[0]).toMatchObject({
       kind: "http",
       httpStatus: 500,
@@ -314,13 +343,11 @@ describe("GET /app/api/feeds/:feedId/attempts", () => {
   it("distinguishes legacy and empty history from zero activity", async () => {
     const legacyFeed = await seedFeed({ lastFetchedAt: 12345 });
     const res1 = await fetchApi(`/app/api/feeds/${legacyFeed}/attempts`);
-    expect(((await res1.json()) as FeedAttemptsResponse).historyState).toBe(
-      "legacy",
-    );
+    expect((await attemptsResponse(res1)).historyState).toBe("legacy");
 
     const neverChecked = await seedFeed({});
     const res2 = await fetchApi(`/app/api/feeds/${neverChecked}/attempts`);
-    const body = (await res2.json()) as FeedAttemptsResponse;
+    const body = await attemptsResponse(res2);
     expect(body.historyState).toBe("empty");
     expect(body.attempts).toEqual([]);
   });

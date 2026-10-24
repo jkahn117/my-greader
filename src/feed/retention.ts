@@ -6,15 +6,23 @@
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
 const OPERATIONAL_HISTORY_RETENTION_DAYS = 90;
-const ITEM_BATCH_SIZE = 500;
+
+const ITEM_BATCH_SIZE = 1000;
+
+const MAX_ITEM_BATCHES = 10;
+
 const HISTORY_BATCH_SIZE = 100;
-const MAX_BATCHES_PER_KIND = 5;
+
+const MAX_HISTORY_BATCHES = 4;
 
 export interface RetentionResult {
   itemsDeleted: number;
   statesDeleted: number;
   cycleRunsDeleted: number;
+  itemsBacklogRemaining: boolean;
+  cycleRunsBacklogRemaining: boolean;
 }
 
 export interface RetentionManager {
@@ -31,8 +39,9 @@ export function createRetentionManager(
   /** Applies Item and operational-history policy in bounded batches. */
   async function purge(itemRetentionDays: number): Promise<RetentionResult> {
     const itemResult = await purgeItems(itemRetentionDays);
-    const cycleRunsDeleted = await purgeOperationalHistory();
-    return { ...itemResult, cycleRunsDeleted };
+    const historyResult = await purgeOperationalHistory();
+
+    return { ...itemResult, ...historyResult };
   }
 
   /** Deletes bounded batches of old Items only when no User has starred them. */
@@ -41,8 +50,7 @@ export function createRetentionManager(
     let itemsDeleted = 0;
     let statesDeleted = 0;
 
-    for (let batch = 0; batch < MAX_BATCHES_PER_KIND; batch += 1) {
-      const expiredItems = `
+    const expiredItems = `
         SELECT candidate.id
           FROM items candidate
          WHERE candidate.fetched_at < ?
@@ -53,6 +61,8 @@ export function createRetentionManager(
            )
          ORDER BY candidate.fetched_at, candidate.id
          LIMIT ?`;
+
+    for (let batch = 0; batch < MAX_ITEM_BATCHES; batch += 1) {
       const results = await db.batch([
         db
           .prepare(
@@ -64,26 +74,33 @@ export function createRetentionManager(
           .prepare(`DELETE FROM items WHERE id IN (${expiredItems})`)
           .bind(cutoff, ITEM_BATCH_SIZE),
       ]);
+
       const deletedThisBatch = results[1]?.meta.changes ?? 0;
       statesDeleted += results[0]?.meta.changes ?? 0;
       itemsDeleted += deletedThisBatch;
+
       if (deletedThisBatch < ITEM_BATCH_SIZE) break;
     }
 
-    return { itemsDeleted, statesDeleted };
+    const itemsBacklogRemaining = Boolean(
+      await db.prepare(expiredItems).bind(cutoff, 1).first(),
+    );
+
+    return { itemsDeleted, statesDeleted, itemsBacklogRemaining };
   }
 
   /** Detaches retained Items before deleting expired attempts and Cycle Runs. */
-  async function purgeOperationalHistory(): Promise<number> {
+  async function purgeOperationalHistory() {
     const cutoff = clock() - OPERATIONAL_HISTORY_RETENTION_DAYS * DAY_MS;
-    let deletedCycleRuns = 0;
+    let cycleRunsDeleted = 0;
 
-    for (let batch = 0; batch < MAX_BATCHES_PER_KIND; batch += 1) {
-      const expiredCycleRuns = `
+    const expiredCycleRuns = `
         SELECT id FROM cycle_runs
          WHERE ran_at < ?
          ORDER BY ran_at, id
          LIMIT ?`;
+
+    for (let batch = 0; batch < MAX_HISTORY_BATCHES; batch += 1) {
       const results = await db.batch([
         db
           .prepare(
@@ -119,11 +136,17 @@ export function createRetentionManager(
           )
           .bind(cutoff, HISTORY_BATCH_SIZE),
       ]);
+
       const deletedThisBatch = results[3]?.meta.changes ?? 0;
-      deletedCycleRuns += deletedThisBatch;
+      cycleRunsDeleted += deletedThisBatch;
+
       if (deletedThisBatch < HISTORY_BATCH_SIZE) break;
     }
 
-    return deletedCycleRuns;
+    const cycleRunsBacklogRemaining = Boolean(
+      await db.prepare(expiredCycleRuns).bind(cutoff, 1).first(),
+    );
+
+    return { cycleRunsDeleted, cycleRunsBacklogRemaining };
   }
 }

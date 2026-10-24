@@ -109,7 +109,7 @@ pnpm deploy
 
 A scheduled Workflow checks feeds every 30 minutes. It processes eligible feeds in bounded batches, so the feed count is not limited to one cron invocation. Feeds with new articles are checked sooner; quiet feeds back off gradually, while rate limits and feed-provided timing hints are respected. Repeated errors can deactivate a feed, with the reason visible in the dashboard.
 
-A weekly cleanup (Mondays 03:00 UTC) removes unstarred Items fetched more than 30 days ago by default and expires polling history after 90 days, in bounded batches. An Item starred by any User is retained; expired attempt references are detached from retained Items before history deletion. Revoked API Tokens are removed after at least seven days. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change article retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
+A weekly cleanup (Mondays 03:00 UTC) removes unstarred Items fetched more than 30 days ago by default and expires polling history after 90 days, in bounded batches. Each run can remove up to 10,000 eligible Items and 400 expired Cycle Runs (versus 336 scheduled polling runs per week); extra manual/forced runs and larger backlogs can exceed that capacity and remain until later weeks. Structured cron logs include deletion counts and `itemsBacklogRemaining` / `cycleRunsBacklogRemaining` flags, with a warning when eligible backlog remains. An Item starred by any User is retained; expired attempt references are detached from retained Items before history deletion. Revoked API Tokens are removed after at least seven days. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change Item retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
 
 ## Local development
 
@@ -133,7 +133,7 @@ pnpm check      # all of the above
 pnpm test:browser # Playwright acceptance tests against the local Vite server
 ```
 
-Browser tests automatically apply migrations in the isolated `.wrangler/e2e` store and supply local-only authentication overrides. Vitest applies migrations in its own isolated D1 stores. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
+Browser tests automatically apply migrations in the isolated `.wrangler/e2e` store and supply local-only authentication overrides. Vitest applies migrations in its own isolated D1 stores. The required CI workflow installs Chromium and runs the browser suite against the built Worker with `PLAYWRIGHT_BUILD=1`. `pnpm dev` runs Vite with the Cloudflare plugin, not a separate frontend service.
 
 Other commands: `pnpm cf-typegen` regenerates Wrangler binding types, `pnpm studio` opens Drizzle Studio for local D1, and `pnpm format` formats TypeScript files.
 

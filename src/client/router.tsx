@@ -8,6 +8,7 @@ import {
 import type {
   FeedDetailResponse,
   FeedsResponse,
+  OverviewPanelsResponse,
   OverviewResponse,
   ReadingResponse,
   TokensResponse,
@@ -52,10 +53,21 @@ const overviewRoute = createRoute({
       status={error instanceof ApiError ? error.status : undefined}
     />
   ),
-  loader: () => apiGet<OverviewResponse>("/app/api/overview"),
+  // Router invalidation refreshes both projections; panel failure preserves the summary.
+  loader: async () => {
+    const [summary, panels] = await Promise.all([
+      apiGet<OverviewResponse>("/app/api/overview"),
+      apiGet<OverviewPanelsResponse>("/app/api/overview/panels").catch(
+        () => null,
+      ),
+    ]);
+
+    return { summary, panels };
+  },
   component: function Overview() {
     const data = overviewRoute.useLoaderData();
-    return <OverviewPage data={data} />;
+
+    return <OverviewPage data={data.summary} panels={data.panels} />;
   },
 });
 
@@ -69,6 +81,7 @@ const feedsRoute = createRoute({
   loader: () => apiGet<FeedsResponse>("/app/api/feeds"),
   component: function Feeds() {
     const data = feedsRoute.useLoaderData();
+
     return <FeedsPage data={data} />;
   },
 });
@@ -86,6 +99,7 @@ const feedDetailRoute = createRoute({
     apiGet<FeedDetailResponse>(`/app/api/feeds/${params.feedId}`),
   component: function FeedDetail() {
     const data = feedDetailRoute.useLoaderData();
+
     return <FeedDetailPage key={data.feedId} data={data} />;
   },
 });
@@ -105,6 +119,7 @@ const readingRoute = createRoute({
     apiGet<ReadingResponse>(`/app/api/reading?days=${deps.days}`),
   component: function Reading() {
     const data = readingRoute.useLoaderData();
+
     return <ReadingPage data={data} />;
   },
 });
@@ -121,6 +136,7 @@ const accessRoute = createRoute({
   loader: () => apiGet<TokensResponse>("/app/api/tokens"),
   component: function Access() {
     const data = accessRoute.useLoaderData();
+
     return <AccessPage data={data} />;
   },
 });

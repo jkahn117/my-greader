@@ -4,11 +4,11 @@ import {
   WorkflowStep,
 } from "cloudflare:workers";
 import { logger } from "../lib/logger";
+import { logFeedAttemptCompletion } from "../lib/polling-telemetry";
 import { createMetrics, ParseStatus } from "../lib/metrics";
 import {
   createFeedPoller,
   createPollingCycleManager,
-  type FeedPollResult,
   type FeedTransport,
   type PollObserver,
   type PollTriggerReason,
@@ -16,13 +16,26 @@ import {
 
 type Params = { triggerReason: PollTriggerReason };
 
+/** Bindings used by the polling workflow, including values overridden by tests. */
+export type PollingWorkflowEnv = Pick<Env, "DB" | "ANALYTICS"> & {
+  ANALYTICS_ENABLED: string;
+};
+
+/** Minimal Workflow step contract used by the adapter and its local tests. */
+export interface WorkflowStepRunner {
+  do<T extends object | void>(
+    name: string,
+    callback: () => Promise<T>,
+  ): Promise<T>;
+}
+
 // Each Feed uses up to four subrequests: attempt start/replay check, HTTP,
 // atomic D1 completion, and committed-result read. Eight concurrent Feeds stay
 // below the 50-subrequest budget with headroom for metrics delivery.
 const FEEDS_PER_STEP = 8;
 
 // ---------------------------------------------------------------------------
-// asDisposable
+// rpcDisposer
 //
 // Background: inside a WorkflowEntrypoint, `this.env.DB` and similar bindings
 // are not plain objects — at runtime they are RPC stubs (proxy objects) that
@@ -40,21 +53,21 @@ const FEEDS_PER_STEP = 8;
 // it (the stub inherits it from `StubBase`). So TypeScript won't let you write
 // `using d1 = this.env.DB` without an explicit cast.
 //
-// This safe version:
-//   1. Checks at runtime whether [Symbol.dispose] is already present.
-//   2. If yes — returns the binding as-is. Disposal will work normally.
-//   3. If no  — adds a no-op [Symbol.dispose] directly onto the binding object
-//      so `using` won't crash. The binding may not be "properly" disposed, but
-//      the step won't crash.
+// The adapter keeps the binding's useful type separate from its runtime
+// disposal capability. Local test bindings have no disposer and use a no-op.
 // ---------------------------------------------------------------------------
-function asDisposable<T extends object>(binding: T): T & Disposable {
-  if (
-    typeof (binding as unknown as Disposable)[Symbol.dispose] === "function"
-  ) {
-    return binding as T & Disposable;
-  }
-  (binding as T & Disposable)[Symbol.dispose] = () => {};
-  return binding as T & Disposable;
+type RpcBinding = D1Database | AnalyticsEngineDataset;
+
+function rpcDisposer(binding: RpcBinding): Disposable {
+  return {
+    [Symbol.dispose]() {
+      if (!(Symbol.dispose in binding)) return;
+
+      const dispose = binding[Symbol.dispose];
+
+      if (dispose instanceof Function) dispose.call(binding);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -93,9 +106,9 @@ export class FeedPollingWorkflow extends WorkflowEntrypoint<Env, Params> {
 
 /** Runs the Workflow adapter through an exported seam shared with local tests. */
 export async function runFeedPollingWorkflow(
-  env: Env,
+  env: PollingWorkflowEnv,
   event: WorkflowEvent<Params>,
-  step: WorkflowStep,
+  step: WorkflowStepRunner,
 ): Promise<void> {
   using _ctx = logger.withRpcContext({
     correlationId: event.instanceId,
@@ -120,11 +133,14 @@ export async function runFeedPollingWorkflow(
     });
 
     try {
-      using analytics = asDisposable(env.ANALYTICS);
+      using _analyticsDisposer = rpcDisposer(env.ANALYTICS);
+      const analytics = env.ANALYTICS;
+
       const metrics = createMetrics(
-        analytics as unknown as Env["ANALYTICS"],
-        (env.ANALYTICS_ENABLED as string) !== "false",
+        analytics,
+        env.ANALYTICS_ENABLED !== "false",
       );
+
       metrics.recordCycleError({ error: errorMessage });
       await metrics.flush();
     } catch {
@@ -137,8 +153,8 @@ export async function runFeedPollingWorkflow(
 
 /** Coordinates selection and step placement while FeedPoller owns Feed policy. */
 async function pollWorkflow(
-  env: Env,
-  step: WorkflowStep,
+  env: PollingWorkflowEnv,
+  step: WorkflowStepRunner,
   triggerReason: PollTriggerReason,
   cycleRunId: string,
 ): Promise<void> {
@@ -153,8 +169,10 @@ async function pollWorkflow(
     stepName,
     async () => {
       try {
-        using d1 = asDisposable(env.DB);
+        using _d1Disposer = rpcDisposer(env.DB);
+        const d1 = env.DB;
         const cycles = createPollingCycleManager(d1, () => Date.now());
+
         return await cycles.begin(cycleRunId, triggerReason);
       } catch (err) {
         logger.error("get-due-feeds step failed", {
@@ -174,6 +192,7 @@ async function pollWorkflow(
 
   if (dueFeeds.length === 0) {
     logger.info("no feeds due, skipping cycle", { cycleRunId });
+
     return;
   }
 
@@ -189,11 +208,14 @@ async function pollWorkflow(
 
     await step.do(`fetch-batch-${batchIndex}`, async () => {
       try {
-        using d1 = asDisposable(env.DB);
-        using analytics = asDisposable(env.ANALYTICS);
+        using _d1Disposer = rpcDisposer(env.DB);
+        using _analyticsDisposer = rpcDisposer(env.ANALYTICS);
+        const d1 = env.DB;
+        const analytics = env.ANALYTICS;
+
         const metrics = createMetrics(
-          analytics as unknown as Env["ANALYTICS"],
-          (env.ANALYTICS_ENABLED as string) !== "false",
+          analytics,
+          env.ANALYTICS_ENABLED !== "false",
         );
 
         const transport: FeedTransport = {
@@ -208,6 +230,9 @@ async function pollWorkflow(
         const observer: PollObserver = {
           publish(event) {
             switch (event.kind) {
+              case "feedAttemptCompleted":
+                logFeedAttemptCompletion(event, logger);
+                break;
               case "feedPolled":
                 metrics.recordParse({
                   feedId: event.feedId,
@@ -234,6 +259,7 @@ async function pollWorkflow(
                     httpStatus: event.status,
                   });
                 }
+
                 break;
               case "feedParseFailed":
                 metrics.recordParse({
@@ -271,15 +297,11 @@ async function pollWorkflow(
           });
         }
 
-        for (const result of settled) {
-          if (result.status === "fulfilled") {
-            logAttemptResult(cycleRunId, result.value);
-          }
-        }
         const rejected = settled.find(
           (result): result is PromiseRejectedResult =>
             result.status === "rejected",
         );
+
         if (rejected) throw rejected.reason;
       } catch (err) {
         logger.error(`fetch-batch-${batchIndex} step failed`, {
@@ -299,13 +321,18 @@ async function pollWorkflow(
 
   const summary = await step.do("record-cycle", async () => {
     try {
-      using d1 = asDisposable(env.DB);
-      using analytics = asDisposable(env.ANALYTICS);
+      using _d1Disposer = rpcDisposer(env.DB);
+      using _analyticsDisposer = rpcDisposer(env.ANALYTICS);
+      const d1 = env.DB;
+      const analytics = env.ANALYTICS;
+
       const metrics = createMetrics(
-        analytics as unknown as Env["ANALYTICS"],
-        (env.ANALYTICS_ENABLED as string) !== "false",
+        analytics,
+        env.ANALYTICS_ENABLED !== "false",
       );
+
       const cycles = createPollingCycleManager(d1, () => Date.now());
+
       const summary = await cycles.complete(
         cycleRunId,
         dueFeeds.length,
@@ -319,6 +346,7 @@ async function pollWorkflow(
         newArticles: summary.newItems,
         failedFeeds: summary.failedFeeds,
       });
+
       try {
         await metrics.flush();
       } catch (err) {
@@ -327,6 +355,7 @@ async function pollWorkflow(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+
       return summary;
     } catch (err) {
       logger.error("record-cycle step failed", {
@@ -345,35 +374,6 @@ async function pollWorkflow(
     newArticles: summary.newItems,
     failedFeeds: summary.failedFeeds,
     skippedFeeds: summary.skippedFeeds,
-  });
-}
-
-/** Emits one searchable terminal log for every durable Feed attempt. */
-function logAttemptResult(cycleRunId: string, result: FeedPollResult): void {
-  const context = {
-    cycleRunId,
-    attemptId: attemptIdFor(cycleRunId, result.feedId),
-    feedId: result.feedId,
-    feedTitle: result.feedTitle,
-    outcome: result.outcome,
-  };
-  if (result.outcome === "failed") {
-    logger.error("feed polling attempt completed", {
-      ...context,
-      errorClass: result.errorClass,
-      error: result.error,
-    });
-    return;
-  }
-  if (result.outcome === "rate_limited") {
-    logger.warn("feed polling attempt completed", context);
-    return;
-  }
-  logger.info("feed polling attempt completed", {
-    ...context,
-    ...((result.outcome === "new_items" || result.outcome === "unchanged") && {
-      newItems: result.newItems,
-    }),
   });
 }
 

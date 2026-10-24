@@ -90,6 +90,11 @@ interface MetricsApi {
   flush(): Promise<void>;
 }
 
+/** Interprets the string-valued analytics feature binding. */
+export function analyticsEnabled(value: string): boolean {
+  return value !== "false";
+}
+
 // enabled defaults to true; pass false when ANALYTICS_ENABLED === "false"
 export function createMetrics(
   analyticsBinding: AnalyticsEngineDataset | undefined,
@@ -126,11 +131,13 @@ export function createMetrics(
         feedId: e.feedId,
         status: e.status,
       });
+
       if (e.articleCount) {
         enqueue("feed_new_articles", MetricUnit.Count, e.articleCount, {
           feedId: e.feedId,
         });
       }
+
       if (e.error) {
         enqueue("feed_parse_failure", MetricUnit.Count, 1, {
           feedId: e.feedId,

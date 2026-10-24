@@ -6,7 +6,8 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runFeedPollingWorkflow } from "../src/workflows/feed_polling";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
 import {
@@ -33,7 +34,14 @@ async function fetchApi(
   const ctx = createExecutionContext();
   const res = await worker.fetch(req, env, ctx);
   await waitOnExecutionContext(ctx);
+
   return res;
+}
+
+/** Reads JSON produced by an in-process dashboard route under test. */
+async function responseJson<T>(response: Response): Promise<T> {
+  // SAFETY: Callers pair each in-process route with its exported response contract.
+  return (await response.json()) as T;
 }
 
 async function seedUser(id = "dev-user-id", email = "dev@localhost") {
@@ -47,9 +55,9 @@ async function seedFeedAndSub(opts: {
   title: string;
   folder?: string | null;
   deactivatedAt?: number | null;
-  deactivatedReason?: string | null;
+  deactivatedReason?: "transient" | "permanent" | "manual" | null;
   consecutiveErrors?: number;
-  lastStatus?: string | null;
+  lastStatus?: "ok" | "error" | FeedAttemptOutcome | null;
   lastFetchedAt?: number | null;
   lastSuccessfulAt?: number | null;
 }) {
@@ -66,7 +74,7 @@ async function seedFeedAndSub(opts: {
         ? "automatic_transient"
         : opts.deactivatedReason === "permanent"
           ? "automatic_permanent"
-          : (opts.deactivatedReason as "manual" | null | undefined),
+          : opts.deactivatedReason,
     pollStateOrigin:
       opts.deactivatedAt != null && opts.deactivatedReason == null
         ? "legacy_uncertain"
@@ -85,18 +93,21 @@ async function seedFeedAndSub(opts: {
     feedId,
     folder: opts.folder ?? null,
   });
+
   if (opts.lastStatus != null && opts.lastFetchedAt != null) {
     const cycleRunId = `cycle-${feedId}`;
     await db.insert(cycleRuns).values({
       id: cycleRunId,
       ranAt: opts.lastFetchedAt,
     });
+
     const outcome: FeedAttemptOutcome =
       opts.lastStatus === "ok"
         ? "unchanged"
         : opts.lastStatus === "error"
           ? "failed"
-          : (opts.lastStatus as FeedAttemptOutcome);
+          : opts.lastStatus;
+
     await db.insert(feedPollAttempts).values({
       id: `attempt-${feedId}`,
       cycleRunId,
@@ -107,6 +118,7 @@ async function seedFeedAndSub(opts: {
       errorClass: outcome === "failed" ? "http" : null,
     });
   }
+
   return feedId;
 }
 
@@ -119,8 +131,18 @@ beforeEach(async () => {
   await seedUser();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("GET /app/api/feeds", () => {
-  it.each(["rate_limited", "error"])(
+  const projectedStatuses = ["rate_limited", "error"] satisfies readonly (
+    | "rate_limited"
+    | "error"
+  )[];
+
+  it.each(projectedStatuses)(
     "keeps %s detail and control projections consistent with list",
     async (lastStatus) => {
       const feedId = await seedFeedAndSub({
@@ -130,20 +152,24 @@ describe("GET /app/api/feeds", () => {
         lastFetchedAt: 2000,
         lastStatus,
       });
-      const list = (await (
-        await fetchApi("/app/api/feeds")
-      ).json()) as FeedsResponse;
+
+      const list = await responseJson<FeedsResponse>(
+        await fetchApi("/app/api/feeds"),
+      );
+
       const detail = await (await fetchApi(`/app/api/feeds/${feedId}`)).json();
       expect(detail).toMatchObject({
         status: list.feeds[0].status,
         lastCheckedAt: 2000,
         lastSuccessfulAt: 1000,
       });
+
       const controlled = await (
         await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
           method: "POST",
         })
       ).json();
+
       expect(controlled).toMatchObject({
         status: "deactivated",
         lastCheckedAt: 2000,
@@ -156,6 +182,7 @@ describe("GET /app/api/feeds", () => {
       feedUrl: "https://mine.example.com/feed",
       title: "Mine",
     });
+
     await seedUser("other-user", "other@localhost");
     await seedFeedAndSub({
       userId: "other-user",
@@ -165,7 +192,7 @@ describe("GET /app/api/feeds", () => {
 
     const res = await fetchApi("/app/api/feeds");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     expect(body.feeds.map((f) => f.feedId)).toEqual([mine]);
   });
 
@@ -203,7 +230,7 @@ describe("GET /app/api/feeds", () => {
     });
 
     const res = await fetchApi("/app/api/feeds");
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     const byStatus = new Map(body.feeds.map((f) => [f.title, f]));
 
     expect(byStatus.get("OK")?.status).toBe("active");
@@ -223,7 +250,7 @@ describe("GET /app/api/feeds", () => {
       folder: "Tech",
     });
     const res = await fetchApi("/app/api/feeds");
-    const body = (await res.json()) as FeedsResponse;
+    const body = await responseJson<FeedsResponse>(res);
     expect(body.folders).toEqual(["Tech"]);
   });
 });
@@ -247,12 +274,14 @@ describe("POST /app/api/import", () => {
 
     const form = new FormData();
     form.set("opml", new File([opml], "feeds.opml", { type: "text/xml" }));
+
     const res = await fetchApi("/app/api/import", {
       method: "POST",
       body: form,
     });
+
     expect(res.status).toBe(200);
-    const body = (await res.json()) as ImportResponse;
+    const body = await responseJson<ImportResponse>(res);
     expect(body).toEqual({ imported: 1, duplicates: 1, errors: [] });
 
     const db = getDb(env.DB);
@@ -267,8 +296,9 @@ describe("POST /app/api/import", () => {
       method: "POST",
       body: new FormData(),
     });
+
     expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
+    const body = await responseJson<{ error: string }>(res);
     expect(body.error).toBeTruthy();
   });
 });
@@ -282,40 +312,49 @@ describe("feed detail + deactivation", () => {
       lastSuccessfulAt: Date.now() - 30_000,
       lastStatus: "ok",
     });
+
     const res = await fetchApi(`/app/api/feeds/${feedId}`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
+
+    const body = await responseJson<{
       feedId: string;
       backloadComplete: boolean;
-    };
+    }>(res);
+
     expect(body.feedId).toBe(feedId);
     expect(body.backloadComplete).toBe(true);
   });
 
   it("rejects reads and mutations for feeds the user doesn't own", async () => {
     await seedUser("other-user", "other@localhost");
+
     const theirs = await seedFeedAndSub({
       userId: "other-user",
       feedUrl: "https://theirs.example.com/feed",
       title: "Theirs",
     });
+
     for (const method of ["GET", "POST"]) {
       const res = await fetchApi(
         `/app/api/feeds/${theirs}${method === "POST" ? "/deactivate" : ""}`,
         { method },
       );
+
       expect(res.status, `${method}`).toBe(404);
     }
   });
 
   it("reports each deactivation reason plus legacy-uncertain", async () => {
     const now = Date.now();
-    const cases: Array<[string | null, boolean]> = [
-      ["transient", false],
-      ["permanent", false],
-      ["manual", false],
-      [null, true], // pre-migration deactivation
-    ];
+
+    const cases: Array<["transient" | "permanent" | "manual" | null, boolean]> =
+      [
+        ["transient", false],
+        ["permanent", false],
+        ["manual", false],
+        [null, true], // pre-migration deactivation
+      ];
+
     for (const [reason, legacy] of cases) {
       const feedId = await seedFeedAndSub({
         feedUrl: `https://${reason ?? "legacy"}.example.com/feed`,
@@ -323,11 +362,14 @@ describe("feed detail + deactivation", () => {
         deactivatedAt: now,
         deactivatedReason: reason,
       });
+
       const res = await fetchApi(`/app/api/feeds/${feedId}`);
-      const body = (await res.json()) as {
+
+      const body = await responseJson<{
         deactivatedReason: string | null;
         legacyUncertain: boolean;
-      };
+      }>(res);
+
       expect(body.deactivatedReason).toBe(
         reason === "transient"
           ? "automatic_transient"
@@ -348,32 +390,138 @@ describe("feed detail + deactivation", () => {
     const off = await fetchApi(`/app/api/feeds/${feedId}/deactivate`, {
       method: "POST",
     });
+
     expect(off.status).toBe(200);
-    const offBody = (await off.json()) as {
+
+    const offBody = await responseJson<{
       deactivatedReason: string | null;
       status: string;
-    };
+    }>(off);
+
     expect(offBody.deactivatedReason).toBe("manual");
     expect(offBody.status).toBe("deactivated");
 
     const on = await fetchApi(`/app/api/feeds/${feedId}/reactivate`, {
       method: "POST",
     });
+
     expect(on.status).toBe(200);
-    const onBody = (await on.json()) as {
+
+    const onBody = await responseJson<{
       deactivatedAt: number | null;
       deactivatedReason: string | null;
       consecutiveErrors: number;
-    };
+    }>(on);
+
     expect(onBody.deactivatedAt).toBeNull();
     expect(onBody.deactivatedReason).toBeNull();
     expect(onBody.consecutiveErrors).toBe(0);
   });
 
+  it.each([
+    { action: "deactivate", loggingFails: false },
+    { action: "reactivate", loggingFails: false },
+    { action: "deactivate", loggingFails: true },
+  ])(
+    "emits one cancellation event for $action despite repeated requests and late polling completion, loggingFails=$loggingFails",
+    async ({ action, loggingFails }) => {
+      const feedId = await seedFeedAndSub({
+        feedUrl: "https://cancel.example/feed",
+        title: "Cancel",
+      });
+
+      let resolveResponse: (response: Response) => void = () => {};
+
+      const pendingResponse = new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      });
+
+      const network = vi.fn(() => pendingResponse);
+      vi.stubGlobal("fetch", network);
+
+      const logs = vi.spyOn(console, "log").mockImplementation((output) => {
+        if (
+          loggingFails &&
+          String(output).includes(`"attemptId":"cancel-cycle:${feedId}"`)
+        ) {
+          throw new Error("Log delivery unavailable");
+        }
+      });
+
+      const polling = runFeedPollingWorkflow(
+        { DB: env.DB, ANALYTICS: env.ANALYTICS, ANALYTICS_ENABLED: "false" },
+        {
+          instanceId: "cancel-cycle",
+          workflowName: "feed-polling",
+          timestamp: new Date(),
+          payload: { triggerReason: "scheduled" },
+        },
+        { do: (_name, callback) => callback() },
+      );
+
+      await vi.waitFor(() => expect(network).toHaveBeenCalledOnce());
+
+      try {
+        const changed = await fetchApi(`/app/api/feeds/${feedId}/${action}`, {
+          method: "POST",
+        });
+
+        expect(changed.status).toBe(200);
+
+        const repeated = await fetchApi(`/app/api/feeds/${feedId}/${action}`, {
+          method: "POST",
+        });
+
+        expect(repeated.status).toBe(200);
+      } finally {
+        resolveResponse(new Response(null, { status: 304 }));
+        await polling;
+      }
+
+      const terminalEvents = logs.mock.calls
+        .map(([output]) => String(output))
+        .filter(
+          (output) =>
+            output.includes('"eventName":"feed_attempt_completed"') &&
+            output.includes(`"attemptId":"cancel-cycle:${feedId}"`),
+        );
+
+      expect(terminalEvents).toHaveLength(1);
+      const output = terminalEvents[0] ?? "";
+      expect(output).toContain('"level":"INFO"');
+      expect(output).toContain('"cycleRunId":"cancel-cycle"');
+      expect(output).toContain(`"attemptId":"cancel-cycle:${feedId}"`);
+      expect(output).toContain(`"feedId":"${feedId}"`);
+      expect(output).toContain('"outcome":"skipped"');
+      expect(output).toContain('"errorClass":null');
+      expect(output).toContain('"httpStatus":null');
+      expect(output).toContain('"parserStatus":"not_attempted"');
+      expect(output).toContain('"newItems":0');
+      expect(output).not.toContain("dev-user-id");
+      expect(output).not.toContain("userId");
+      expect(network).toHaveBeenCalledOnce();
+      expect(
+        await env.DB.prepare(
+          "SELECT outcome FROM feed_poll_attempts WHERE id = ?",
+        )
+          .bind(`cancel-cycle:${feedId}`)
+          .first(),
+      ).toEqual({ outcome: "skipped" });
+      expect(
+        await env.DB.prepare(
+          "SELECT status, skipped_feeds FROM cycle_runs WHERE id = ?",
+        )
+          .bind("cancel-cycle")
+          .first(),
+      ).toEqual({ status: "completed", skipped_feeds: 1 });
+    },
+  );
+
   it("returns 404 when mutating a nonexistent feed", async () => {
     const res = await fetchApi(`/app/api/feeds/nope/deactivate`, {
       method: "POST",
     });
+
     expect(res.status).toBe(404);
   });
 });
@@ -391,7 +539,7 @@ describe("POST /app/api/feeds/sync", () => {
 
     const res = await fetchApi("/app/api/feeds/sync", { method: "POST" });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as SyncResponse;
+    const body = await responseJson<SyncResponse>(res);
     expect(body.triggered).toBe(true);
     expect(body.forced).toBe(false);
     expect(body.eligible).toBe(0);
@@ -423,8 +571,9 @@ describe("POST /app/api/feeds/sync", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ force: true }),
     });
+
     expect(res.status).toBe(200);
-    const body = (await res.json()) as SyncResponse;
+    const body = await responseJson<SyncResponse>(res);
     expect(body.triggered).toBe(true);
     expect(body.forced).toBe(true);
     expect(body.eligible).toBe(1); // only the active subscribed feed
@@ -436,6 +585,7 @@ describe("POST /app/api/feeds/sync", () => {
       headers: { "Content-Type": "application/json" },
       body: "not json",
     });
+
     expect(res.status).toBe(400);
   });
 });

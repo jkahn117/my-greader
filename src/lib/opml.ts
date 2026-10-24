@@ -44,19 +44,24 @@ export function parseOpml(xml: string): ParsedFeed[] {
   });
 
   let doc: { opml?: { body?: { outline?: OutlineNode[] } } };
+
   try {
+    // SAFETY: The parser configuration preserves attributes and normalizes every outline collection to an array.
     doc = parser.parse(xml) as typeof doc;
   } catch {
     return [];
   }
 
   const outlines = doc?.opml?.body?.outline;
+
   if (!outlines || outlines.length === 0) return [];
 
   const feeds: ParsedFeed[] = [];
+
   for (const node of outlines) {
     walkOutline(node, null, feeds);
   }
+
   return feeds;
 }
 
@@ -79,12 +84,14 @@ function walkOutline(
       htmlUrl: node["@_htmlUrl"]?.trim() ?? null,
       folder,
     });
+
     return;
   }
 
   // Folder outline — recurse with this node's label as the new folder name
   const folderName = node["@_title"] ?? node["@_text"] ?? folder;
   const children = toArray(node.outline);
+
   for (const child of children) {
     walkOutline(child, folderName, feeds);
   }
@@ -92,5 +99,6 @@ function walkOutline(
 
 function toArray<T>(val: T | T[] | undefined): T[] {
   if (val === undefined || val === null) return [];
+
   return Array.isArray(val) ? val : [val];
 }

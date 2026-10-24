@@ -30,13 +30,17 @@ const BASE = "http://localhost";
 async function fetchPanels(timezone = "UTC"): Promise<OverviewPanelsResponse> {
   const req = new Request(`${BASE}/app/api/overview/panels`);
   const ctx = createExecutionContext();
+
   const res = await worker.fetch(
     req,
-    { ...env, DISPLAY_TIMEZONE: timezone } as Env,
+    { ...env, DISPLAY_TIMEZONE: timezone },
     ctx,
   );
+
   await waitOnExecutionContext(ctx);
   expect(res.status).toBe(200);
+
+  // SAFETY: The request targets the in-process route whose handler returns OverviewPanelsResponse.
   return (await res.json()) as OverviewPanelsResponse;
 }
 
@@ -70,12 +74,13 @@ async function seedFeed(opts: {
     userId: opts.userId ?? "dev-user-id",
     feedId,
   });
+
   return feedId;
 }
 
 async function seedAttempt(
   feedId: string,
-  status: string | null,
+  status: "ok" | "error" | FeedAttemptOutcome | null,
   startedAt = Date.now(),
   itemsAdded: number | null = null,
 ) {
@@ -93,15 +98,16 @@ async function seedAttempt(
     feedId,
     startedAt,
     completedAt: status == null ? null : startedAt + 100,
-    outcome: (status === null
-      ? null
-      : status === "ok"
-        ? (itemsAdded ?? 0) > 0
-          ? "new_items"
-          : "unchanged"
-        : status === "error"
-          ? "failed"
-          : status) as FeedAttemptOutcome | null,
+    outcome:
+      status === null
+        ? null
+        : status === "ok"
+          ? (itemsAdded ?? 0) > 0
+            ? "new_items"
+            : "unchanged"
+          : status === "error"
+            ? "failed"
+            : status,
     newItems: itemsAdded ?? 0,
   });
 }
@@ -139,11 +145,13 @@ describe("GET /app/api/overview/panels", () => {
     await markRead("dev-user-id", feedId, Date.parse("2024-03-06T08:00:00Z"));
     await markRead("dev-user-id", feedId, Date.parse("2024-03-06T07:59:59Z"));
     await markRead("dev-user-id", feedId, Date.parse("2024-03-10T08:00:00Z"));
+
     const body = await createActivityReader(env.DB).overviewPanels(
       "dev-user-id",
       timestamp,
       "America/Los_Angeles",
     );
+
     expect(body.reading.daily.map((day) => day.date)).toEqual([
       "2024-03-06",
       "2024-03-07",
@@ -178,10 +186,12 @@ describe("GET /app/api/overview/panels", () => {
       "failed",
     );
     expect((await fetchPanels()).feedHealth.failed).toBe(1);
+
     const manyFeedIds = [
       feedId,
       ...Array.from({ length: 150 }, (_, i) => `missing-${i}`),
     ];
+
     expect(
       (await history.latestAttempts(manyFeedIds)).get(feedId)?.outcome,
     ).toBe("failed");
@@ -197,9 +207,11 @@ describe("GET /app/api/overview/panels", () => {
     // One read now, one read ~2 days ago in LA time. A read at 06:30 UTC
     // is still the previous day in LA — covers the timezone boundary.
     await markRead("dev-user-id", feedId, now);
+
     const laBoundary = new Date(now).toLocaleString("en-US", {
       timeZone: "America/Los_Angeles",
     });
+
     await markRead("dev-user-id", feedId, now - 2 * 24 * 60 * 60 * 1000);
 
     const body = await fetchPanels();
@@ -328,12 +340,92 @@ describe("GET /app/api/overview/panels", () => {
     expect((await fetchPanels()).cycle.state).toBe("running");
   });
 
+  it("counts tied latest attempts once and selects the greatest attempt ID", async () => {
+    const feedId = await seedFeed({ title: "Throttled" });
+    const db = getDb(env.DB);
+    await db.insert(cycleRuns).values({
+      id: `cycle-${feedId}-1000`,
+      ranAt: 1000,
+      status: "completed",
+      outcome: "completed",
+    });
+    await db.insert(feedAttempts).values([
+      {
+        id: "a",
+        cycleRunId: `cycle-${feedId}-1000`,
+        feedId,
+        startedAt: 1000,
+        completedAt: 1100,
+        outcome: "rate_limited",
+      },
+      {
+        id: "z",
+        cycleRunId: `cycle-${feedId}-1000`,
+        feedId,
+        startedAt: 1000,
+        completedAt: 1100,
+        outcome: "rate_limited",
+      },
+    ]);
+
+    const tiedFeedId = await seedFeed({ title: "Deterministic tie" });
+    const tiedCycleRunId = `cycle-${tiedFeedId}-2000`;
+    await db.insert(cycleRuns).values({
+      id: tiedCycleRunId,
+      ranAt: 2000,
+      status: "completed",
+      outcome: "completed",
+    });
+    await db.insert(feedAttempts).values([
+      {
+        id: "tie-a",
+        cycleRunId: tiedCycleRunId,
+        feedId: tiedFeedId,
+        startedAt: 2000,
+        completedAt: 2100,
+        outcome: "unchanged",
+      },
+      {
+        id: "tie-z",
+        cycleRunId: tiedCycleRunId,
+        feedId: tiedFeedId,
+        startedAt: 2000,
+        completedAt: 2100,
+        outcome: "rate_limited",
+      },
+    ]);
+
+    const summary = await createActivityReader(env.DB).overviewSummary(
+      "dev-user-id",
+    );
+
+    const panels = await fetchPanels();
+
+    expect(summary.attention).toMatchObject({
+      total: 2,
+      rateLimited: 2,
+      failing: 0,
+      autoDeactivated: 0,
+      manuallyPaused: 0,
+    });
+    expect(panels.needsAttention).toHaveLength(2);
+    expect(
+      panels.needsAttention.find((item) => item.feedId === feedId),
+    ).toMatchObject({
+      kind: "rate_limited",
+    });
+    expect(
+      panels.needsAttention.find((item) => item.feedId === tiedFeedId),
+    ).toMatchObject({ kind: "rate_limited" });
+  });
+
   it("lists needs-attention feeds with links and ignores plain backoff", async () => {
     const failing = await seedFeed({
       title: "Broken",
       consecutiveErrors: 3,
       lastError: "HTTP 500",
     });
+
     await seedFeed({}); // healthy, backed off — not attention
 
     const body = await fetchPanels();
@@ -346,6 +438,7 @@ describe("GET /app/api/overview/panels", () => {
   it("reports rate-limited feeds as attention, distinct from failures", async () => {
     const limited = await seedFeed({ title: "Throttled" });
     await seedAttempt(limited, "rate_limited");
+
     const failing = await seedFeed({
       title: "Broken",
       consecutiveErrors: 2,
@@ -353,9 +446,11 @@ describe("GET /app/api/overview/panels", () => {
     });
 
     const body = await fetchPanels();
+
     const kinds = Object.fromEntries(
       body.needsAttention.map((f) => [f.feedId, f.kind]),
     );
+
     expect(kinds[limited]).toBe("rate_limited");
     expect(kinds[failing]).toBe("failing");
     const rl = body.needsAttention.find((f) => f.feedId === limited)!;

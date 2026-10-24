@@ -3,6 +3,9 @@ import { items, subscriptions } from "../db/schema";
 import { getDb } from "../lib/db";
 import type { StreamScope } from "./stream";
 
+// Leave one of D1's 100 query bindings for the User ID in eligibility lookup.
+const ITEM_ID_BATCH_SIZE = 99;
+
 export interface ItemStateUpdate {
   isRead?: boolean;
   isStarred?: boolean;
@@ -37,45 +40,64 @@ export function createItemStateModule(dbBinding: D1Database): ItemStateModule {
     changes: ItemStateUpdate;
   }): Promise<UpdatedItem[]> {
     const itemIds = [...new Set(params.itemIds)];
+
     if (itemIds.length === 0) return [];
 
-    const eligible = await db
-      .select({ itemId: items.id, feedId: items.feedId })
-      .from(items)
-      .innerJoin(
-        subscriptions,
-        and(
-          eq(subscriptions.feedId, items.feedId),
-          eq(subscriptions.userId, params.userId),
-        ),
-      )
-      .where(inArray(items.id, itemIds));
+    const eligible: UpdatedItem[] = [];
+
+    for (
+      let offset = 0;
+      offset < itemIds.length;
+      offset += ITEM_ID_BATCH_SIZE
+    ) {
+      const itemIdBatch = itemIds.slice(offset, offset + ITEM_ID_BATCH_SIZE);
+
+      const rows = await db
+        .select({ itemId: items.id, feedId: items.feedId })
+        .from(items)
+        .innerJoin(
+          subscriptions,
+          and(
+            eq(subscriptions.feedId, items.feedId),
+            eq(subscriptions.userId, params.userId),
+          ),
+        )
+        .where(inArray(items.id, itemIdBatch));
+
+      eligible.push(...rows);
+    }
 
     if (eligible.length === 0) return [];
 
     const setClauses: string[] = [];
+
     if (params.changes.isRead !== undefined) {
       setClauses.push("is_read = excluded.is_read");
       setClauses.push("read_at = excluded.read_at");
     }
+
     if (params.changes.isStarred !== undefined) {
       setClauses.push("is_starred = excluded.is_starred");
     }
+
     if (setClauses.length === 0) return [];
 
     const isRead = params.changes.isRead === true ? 1 : 0;
     const isStarred = params.changes.isStarred === true ? 1 : 0;
     const readAt = params.changes.isRead === true ? Date.now() : null;
+
     const sql = `
       INSERT INTO item_state (item_id, user_id, is_read, is_starred, read_at)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT (item_id, user_id) DO UPDATE SET ${setClauses.join(", ")}
     `;
+
     const statements = eligible.map(({ itemId }) =>
       dbBinding
         .prepare(sql)
         .bind(itemId, params.userId, isRead, isStarred, readAt),
     );
+
     await dbBinding.batch(statements);
 
     return eligible;
@@ -95,6 +117,7 @@ export function createItemStateModule(dbBinding: D1Database): ItemStateModule {
     }
 
     const scopeClauses: string[] = [];
+
     const bindings: (string | number | null)[] = [
       params.userId,
       Date.now(),
@@ -119,6 +142,7 @@ export function createItemStateModule(dbBinding: D1Database): ItemStateModule {
 
     const scopeSql =
       scopeClauses.length > 0 ? `AND ${scopeClauses.join(" AND ")}` : "";
+
     const result = await dbBinding
       .prepare(
         `

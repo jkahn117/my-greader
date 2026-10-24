@@ -3,6 +3,8 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "strict": true,
     "skipLibCheck": true,
     "lib": [
@@ -12,7 +14,7 @@
     ],
     "types": [
       "vite/client",
-      "@cloudflare/vitest-pool-workers",
+      "@cloudflare/vitest-plugin",
       "node"
     ],
     "jsx": "react-jsx",

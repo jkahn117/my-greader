@@ -16,6 +16,17 @@ import type { Variables } from "./helpers";
 
 const stream = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+interface StreamContentsResponse {
+  id: string;
+  items: ReturnType<typeof toGReaderItem>[];
+  continuation?: string;
+}
+
+interface ItemRefsResponse {
+  itemRefs: Array<{ id: string; timestampUsec: string }>;
+  continuation?: string;
+}
+
 // ---------------------------------------------------------------------------
 // GET /reader/api/0/stream/contents
 // ---------------------------------------------------------------------------
@@ -29,15 +40,18 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
     path: "/reader/api/0/stream/contents",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
   const parsed = v.safeParse(streamContentsSchema, c.req.query());
+
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
   const { s, n, xt, c: contToken, ot } = parsed.output;
   const scope = parseStreamId(s);
 
   const mod = createStreamModule(c.env.DB);
+
   const { page, hasMore, continuation } = await mod.queryPage({
     scope,
     userId,
@@ -49,11 +63,14 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
 
   logger.info("stream/contents", { stream: s, count: page.length, hasMore });
 
-  return c.json({
+  const response: StreamContentsResponse = {
     id: s,
     items: page.map(toGReaderItem),
-    ...(continuation ? { continuation } : {}),
-  });
+  };
+
+  if (continuation) response.continuation = continuation;
+
+  return c.json(response);
 });
 
 // ---------------------------------------------------------------------------
@@ -69,16 +86,19 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
     path: "/reader/api/0/stream/items/ids",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
   const parsed = v.safeParse(streamIdsSchema, c.req.query());
+
   if (!parsed.success) return c.json({ error: "Bad request" }, 400);
 
   const { s, n, xt, c: contToken, ot } = parsed.output;
   const scope = parseStreamId(s);
 
   const mod = createStreamModule(c.env.DB);
-  const { page, continuation } = await mod.queryPage({
+
+  const { page, continuation } = await mod.queryIdPage({
     scope,
     userId,
     excludeRead: xt === "user/-/state/com.google/read",
@@ -89,13 +109,16 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
   logger.info("stream/items/ids", { stream: s, count: page.length });
 
-  return c.json({
+  const response: ItemRefsResponse = {
     itemRefs: page.map((r) => ({
-      id: toGreaderItemId(r.item.id),
-      timestampUsec: String((r.item.publishedAt ?? 0) * 1000),
+      id: toGreaderItemId(r.id),
+      timestampUsec: String((r.publishedAt ?? 0) * 1000),
     })),
-    ...(continuation ? { continuation } : {}),
-  });
+  };
+
+  if (continuation) response.continuation = continuation;
+
+  return c.json(response);
 });
 
 // ---------------------------------------------------------------------------
@@ -109,23 +132,37 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
 
 type HonoCtx = Context<{ Bindings: Env; Variables: Variables }>;
 
+const itemIdsSchema = v.object({
+  i: v.union([v.string(), v.array(v.string())]),
+});
+
 async function handleStreamItemsContents(c: HonoCtx) {
   const logger = createLogger({
     path: "/reader/api/0/stream/items/contents",
     userId: c.get("userId"),
   });
+
   const userId = c.get("userId");
 
   let rawIds: string[] = [];
+
   if (c.req.method === "POST") {
-    const body = await c.req.parseBody({ all: true });
-    const i = body["i"];
-    rawIds = Array.isArray(i) ? (i as string[]) : i ? [i as string] : [];
+    const parsed = v.safeParse(
+      itemIdsSchema,
+      await c.req.parseBody({ all: true }),
+    );
+
+    if (!parsed.success) return c.json({ error: "Bad request" }, 400);
+
+    rawIds = Array.isArray(parsed.output.i)
+      ? parsed.output.i
+      : [parsed.output.i];
   } else {
     rawIds = c.req.queries("i") ?? [];
   }
 
   const itemIds = rawIds.map(normalizeItemId).filter(Boolean);
+
   if (itemIds.length === 0)
     return c.json({ id: "user/-/state/com.google/reading-list", items: [] });
 
@@ -144,6 +181,7 @@ async function handleStreamItemsContents(c: HonoCtx) {
 }
 
 stream.get("/reader/api/0/stream/items/contents", handleStreamItemsContents);
+
 stream.post("/reader/api/0/stream/items/contents", handleStreamItemsContents);
 
 export { stream };

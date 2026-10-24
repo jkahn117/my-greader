@@ -134,8 +134,13 @@ export interface FeedListItem {
   lastError: string | null;
   checkIntervalMinutes: number;
   deactivatedAt: number | null;
-  /** transient | permanent | manual; null when deactivated before reasons existed. */
-  deactivatedReason: string | null;
+  /** Persisted Deactivation reason; null for legacy rows without a recorded reason. */
+  deactivatedReason:
+    | "manual"
+    | "automatic_transient"
+    | "automatic_permanent"
+    | "legacy_unknown"
+    | null;
   /** True when the feed is deactivated with no recorded reason (pre-migration state). */
   legacyUncertain: boolean;
 }
@@ -270,6 +275,7 @@ export interface RevokeTokenResponse {
 
 /** Time windows offered by the Reading page, in display-timezone days. */
 export const READING_WINDOWS = [7, 14, 30] as const;
+
 export type ReadingWindowDays = (typeof READING_WINDOWS)[number];
 
 /** One display-timezone calendar day in the Reading daily series. */

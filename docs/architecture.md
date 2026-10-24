@@ -40,7 +40,7 @@ The polling cron starts a Workflow every 30 minutes. The Workflow processes elig
 
 Cycle Runs and Feed attempts are durable in D1 so retries can recover from interrupted work and the dashboard can distinguish no work, skipped Feeds, and failures. The Workflow instance ID identifies a Cycle Run; `${cycleRunId}:${feedId}` identifies a logical attempt reused on step retries. Empty selection completes durably without polling. Non-empty completion is reconciled from terminal attempts, not optional analytics. Concurrent polling uses a per-Feed lease and monotonic fence so an older request cannot overwrite a newer Feed result; manual health transitions cancel owned work.
 
-Items link to their first ingestion attempt through `items.first_ingestion_attempt_id`; history never reconstructs attribution from timestamps. A weekly cleanup removes Items past the configured fetched-time retention period only when no User has starred them, deletes their Item State, and expires Cycle Runs and attempts after 90 days. Cleanup is bounded, so expired rows may remain until a later cleanup. Retained Items lose expired attempt references before history deletion. Revoked API Tokens have a separate seven-day retention policy.
+Items link to their first ingestion attempt through `items.first_ingestion_attempt_id`; history never reconstructs attribution from timestamps. A weekly cleanup (Monday 03:00 UTC) removes Items past the configured fetched-time retention period only when no User has starred them, deletes their Item State, and expires Cycle Runs and attempts after 90 days. The throughput target is **up to 10,000 eligible expired unstarred Items and 400 expired Cycle Runs per weekly invocation**; 400 exceeds the 336 Cycle Runs created by the 30-minute scheduled polling cadence in seven days (manual and forced runs add to that). Item deletion uses at most ten SQL batches of 1,000 Items; history deletion uses at most four batches of 100 Cycle Runs, detaching retained Item attribution and Feed ownership before attempts are deleted. At most 38 D1 statements (including two one-row backlog probes) run in the retention manager, below the documented Workers Free 50 D1 queries per invocation; each batch remains subject to D1's 30-second query/batch limit and Worker runtime limits. See [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) and [Workers limits](https://developers.cloudflare.com/workers/platform/limits/). Structured weekly cron logs report deleted counts and `itemsBacklogRemaining` / `cycleRunsBacklogRemaining` booleans (with a warning if either is true); these indicate eligible rows remain, not their count. Backlogs over the caps or sustained growth above weekly capacity remain until later weekly invocations; the target is capacity, not a guarantee of timely deletion under overload or runtime failure. Revoked API Tokens have a separate seven-day retention policy.
 
 ## Module boundaries
 
@@ -52,7 +52,7 @@ Items link to their first ingestion attempt through `items.first_ingestion_attem
 | `src/feed/subscriptions.ts` | Feed upsert and Subscription operations |
 | `src/feed/item-state.ts` and `src/feed/stream.ts` | User-scoped reading state and API Stream queries |
 | `src/feed/poll.ts` | Feed selection, ingestion, Backoff, error handling, and polling state |
-| `src/feed/activity.ts` | D1-backed Overview, activity, and Cycle Run projections |
+| `src/feed/activity.ts` | D1-backed Overview projections |
 | `src/feed/history.ts` | Durable attempt pagination, terminal-check streaks, problem groups, attributed Items |
 | `src/feed/reading.ts` | Display-timezone day boundaries and current-Subscription marked-read projections |
 | `src/feed/analytics.ts` | Optional Analytics Engine queries and mapping |
@@ -60,6 +60,16 @@ Items link to their first ingestion attempt through `items.first_ingestion_attem
 | `src/domain/tokens/` | API Token generation, hashing, lookup, revocation, and retention |
 
 Handlers and the Workflow connect domain modules to Cloudflare bindings and observability. Domain persistence uses D1 directly; there is one store implementation. Analytics delivery is secondary to durable D1 writes.
+
+### Terminal Feed-attempt telemetry
+
+The poller publishes `feedAttemptCompleted` through its existing best-effort observer after the runtime wins a guarded terminal write and reads the committed evidence. Manual Feed health transitions publish the same domain event when they durably cancel an owned attempt. The Workflow and management handler adapt these events through `src/lib/polling-telemetry.ts` into structured logs with `eventName: "feed_attempt_completed"` and the readable message `feed polling attempt completed`. Logging libraries and severity remain outside the polling domain.
+
+Terminal logs contain `cycleRunId`, `attemptId`, `feedId`, `outcome`, `errorClass`, `httpStatus`, `parserStatus`, and `newItems`. These fields come from the logical attempt context and committed D1 evidence. `newItems` is the committed Item count, including zero for attempts that ingest nothing. Inapplicable `errorClass` and `httpStatus` are explicit JSON nulls, not missing fields. `parserStatus` records `success`, `fallback`, `failure`, or `not_attempted`; unknown legacy evidence remains null rather than inferred. Consumers can filter on the stable event name without matching message text.
+
+Failed attempts use error severity and include the persisted credential-redacted diagnostic as `error`, bounded to 500 characters. Rate-limited attempts use warning severity; all other outcomes use informational severity. Terminal events omit User identity, Feed URLs, and Feed titles. A title can contain upstream text or fall back to a credential-bearing URL; `feedId` is the lookup boundary for durable Feed details.
+
+Only the runtime that wins the terminal write publishes the completion event. Claiming an expired lease also reports the predecessor attempt it durably marks skipped, using that predecessor's identifiers rather than the claimant's. Replaying a completed attempt or losing a concurrent terminal-write race does not emit it again. Emission occurs before optional Analytics Engine delivery and independently of other Feeds in the batch. Observer failures cannot trigger polling retries or change D1 history. This is best-effort telemetry, not a transactional outbox: a crash or read failure after the commit can lose the event, and retries do not backfill it. Management cancellation emits from the transition that wins the guarded write, not from the returning polling runtime or a repeated health-change request. Its logger is separate from request logging so shared polling events do not inherit the acting User's identity. Delivery failure cannot undo a health transition. Use D1-backed Overview and Feed detail to establish durable outcomes.
 
 ## Management client and reading semantics
 

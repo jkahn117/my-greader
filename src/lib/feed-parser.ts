@@ -75,6 +75,7 @@ function normalizeAtom(feed: AtomFeed.Feed<string>): ParsedFeed {
     ttl: null,
     items: (feed.entries ?? []).map((entry) => {
       const author = personName(entry.authors?.[0]);
+
       return {
         // rss-parser exposed Atom id separately, so polling used the resolved URL.
         guid: null,
@@ -120,11 +121,13 @@ function normalizeRdf(feed: RdfFeed.Feed<string>): ParsedFeed {
 /** Parses a well-formed XML Feed and hides Feedsmith's format-specific models. */
 export function parseFeed(xml: string): ParsedFeed {
   const validation = XMLValidator.validate(xml);
+
   if (validation !== true) {
     throw new Error(`Malformed XML: ${validation.err.msg}`);
   }
 
   const parsed = parseWithFeedsmith(xml);
+
   switch (parsed.format) {
     case "rss":
       return normalizeRss(parsed.feed);

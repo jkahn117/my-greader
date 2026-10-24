@@ -3,7 +3,9 @@ import { feedPollAttempts, items } from "../db/schema";
 import { getDb } from "../lib/db";
 
 export const ATTEMPT_RETENTION_DAYS = 90;
+
 export const PROBLEM_WINDOW_DAYS = 30;
+
 const STREAK_SCAN_LIMIT = 500;
 
 export type AttemptCursor = { startedAt: number; id: string };
@@ -15,10 +17,13 @@ export function encodeCursor(cursor: AttemptCursor): string {
 export function decodeCursor(raw: string): AttemptCursor | null {
   const decoded = Buffer.from(raw, "base64url").toString("utf8");
   const separator = decoded.indexOf(":");
+
   if (separator <= 0) return null;
   const startedAt = Number(decoded.slice(0, separator));
   const id = decoded.slice(separator + 1);
+
   if (!Number.isFinite(startedAt) || id.length === 0) return null;
+
   return { startedAt, id };
 }
 
@@ -67,6 +72,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
   return {
     async latestAttempts(feedIds) {
       if (feedIds.length === 0) return new Map();
+
       const latestPerFeed = db
         .select({
           feedId: feedPollAttempts.feedId,
@@ -81,6 +87,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
         )
         .groupBy(feedPollAttempts.feedId)
         .as("latest_per_feed");
+
       const rows = await db
         .select({
           feedId: feedPollAttempts.feedId,
@@ -96,7 +103,9 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           ),
         )
         .orderBy(desc(feedPollAttempts.id));
+
       const latest = new Map<string, LatestFeedAttempt>();
+
       for (const row of rows) {
         if (!latest.has(row.feedId)) {
           latest.set(row.feedId, {
@@ -105,6 +114,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           });
         }
       }
+
       return latest;
     },
 
@@ -132,6 +142,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
       const hasMore = rows.length > limit;
       const page = hasMore ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
+
       return {
         rows: page,
         nextCursor:
@@ -141,6 +152,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
 
     async attemptItems(attemptIds) {
       if (attemptIds.length === 0) return new Map();
+
       const rows = await db
         .select({
           attemptId: items.firstIngestionAttemptId,
@@ -150,16 +162,19 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
         })
         .from(items)
         .where(inArray(items.firstIngestionAttemptId, attemptIds));
+
       const result = new Map<
         string,
         { id: string; title: string | null; url: string | null }[]
       >();
+
       for (const row of rows) {
         if (row.attemptId === null) continue;
         const attemptItems = result.get(row.attemptId) ?? [];
         attemptItems.push({ id: row.id, title: row.title, url: row.url });
         result.set(row.attemptId, attemptItems);
       }
+
       return result;
     },
 
@@ -180,15 +195,19 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
       const scanned = rows.slice(0, STREAK_SCAN_LIMIT);
       const hasOlder = rows.length > STREAK_SCAN_LIMIT;
       let problem = 0;
+
       for (const row of scanned) {
         if (row.outcome === "failed") problem++;
         else break;
       }
+
       let rateLimited = 0;
+
       for (const row of scanned) {
         if (row.outcome === "rate_limited") rateLimited++;
         else break;
       }
+
       return {
         problem: {
           count: problem,
@@ -208,6 +227,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
      */
     async problemGroups(feedId, now) {
       const since = now - PROBLEM_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
       const rows = await db
         .select({
           outcome: feedPollAttempts.outcome,
@@ -232,6 +252,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
         .orderBy(desc(sql`count(*)`));
 
       const result = [];
+
       for (const row of rows) {
         const latest = await db
           .select({ diagnostic: feedPollAttempts.diagnostic })
@@ -247,6 +268,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           )
           .orderBy(desc(feedPollAttempts.startedAt), desc(feedPollAttempts.id))
           .limit(1);
+
         result.push({
           kind:
             row.outcome === "rate_limited"
@@ -258,6 +280,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
           lastMessage: latest[0]?.diagnostic ?? null,
         });
       }
+
       return result;
     },
 
@@ -267,6 +290,7 @@ export function createFeedHistory(dbBinding: D1Database): FeedHistory {
         .from(feedPollAttempts)
         .where(eq(feedPollAttempts.feedId, feedId))
         .get();
+
       return Number(row?.count ?? 0);
     },
   };

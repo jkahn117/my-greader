@@ -21,19 +21,25 @@ async function login(
   const headers = new Headers({
     "Content-Type": "application/x-www-form-urlencoded",
   });
+
   if (ip !== null) headers.set("CF-Connecting-IP", ip);
+
   const request = new Request(`http://localhost${path}`, {
     method: "POST",
     headers,
     body: new URLSearchParams({ Email: "user@example.com", Passwd: token }),
   });
+
   const context = createExecutionContext();
+
   const response = await worker.fetch(
     request,
     { ...env, LOGIN_RATE_LIMITER: limiter },
     context,
   );
+
   await waitOnExecutionContext(context);
+
   return response;
 }
 
@@ -65,6 +71,7 @@ describe("ClientLogin native limiter", () => {
       const limit = vi
         .fn<RateLimit["limit"]>()
         .mockResolvedValue({ success: true });
+
       const response = await login({ limit }, TOKEN, "192.0.2.37", path);
       expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "192.0.2.37" });
       expect(response.status).toBe(200);
@@ -78,6 +85,7 @@ describe("ClientLogin native limiter", () => {
     const limit = vi
       .fn<RateLimit["limit"]>()
       .mockResolvedValue({ success: true });
+
     const response = await login({ limit }, TOKEN, null);
     expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "unknown" });
     expect(response.status).toBe(200);
@@ -94,13 +102,16 @@ describe("ClientLogin native limiter", () => {
           .bind(Date.now(), "limiter-token")
           .run();
       }
+
       const limit = vi
         .fn<RateLimit["limit"]>()
         .mockResolvedValue({ success: true });
+
       const response = await login(
         { limit },
         kind === "invalid" ? "invalid-token" : TOKEN,
       );
+
       expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "192.0.2.37" });
       expect(response.status).toBe(403);
       expect(await response.text()).toBe("BadAuthentication");
@@ -111,6 +122,7 @@ describe("ClientLogin native limiter", () => {
     const limit = vi
       .fn<RateLimit["limit"]>()
       .mockResolvedValue({ success: false });
+
     const response = await login({ limit });
     expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "192.0.2.37" });
     expect(response.status).toBe(429);
@@ -127,6 +139,7 @@ describe("ClientLogin native limiter", () => {
     const limit = vi
       .fn<RateLimit["limit"]>()
       .mockRejectedValue(new Error("sensitive platform failure"));
+
     const response = await login({ limit });
     expect(limit).toHaveBeenCalledExactlyOnceWith({ key: "192.0.2.37" });
     expect(response.status).toBe(503);

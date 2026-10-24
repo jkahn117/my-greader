@@ -1,5 +1,8 @@
 /** @jsxImportSource react */
-import type { OverviewResponse } from "../../shared/dashboard-api";
+import type {
+  OverviewPanelsResponse,
+  OverviewResponse,
+} from "../../shared/dashboard-api";
 import { OverviewPanels } from "../components/overview-panels";
 import { SyncButton } from "../components/sync-button";
 import { formatTime } from "../lib/time";
@@ -31,11 +34,16 @@ function cycleSubtitle(cycle: OverviewResponse["latestCycle"]): string {
 /** Sub-line for the attention card: kind breakdown or all-clear. */
 function attentionSubtitle(a: OverviewResponse["attention"]): string {
   const parts: string[] = [];
+
   if (a.rateLimited > 0) parts.push(`${a.rateLimited} rate limited`);
+
   if (a.failing > 0) parts.push(`${a.failing} failing`);
+
   if (a.autoDeactivated > 0)
     parts.push(`${a.autoDeactivated} auto-deactivated`);
+
   if (a.manuallyPaused > 0) parts.push(`${a.manuallyPaused} manually paused`);
+
   return parts.length > 0 ? parts.join(" · ") : "All feeds healthy";
 }
 
@@ -89,6 +97,7 @@ export function OverviewPending() {
 /** Safe failure / unauthorized state for the overview route. */
 export function OverviewError({ status }: { status?: number }) {
   const unauthorized = status === 401 || status === 403;
+
   return (
     <Card>
       <CardContent className="py-10 text-center">
@@ -112,7 +121,13 @@ export function OverviewError({ status }: { status?: number }) {
  * (Feeds, New Items 7d, Items marked read 7d, Feeds needing attention), then
  * reading + feed health panels, then the compact Needs attention list.
  */
-export function OverviewPage({ data }: { data: OverviewResponse }) {
+export function OverviewPage({
+  data,
+  panels,
+}: {
+  data: OverviewResponse;
+  panels: OverviewPanelsResponse | null;
+}) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -153,7 +168,11 @@ export function OverviewPage({ data }: { data: OverviewResponse }) {
         />
       </div>
 
-      <OverviewPanels timezone={data.timezone} feedCount={data.feedCount} />
+      <OverviewPanels
+        data={panels}
+        timezone={data.timezone}
+        feedCount={data.feedCount}
+      />
     </div>
   );
 }

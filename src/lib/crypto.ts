@@ -2,6 +2,7 @@
 export async function sha256(input: string): Promise<string> {
   const encoded = new TextEncoder().encode(input);
   const buffer = await crypto.subtle.digest("SHA-256", encoded);
+
   return Array.from(new Uint8Array(buffer))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -19,6 +20,7 @@ export async function deriveItemId(guidOrUrl: string): Promise<string> {
  */
 export function normalizeItemId(id: string): string {
   const prefix = "tag:google.com,2005:reader/item/";
+
   return id.startsWith(prefix) ? id.slice(prefix.length) : id;
 }
 
@@ -36,6 +38,7 @@ export function encodeContinuation(
   itemId: string,
 ): string {
   const raw = `${publishedAt}:${itemId}`;
+
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
@@ -47,15 +50,20 @@ export function decodeContinuation(token: string): ContinuationCursor | null {
     const padded =
       token.replace(/-/g, "+").replace(/_/g, "/") +
       "==".slice((token.length + 3) % 4 === 0 ? 4 : (token.length + 3) % 4);
+
     const raw = atob(padded);
     const colon = raw.indexOf(":");
+
     if (colon === -1) {
       // Legacy token: plain timestamp only (no itemId component)
       const value = Number(raw);
+
       return isNaN(value) ? null : { publishedAt: value, itemId: "" };
     }
+
     const publishedAt = Number(raw.slice(0, colon));
     const itemId = raw.slice(colon + 1);
+
     return isNaN(publishedAt) ? null : { publishedAt, itemId };
   } catch {
     return null;

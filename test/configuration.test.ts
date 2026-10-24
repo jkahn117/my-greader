@@ -22,7 +22,7 @@ const configuration = v.parse(
     ),
     secrets: v.object({ required: v.array(v.string()) }),
   }),
-  JSON.parse((env as unknown as Record<string, string>).TEST_WRANGLER_CONFIG),
+  JSON.parse(env.TEST_WRANGLER_CONFIG),
 );
 
 describe("consequential Worker configuration", () => {
@@ -37,13 +37,12 @@ describe("consequential Worker configuration", () => {
     const registrations = configuration.workflows.filter(
       (workflow) => workflow.binding === "FEED_POLLING_WORKFLOW",
     );
+
     expect(configuration.main).toBe("./src/index.tsx");
     expect(registrations).toEqual([
       { binding: "FEED_POLLING_WORKFLOW", class_name: "FeedPollingWorkflow" },
     ]);
-    expect(Reflect.get(workerExports, registrations[0].class_name)).toBeTypeOf(
-      "function",
-    );
+    expect(workerExports.FeedPollingWorkflow).toBeTypeOf("function");
     expect(env.FEED_POLLING_WORKFLOW.create).toBeTypeOf("function");
   });
 

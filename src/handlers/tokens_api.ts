@@ -44,6 +44,7 @@ handler.get("/app/api/tokens", async (c) => {
 
   try {
     const rows = await createApiTokenLifecycle(c.env.DB).listAll(userId);
+
     const response: TokensResponse = {
       tokens: rows.map(toSummary),
       connection: {
@@ -54,13 +55,16 @@ handler.get("/app/api/tokens", async (c) => {
       lastUsedResolutionMinutes: API_TOKEN_USAGE_WRITE_INTERVAL_MS / 60_000,
       generatedAt: Date.now(),
     };
+
     logger.info("tokens list served", { tokenCount: rows.length });
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "tokens list failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to load tokens" }, 500);
   }
 });
@@ -82,6 +86,7 @@ handler.post("/app/api/tokens", async (c) => {
   }
 
   let name: string;
+
   try {
     name = v.parse(GenerateBody, await c.req.json()).name;
   } catch {
@@ -91,22 +96,28 @@ handler.post("/app/api/tokens", async (c) => {
   try {
     const lifecycle = createApiTokenLifecycle(c.env.DB);
     const generated = await lifecycle.generate(userId, name);
+
     const row = (await lifecycle.listAll(userId)).find(
       (token) => token.id === generated.id,
     );
+
     if (!row) throw new Error("generated token was not persisted");
     logger.info("token generated", { tokenId: row.id });
+
     const response: GenerateTokenResponse = {
       token: toSummary(row),
       rawToken: generated.rawToken,
     };
+
     c.header("Cache-Control", "no-store");
+
     return c.json(response, 201);
   } catch (err) {
     logger.error(
       "token generation failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to generate token" }, 500);
   }
 });
@@ -126,29 +137,37 @@ handler.delete("/app/api/tokens/:id", async (c) => {
 
   try {
     const lifecycle = createApiTokenLifecycle(c.env.DB);
+
     const existing = (await lifecycle.listAll(userId)).find(
       (token) => token.id === id,
     );
+
     if (!existing) {
       logger.info("token revoke rejected, not found", { tokenId: id });
+
       return c.json({ error: "token not found" }, 404);
     }
+
     if (existing.revokedAt === null) {
       await lifecycle.revoke(userId, id);
     }
+
     const row =
       existing.revokedAt === null
         ? (await lifecycle.listAll(userId)).find((token) => token.id === id)
         : existing;
+
     if (!row) throw new Error("revoked token was not persisted");
     logger.info("token revoked", { tokenId: id });
     const response: RevokeTokenResponse = { token: toSummary(row) };
+
     return c.json(response);
   } catch (err) {
     logger.error(
       "token revoke failed",
       err instanceof Error ? err : { err: String(err) },
     );
+
     return c.json({ error: "failed to revoke token" }, 500);
   }
 });

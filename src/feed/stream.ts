@@ -35,7 +35,9 @@ export type ItemRow = {
 
 export function toGReaderItem(r: ItemRow) {
   const categories = ["user/-/state/com.google/reading-list"];
+
   if (r.isRead) categories.push("user/-/state/com.google/read");
+
   if (r.isStarred) categories.push("user/-/state/com.google/starred");
 
   const publishedSec = r.item.publishedAt
@@ -74,8 +76,19 @@ export interface PageResult {
   continuation?: string;
 }
 
+export interface ItemIdRow {
+  id: string;
+  publishedAt: number | null;
+}
+
+export interface IdPageResult {
+  page: ItemIdRow[];
+  continuation?: string;
+}
+
 export interface StreamModule {
   queryPage(params: ScopeParams & { limit: number }): Promise<PageResult>;
+  queryIdPage(params: ScopeParams & { limit: number }): Promise<IdPageResult>;
   queryByIds(params: { ids: string[]; userId: string }): Promise<ItemRow[]>;
 }
 
@@ -122,15 +135,15 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
 
     if (cursor !== null) {
       if (cursor.itemId) {
-        conditions.push(
-          or(
-            lt(items.publishedAt, cursor.publishedAt),
-            and(
-              sql`${items.publishedAt} = ${cursor.publishedAt}`,
-              lt(items.id, cursor.itemId),
-            ),
-          ) as SQL<unknown>,
+        const beforeCursor = or(
+          lt(items.publishedAt, cursor.publishedAt),
+          and(
+            sql`${items.publishedAt} = ${cursor.publishedAt}`,
+            lt(items.id, cursor.itemId),
+          ),
         );
+
+        if (beforeCursor) conditions.push(beforeCursor);
       } else {
         conditions.push(lt(items.publishedAt, cursor.publishedAt));
       }
@@ -169,30 +182,29 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     const lastItem = page.at(-1);
+
     const continuation =
       hasMore && lastItem?.item.publishedAt && lastItem.item.id
         ? encodeContinuation(lastItem.item.publishedAt, lastItem.item.id)
         : undefined;
 
-    return { page, hasMore, ...(continuation ? { continuation } : {}) };
+    const result: PageResult = { page, hasMore };
+
+    if (continuation) result.continuation = continuation;
+
+    return result;
   }
 
-  /** Looks up requested Items while enforcing the User's Subscriptions. */
-  async function queryByIds(params: {
-    ids: string[];
-    userId: string;
-  }): Promise<ItemRow[]> {
-    const { ids, userId } = params;
+  /** Returns an ordered Stream page without loading shared Item content. */
+  async function queryIdPage(
+    params: ScopeParams & { limit: number },
+  ): Promise<IdPageResult> {
+    const { userId, limit } = params;
 
-    return d
-      .select({
-        item: items,
-        feedId: feeds.id,
-        feedTitle: feeds.title,
-        htmlUrl: feeds.htmlUrl,
-        isRead: itemState.isRead,
-        isStarred: itemState.isStarred,
-      })
+    const conditions = await resolveScope(params);
+
+    const rows = await d
+      .select({ id: items.id, publishedAt: items.publishedAt })
       .from(items)
       .innerJoin(feeds, eq(items.feedId, feeds.id))
       .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
@@ -200,8 +212,68 @@ export function createStreamModule(dbBinding: D1Database): StreamModule {
         itemState,
         and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)),
       )
-      .where(and(eq(subscriptions.userId, userId), inArray(items.id, ids)));
+      .where(and(...conditions))
+      .orderBy(desc(items.publishedAt), desc(items.id))
+      .limit(limit + 1);
+
+    const hasMore = rows.length > limit;
+
+    const page = rows.slice(0, limit);
+
+    const lastItem = page.at(-1);
+
+    const result: IdPageResult = { page };
+
+    if (hasMore && lastItem?.publishedAt && lastItem.id) {
+      result.continuation = encodeContinuation(
+        lastItem.publishedAt,
+        lastItem.id,
+      );
+    }
+
+    return result;
   }
 
-  return { queryPage, queryByIds };
+  /** Looks up requested Items in bounded batches while enforcing Subscriptions. */
+  async function queryByIds(params: {
+    ids: string[];
+    userId: string;
+  }): Promise<ItemRow[]> {
+    const { userId } = params;
+    const ids = [...new Set(params.ids)];
+
+    if (ids.length === 0) return [];
+
+    const rows: ItemRow[] = [];
+    // D1 allows 100 bound parameters per query; leave room for fixed predicates.
+    const batchSize = 90;
+
+    for (let offset = 0; offset < ids.length; offset += batchSize) {
+      const batch = ids.slice(offset, offset + batchSize);
+
+      const batchRows = await d
+        .select({
+          item: items,
+          feedId: feeds.id,
+          feedTitle: feeds.title,
+          htmlUrl: feeds.htmlUrl,
+          isRead: itemState.isRead,
+          isStarred: itemState.isStarred,
+        })
+        .from(items)
+        .innerJoin(feeds, eq(items.feedId, feeds.id))
+        .innerJoin(subscriptions, eq(subscriptions.feedId, feeds.id))
+        .leftJoin(
+          itemState,
+          and(eq(itemState.itemId, items.id), eq(itemState.userId, userId)),
+        )
+        .where(and(eq(subscriptions.userId, userId), inArray(items.id, batch)));
+
+      rows.push(...batchRows);
+    }
+
+    return rows;
+  }
+
+  return { queryPage, queryIdPage, queryByIds };
 }
