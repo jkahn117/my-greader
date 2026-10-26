@@ -6,8 +6,13 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
+    "redact_query_string": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
     "traces": {
-      "enabled": true
+      "enabled": true,
+      "head_sampling_rate": 0.05
     }
   },
   "assets": {

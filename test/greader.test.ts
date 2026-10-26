@@ -7,7 +7,7 @@ import {
   createExecutionContext,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as v from "valibot";
 import worker from "../src/index";
 import { getDb } from "../src/lib/db";
@@ -447,6 +447,45 @@ describe("subscription/edit", () => {
 // ---------------------------------------------------------------------------
 
 describe("stream/contents", () => {
+  it.each(["contents", "items/ids"])(
+    "does not emit sensitive query values for stream/%s while keeping the reader response unchanged",
+    async (endpoint) => {
+      const { feedId } = await seedFeed({
+        feedUrl: "https://example.com/feed.xml",
+        title: "Example Feed",
+        itemGuid: "https://example.com/a1",
+        itemTitle: "Article 1",
+      });
+
+      await subscribeUser("dev-user-id", feedId);
+
+      const path = `/api/greader.php/reader/api/0/stream/${endpoint}?s=user/-/state/com.google/reading-list&n=1`;
+      const baseline = await fetch(path, { headers: authHeaders() });
+      const expected = await baseline.text();
+
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        const response = await fetch(
+          `${path}&continuation=continuationSecret73&access_token=queryTokenSecret73`,
+          { headers: authHeaders() },
+        );
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(expected);
+
+        const emittedLogs = log.mock.calls.flat().join("\n");
+        expect(emittedLogs).toContain(`stream/${endpoint}`);
+        expect(emittedLogs).toContain("\"message\":\"GET /*\"");
+        expect(emittedLogs).not.toContain("continuationSecret73");
+        expect(emittedLogs).not.toContain("queryTokenSecret73");
+        expect(emittedLogs).not.toContain("reading-list");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
   it("returns items for reading-list stream", async () => {
     const { feedId } = await seedFeed({
       feedUrl: "https://example.com/feed.xml",

@@ -21,11 +21,29 @@ const configuration = v.parse(
       }),
     ),
     secrets: v.object({ required: v.array(v.string()) }),
+    observability: v.object({
+      enabled: v.boolean(),
+      redact_query_string: v.optional(v.boolean()),
+      logs: v.optional(v.object({ head_sampling_rate: v.number() })),
+      traces: v.object({
+        enabled: v.boolean(),
+        head_sampling_rate: v.optional(v.number()),
+      }),
+    }),
   }),
   JSON.parse(env.TEST_WRANGLER_CONFIG),
 );
 
 describe("consequential Worker configuration", () => {
+  it("redacts platform request queries and samples logs independently of traces", () => {
+    expect(configuration.observability).toMatchObject({
+      enabled: true,
+      redact_query_string: true,
+      logs: { head_sampling_rate: 1 },
+      traces: { enabled: true, head_sampling_rate: 0.05 },
+    });
+  });
+
   it("configures exactly the schedules exercised by scheduled dispatch tests", () => {
     expect(configuration.triggers.crons.toSorted()).toEqual([
       "*/30 * * * *",

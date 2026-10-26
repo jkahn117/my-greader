@@ -61,7 +61,7 @@ stream.get("/reader/api/0/stream/contents", async (c) => {
     limit: n,
   });
 
-  logger.info("stream/contents", { stream: s, count: page.length, hasMore });
+  logger.info("stream/contents", { count: page.length, hasMore });
 
   const response: StreamContentsResponse = {
     id: s,
@@ -107,7 +107,7 @@ stream.get("/reader/api/0/stream/items/ids", async (c) => {
     limit: n,
   });
 
-  logger.info("stream/items/ids", { stream: s, count: page.length });
+  logger.info("stream/items/ids", { count: page.length });
 
   const response: ItemRefsResponse = {
     itemRefs: page.map((r) => ({
