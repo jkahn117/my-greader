@@ -94,27 +94,9 @@ Complete when the operation and target path are established and pre-existing wor
 
    Pair `no-reduce-accumulator-copy` with native `oxc/no-accumulating-spread`: the custom rule catches supported non-spread copies such as `Object.assign({}, acc, item)`, `Array.from(acc)`, and array accumulator `concat`/`slice` calls. Mutating a fresh local accumulator is allowed; copying individual input items is also allowed. Named callbacks, indirect helpers, and nested accumulator properties are not fully analyzed, so do not claim all quadratic reducers are ruled out.
 
-   If the repository declares `effect` in a package manifest, or the user explicitly requests Effect rules, also register the opt-in Effect plugin:
+   This repository uses only the generic plugin. Effect rules were intentionally removed from both the installation and this bundle; preserve that choice when updating from upstream.
 
-   ```ts
-   jsPlugins: [
-     {
-       name: "anti-slop-effect",
-       specifier: "./tools/oxlint/anti-slop/effect/index.ts",
-     },
-   ],
-   rules: {
-     "anti-slop-effect/no-manual-effect-error-tag": "error",
-     "anti-slop-effect/no-manual-tag-comparison": "error",
-     "anti-slop-effect/no-manual-tagged-construction": "error",
-     "anti-slop-effect/no-service-constructor-imports": "error",
-     "anti-slop-effect/prefer-effect-match": "error",
-   },
-   ```
-
-   Merge these entries with the generic plugin configuration rather than replacing it. Do not enable the Effect plugin merely because Effect appears transitively in a lockfile; require a direct package-manifest dependency or an explicit user request. The rule covers relative project imports. Report package-alias imports as a current limitation rather than pretending they are enforced.
-
-   Complete when the generic rules and eligible Effect rules are registered and existing configuration is preserved.
+   Complete when the generic rules are registered and existing configuration is preserved.
 
 4. Run the repository's lint command and typecheck. For Vite+, run the repository's full `vp check` command after adding both lint and format ignores. If findings appear in owned project source, report them and fix them only when the user asked for migration/cleanup. Do not suppress rules, weaken rule severity, add unsafe casts, or mechanically launder types to make lint pass.
 
