@@ -61,7 +61,7 @@ Items link to their first ingestion attempt through `items.first_ingestion_attem
 
 Handlers and the Workflow connect domain modules to Cloudflare bindings and observability. Domain persistence uses D1 directly; there is one store implementation. Analytics delivery is secondary to durable D1 writes.
 
-The [native unified SQL investigation](native-sql-investigation.md) assesses a future replacement for the Analytics Engine HTTP read transport. Platform support is documented, but migration awaits account eligibility and production-query verification. The current HTTP adapter and optional `CF_API_TOKEN` requirement remain unchanged.
+The [native unified SQL investigation](native-sql-investigation.md) assesses a future replacement for the Analytics Engine HTTP read transport. Binding support is documented, but migration is blocked by exact-`MAX` incompatibility on sampled data and awaits acceptance of alternative query semantics, account eligibility, and production-query verification. The current HTTP adapter and optional `CF_API_TOKEN` requirement remain unchanged.
 
 ### Terminal Feed-attempt telemetry
 
