@@ -61,6 +61,8 @@ Items link to their first ingestion attempt through `items.first_ingestion_attem
 
 Handlers and the Workflow connect domain modules to Cloudflare bindings and observability. Domain persistence uses D1 directly; there is one store implementation. Analytics delivery is secondary to durable D1 writes.
 
+The [native unified SQL investigation](native-sql-investigation.md) assesses a future replacement for the Analytics Engine HTTP read transport. Platform support is documented, but migration awaits account eligibility and production-query verification. The current HTTP adapter and optional `CF_API_TOKEN` requirement remain unchanged.
+
 ### Terminal Feed-attempt telemetry
 
 The poller publishes `feedAttemptCompleted` through its existing best-effort observer after the runtime wins a guarded terminal write and reads the committed evidence. Manual Feed health transitions publish the same domain event when they durably cancel an owned attempt. The Workflow and management handler adapt these events through `src/lib/polling-telemetry.ts` into structured logs with `eventName: "feed_attempt_completed"` and the readable message `feed polling attempt completed`. Logging libraries and severity remain outside the polling domain.
