@@ -8,7 +8,7 @@ Copied files:
 - `packages/eslint-plugin/rules/padding-line-between-statements/types.d.ts` → `padding-line-options.d.ts`
 - Root `LICENSE`, retained verbatim. Both OpenJS Foundation and ESLint Stylistic notices apply.
 
-The rule is MIT-licensed. Keep `LICENSE` with every redistributed copy, including skill assets. No Stylistic, ESLint, TypeScript-ESLint, or additional parser runtime dependency is required.
+The rule is MIT-licensed. Keep `LICENSE` with every redistributed copy. No Stylistic, ESLint, TypeScript-ESLint, or additional parser runtime dependency is required.
 
 ## Local adaptations
 
@@ -23,6 +23,6 @@ The opinionated policy lives outside this directory in `../../rules/require-read
 
 ## Updating and verification
 
-Fetch an explicit upstream revision, compare the original rule and types against this revision, and port relevant fixes while retaining the adapters above. Update this record and preserve the license. Run `pnpm check` and `pnpm sync:skill-assets` as required by repository guidance.
+Fetch an explicit upstream revision, compare the original rule and types against this revision, and port relevant fixes while retaining the adapters above. Update this record and preserve the license. Use this repository's checks from `package.json`; there is no skill-assets synchronization step after removal of the project skills.
 
-Focused Oxlint RuleTester cases live in `../../rules/require-readable-spacing.test.ts`; they test exact fixes, JSDoc/trailing comments, same-line statements, semicolon-free code, TypeScript exports/overloads, Effect-style generators, and upstream removal behavior. `../../rules/require-readable-spacing-cli.test.ts` verifies the exported plugin through the native Oxlint CLI on multiple files, including rejection, autofix, and repeated-fix stability. The complete upstream JS/TS test suites have not been ported; this is focused compatibility evidence, not a claim of full upstream conformance.
+The former bundled record described RuleTester and native-CLI test files that are not included in this installation. It is not evidence of local test coverage. Before changing rule behavior, retrieve the relevant upstream tests or add focused cases for the adapters and wrapper, then exercise the exported plugin through the native Oxlint CLI. Application lint can verify that the plugin loads, but does not establish rule compatibility or full upstream conformance.
