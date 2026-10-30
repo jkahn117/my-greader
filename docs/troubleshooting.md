@@ -1,177 +1,45 @@
-# Troubleshooting RSS feed faults
+# Investigate a Feed problem
 
-This guide covers investigating feed-level failures using the observability
-tooling already wired into my-greader. For API connection and authentication
-behavior, see the [Google Reader API reference](reference/greader-api.md) and
-[Auth flow](auth-flow.md).
+Start with the application dashboard. Its history comes from D1 and remains available when optional Analytics Engine queries fail. For deployment checks or Cloudflare log and alarm setup, use [operations](operations.md).
 
-## Error categories
+## Check whether the problem is one Feed or polling itself
 
-All feed-fetch errors are classified into two types, which drive the deactivation
-logic:
+1. Open Overview and inspect the latest Cycle Run. A completed run with no Feeds due is normal; an old or unfinished run needs investigation in the `feed-polling` Workflow. There is no automatic polling-stop watchdog.
+2. Open **Feeds** and filter for failing, rate-limited, or deactivated Feeds. Open a Feed to compare its last successful check, last new Item, next eligibility, and Backoff interval.
+3. Expand a recent attempt in Feed detail. Read its outcome, HTTP status, parser status, and bounded diagnostic. Copy its full attempt ID when correlating it with logs.
 
-| Error type | Examples | Deactivation threshold | Behaviour |
-|---|---|---|---|
-| **Transient** | Network timeouts, DNS failures, HTTP 5xx, XML parse errors ("Unclosed root tag") | 5 consecutive | Retried at the Feed's current interval until deactivated |
-| **Permanent** | HTTP 401, 403, 404, 410 | 2 consecutive | Fast deactivation — these rarely self-resolve. The feed stays deactivated until manually reactivated from the Feed tab |
+A successful check without new Items is not a failure. Next eligibility is not a promised execution time. Several unrelated Feeds failing together warrant a wider investigation; one failing publisher does not establish an application outage.
 
-Rate limits (HTTP 429) do not count toward any deactivation threshold (they are
-transient by nature but the server explicitly tells us to wait).
+## Interpret the evidence
 
-### Parse fallback
+| Evidence | Meaning and next step |
+| --- | --- |
+| `new_items`, `unchanged`, or `not_modified` | Successful check. A 304 or unchanged Feed can legitimately add no Items. |
+| `rate_limited`, HTTP 429 | The upstream server asked us to wait. Backoff applies, and the attempt does not increment the Deactivation error counter. Do not force repeated checks. |
+| `failed`, `errorClass: network` | A network request failed. Use the diagnostic to investigate; do not infer a publisher or platform outage from one attempt. |
+| `failed`, `errorClass: http` | Inspect the HTTP status. A 403 proves a forbidden response, not which provider blocked it. A 404 does not by itself prove the Feed moved. |
+| `parserStatus: fallback` | Strict parsing failed, but lenient extraction succeeded. This is not a hard parser failure. |
+| `failed`, `parserStatus: failure`, `errorClass: parse` | Both parsing paths failed. The response may be malformed XML or something else, such as an HTML error page. |
+| `skipped` or unfinished work | Not a successful HTTP check or a failed Feed. Inspect ownership and lifecycle evidence before treating it as either. |
 
-When `rss-parser` (xml2js) rejects a Feed with an XML-level error (e.g. "Unclosed
-root tag"), the parser falls back to a lenient HTML-based extractor that uses
-[linkedom](https://github.com/WebReflection/linkedom). A successful fallback is
-stored as `parser_status = 'fallback'` on the durable Feed attempt, shown in Feed
-attempt history, and emitted as an Analytics Engine parse-status dimension.
+The parser uses Feedsmith after strict XML validation, with a lenient linkedom fallback in the polling path. See [the parser](../src/lib/feed-parser.ts) and [polling policy](../src/feed/poll.ts) when debugging implementation behavior.
 
-## Finding problem feeds
+## Understand Deactivation and Backoff
 
-### 1. Dashboard — Feeds
+The current polling policy deactivates after five consecutive transient errors, including network, parser, and HTTP 5xx failures. HTTP 401, 403, 404, and 410 are permanent errors and deactivate after two consecutive errors. HTTP 429 is handled separately and does not count toward those thresholds.
 
-The **Feeds** page (`/app/feeds`) supports search, Folder filters, and health
-filters, including failing, rate-limited, and deactivated Feeds. Open a Feed at
-`/app/feeds/:feedId` to inspect current health:
+Quiet Feeds back off to four hours. A longer Feed-provided `<ttl>` can extend eligibility up to 24 hours, and HTTP 429 can carry a `Retry-After` hint. A long interval without errors can therefore be normal. New Items reset the normal interval to 30 minutes unless a longer Feed timing hint applies.
 
-- Last successful check and precise new-Item discovery (unknown legacy facts stay unknown)
-- Initial backload completion
-- Backoff interval and next eligibility time
-- Consecutive errors, last error, and recorded Deactivation reason
+Use Feed detail's **Reactivate** or **Deactivate** controls only after understanding the evidence. They change the shared Feed for every subscriber. Reactivation clears error health and Deactivation and makes the Feed eligible again; it does not repair a broken upstream URL.
 
-Feed detail provides **Reactivate** and **Deactivate** controls. These change the
-shared Feed for all subscribers, not just your Subscription.
+**Sync now** starts normal global polling without waiting for cron. **Force sync** bypasses due time only, not Deactivation or the requirement for a Subscription. Neither action is a remedy for an upstream rate limit.
 
-### 2. Dashboard — Feed attempt history
+## Correlate with logs only when needed
 
-Feed detail contains paginated durable attempt history, including outcome,
-HTTP or parser evidence, diagnostic, stable attempt ID, Cycle Run ID, and newly
-attributed Items. History is retained for 90 days; legacy Items are not attributed
-by timestamp, and Item retention can remove content from an otherwise retained
-attempt. Use the attempt ID to correlate the row with structured logs. The JSON
-endpoint is `/app/api/feeds/:feedId/attempts`; it requires a current Subscription.
+Terminal logs use `eventName: "feed_attempt_completed"` and include `cycleRunId`, `attemptId`, `feedId`, `outcome`, `errorClass`, `httpStatus`, `parserStatus`, and `newItems`. Inapplicable HTTP status and error class are explicit JSON nulls. Failed attempts include a bounded, credential-redacted diagnostic.
 
-The former Timeline tab is removed. For Cycle Run history beyond the latest
-summary, use D1 and structured logs.
+Filter by the stable event name and copied attempt ID using the actual fields exposed in the account's Logs browser. The [operations schema-discovery steps](operations.md#discover-the-log-schema-before-copying-sql) explain why SQL field paths must be checked rather than guessed. Shared polling logs omit User identity, Feed URLs, and Feed titles.
 
-### 3. Dashboard — Overview
+Logging is best effort: a D1 commit can succeed without a corresponding log. Feed attempt history is retained for 90 days; expired or legacy history is unknown rather than success. Items are attributed to their first ingestion attempt, never inferred from timestamps, and Item retention can remove content from an otherwise retained attempt. See [architecture](architecture.md#request-and-polling-flow) for persistence and retention details.
 
-The **Overview** page (`/app/overview`) shows latest-attempt Feed health buckets,
-needs-attention links, and the latest global Cycle Run lifecycle. Its optional
-Analytics Engine panel shows a 30-day trend, not the former Metrics tab's full
-HTTP error breakdown. Network and parser diagnostics remain available in Feed
-attempt history and D1 even without Analytics Engine credentials.
-
-### 4. Structured logs (Workers Observability)
-
-Workers Observability is enabled (`observability.enabled: true` in
-`wrangler.jsonc`). The Workflow emits one `feed polling attempt completed` log
-per terminal attempt. In **Observability → Investigate → Query Builder**, filter
-on fields that are present on those logs:
-
-```
--- Failed Feed attempts
-outcome = "failed"
-
--- Network, HTTP, or parse failures
-errorClass = "network"
-errorClass = "http"
-errorClass = "parse"
-
--- Rate-limited or skipped attempts
-outcome = "rate_limited"
-outcome = "skipped"
-
--- One durable attempt or Feed
-attemptId = "<cycle-run-id>:<feed-id>"
-feedId = "<feed-id>"
-```
-
-HTTP status and parser status are durable D1 fields shown in attempt history; they
-are not attached to every terminal structured log.
-
-### 5. `wrangler tail`
-
-Stream the same terminal logs in real time and filter their structured fields:
-
-```bash
-pnpm wrangler tail --format json | jq 'select(any(.logs[]?; .message | contains("feed polling attempt completed")))'
-pnpm wrangler tail --format json | rg 'errorClass.*parse'
-```
-
-### 6. D1 queries
-
-Query current Feed health:
-
-```sql
-SELECT title, feed_url, last_successful_poll_at,
-       last_new_item_discovered_at, initial_backload_completed_at,
-       next_poll_at, consecutive_errors, last_error,
-       deactivated_at, deactivation_reason
-FROM feeds
-WHERE consecutive_errors > 0 OR deactivated_at IS NOT NULL
-ORDER BY consecutive_errors DESC;
-```
-
-Query recent durable attempt detail, including fields not present on every log:
-
-```sql
-SELECT id, cycle_run_id, feed_id, outcome, error_class,
-       http_status, parser_status, diagnostic, started_at, completed_at
-FROM feed_poll_attempts
-WHERE outcome IN ('failed', 'rate_limited')
-   OR parser_status IN ('fallback', 'failure')
-ORDER BY started_at DESC, id DESC
-LIMIT 100;
-```
-
-## Common scenarios
-
-### Feed deactivated after HTTP 404
-
-The feed URL returned a 404 — the feed has been moved or deleted. Two options:
-
-1. Find the new feed URL on the publisher's site and re-add it via OPML import
-   (the old feed will stay deactivated).
-2. If the 404 was a transient server error: reactivate from the Feed tab.
-
-### Feed deactivated after HTTP 403
-
-The server is forbidding access. Likely causes:
-
-- The feed requires authentication (e.g. Patreon, Substack private feed). These
-  are not currently supported — add the public RSS URL instead.
-- Cloudflare or a WAF is blocking the `my-greader/1.0` user agent. Try a
-  different feed URL.
-- IP-based geo-blocking (Cloudflare Workers egress from Cloudflare's IP ranges).
-
-### "Unclosed root tag" parse errors
-
-The feed's XML is truncated or malformed. The lenient fallback parser will
-attempt to recover items. If the fallback also fails, the feed will accumulate
-errors and eventually deactivate.
-
-Check Feed attempt history or `feed_poll_attempts.diagnostic` for the bounded parser
-message. A successful fallback has `parser_status = 'fallback'`; a hard failure
-has `parser_status = 'failure'` and `error_class = 'parse'`.
-
-### Feed polling too slowly (long poll interval)
-
-Poll intervals increase via adaptive Backoff when a Feed has no new Items. Check
-the interval and next eligibility time in Feed detail. Intervals reset to 30
-minutes when new Items appear, unless a longer Feed timing hint applies.
-
-If a Feed is consistently at the four-hour interval with no errors, it is
-simply quiet. An interval above four hours comes from a longer Feed `<ttl>` (up
-to 24 hours) or a server `Retry-After` value after HTTP 429.
-
-## Reset tools
-
-- **Reactivate a Feed**: Feeds → open the deactivated Feed → click "Reactivate".
-  This resets `consecutiveErrors`, `lastError`, `deactivatedAt`,
-  `deactivationReason`, `checkIntervalMinutes`, and `nextPollAt`. The Feed will
-  be eligible on the next cycle.
-
-- **Sync now**: Feeds → click "Sync now" to start a manual Cycle Run for all
-  globally eligible Feeds without waiting for the 30-minute cron. **Force sync**
-  bypasses due time only; deactivated and unsubscribed Feeds remain excluded.
+For connection or authentication failures rather than Feed polling, check [README's reader setup](../README.md#4-connect-an-rss-reader). Developers investigating those paths can use the [authentication](auth-flow.md) and [GReader API](reference/greader-api.md) references.

@@ -1,4 +1,6 @@
-# Auth Flow
+# Authentication reference
+
+For developers and agents changing authentication. Human setup and connection steps are in [README](../README.md#2-add-the-worker-domain-and-cloudflare-access). This document owns JWT verification, API Token lifecycle, and route security contracts.
 
 ## Overview
 

@@ -91,4 +91,4 @@ The Reading endpoint accepts `days=7|14|30`. It counts current `item_state` rows
 
 Vite with the Cloudflare and React plugins builds the SPA into `dist/client` and the Worker into `dist/my_greader`. `pnpm deploy` builds both; do not deploy an old client bundle with a new JSON API. Playwright acceptance tests in `e2e/` run against the local Vite server (`pnpm test:browser`); Worker/D1 tests run in separate development and production-auth modes.
 
-For authentication details, see [Auth flow](auth-flow.md). For supported protocol behavior, see the [Google Reader API reference](reference/greader-api.md). Key technical rationale is indexed in [Architecture Decision Records](decisions.md).
+For authentication details, see [Auth flow](auth-flow.md). For supported protocol behavior, see the [Google Reader API reference](reference/greader-api.md). Recorded choices and their reasons are in [Decisions](decisions.md).

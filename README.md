@@ -109,23 +109,13 @@ pnpm deploy
 
 A scheduled Workflow checks feeds every 30 minutes. It processes eligible feeds in bounded batches, so the feed count is not limited to one cron invocation. Feeds with new articles are checked sooner; quiet feeds back off gradually, while rate limits and feed-provided timing hints are respected. Repeated errors can deactivate a feed, with the reason visible in the dashboard.
 
-A weekly cleanup (Mondays 03:00 UTC) removes unstarred Items fetched more than 30 days ago by default and expires polling history after 90 days, in bounded batches. Each run can remove up to 10,000 eligible Items and 400 expired Cycle Runs (versus 336 scheduled polling runs per week); extra manual/forced runs and larger backlogs can exceed that capacity and remain until later weeks. Structured cron logs include deletion counts and `itemsBacklogRemaining` / `cycleRunsBacklogRemaining` flags, with a warning when eligible backlog remains. An Item starred by any User is retained; expired attempt references are detached from retained Items before history deletion. Revoked API Tokens are removed after at least seven days. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change Item retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
+A weekly cleanup on Mondays at 03:00 UTC removes unstarred Items fetched more than 30 days ago by default and expires polling history after 90 days. Starred Items are retained. Cleanup is bounded; logs warn when eligible backlog remains. See [architecture](docs/architecture.md#request-and-polling-flow) for batch limits and history handling. Revoked API Tokens are removed after at least seven days. Set `ITEM_RETENTION_DAYS` in `wrangler.jsonc` to change Item retention. Set `ANALYTICS_ENABLED` to `"false"` to disable Analytics Engine writes and queries; core dashboard data remains available from D1.
 
 ## Verify request observability
 
-`wrangler.jsonc` enables Workers Logs at a 100% request-level head sample and Worker traces at a separate 5% head sample. At this project's small scale, full logs retain failure diagnostics; lower trace sampling limits steady-state span volume. Cloudflare collects all logs within each sampled invocation. `observability.redact_query_string: true` removes request query strings from platform-generated Worker log and trace URLs. Reader Stream handlers omit query-provided Stream IDs from custom logs. Neither sampling nor platform redaction removes arbitrary query values copied into application log fields. See [request observability](docs/architecture.md#request-observability) for the boundary.
+The deployment configuration requests 100% Worker logs, 5% Worker traces, and request-query redaction. These are separate from domain-level tracing, whose URLs and query strings may still be captured. See [architecture](docs/architecture.md#request-observability) for the privacy boundary.
 
-After deployment, verify these settings manually in the Cloudflare dashboard:
-
-1. In **Workers & Pages → my-greader → Observability**, check that Workers Logs and Worker traces are enabled. Send a controlled reader request with a harmless, unique query marker. Search its invocation log and custom wide event; confirm the URL has no query string and the marker does not appear in application logs. Check a sampled Worker trace for a URL without the marker. Do not use a real API Token or other secret as the marker. A single missing trace is expected at 5% sampling; inspect multiple requests rather than inferring that tracing is off.
-2. Check that the application Overview and Feed detail still show D1-backed Cycle Run and attempt history, and verify Access login and Current sync. Logs and traces do not replace that history.
-3. Review observed ingestion and storage after deployment and after any traffic change. [Cloudflare Observability pricing](https://developers.cloudflare.com/observability/pricing/) begins charging for stored logs and traces on December 1, 2026; check the current allowance and pricing rather than assuming this baseline remains cost-free.
-
-## Configure operational alerts and dashboards
-
-Follow the [operations runbook](docs/operations.md) for Alert SQL templates, initial thresholds, notification tests, Custom Dashboard panels, temporary Trace Rules, and ingestion review. Verify the account's available datasets and actual log field mapping before enabling monitors. Setup and production verification are manual maintainer actions, not completed by a deployment.
-
-Domain Trace Rules do not change the separate Worker trace rate. They are head-based, so they cannot select eventual errors or slow responses. [Domain traces capture URLs and query strings](https://developers.cloudflare.com/observability/traces/); the Worker redaction flag does not protect that separate telemetry. The runbook includes a scoped debug-header recipe, privacy checks, and cleanup steps. No account-level rules, alerts, dashboards, or destinations are created by this repository.
+Follow [the operations runbook](docs/operations.md) for post-deployment privacy checks, ingestion review, and optional Cloudflare monitoring setup. Deploying does not create alarms, notification destinations, dashboards, or Trace Rules. There is no polling-stop watchdog. The runbook distinguishes daily checks from unexecuted, account-dependent setup recipes.
 
 ## Local development
 
@@ -153,9 +143,24 @@ Browser tests automatically apply migrations in the isolated `.wrangler/e2e` sto
 
 Other commands: `pnpm cf-typegen` regenerates Wrangler binding types, `pnpm studio` opens Drizzle Studio for local D1, and `pnpm format` formats TypeScript files.
 
-## Further documentation
+## Documentation by task
 
-- [Architecture](docs/architecture.md) — module boundaries, persistence, polling, and observability
-- [Authentication](docs/auth-flow.md) — Access verification and API token lifecycle
-- [Google Reader API reference](docs/reference/greader-api.md) — protocol endpoints and compatibility
-- [Architecture decisions](docs/decisions.md) — index of accepted ADRs
+### Operate the application
+
+- [Operations](docs/operations.md): daily and post-deployment checks, followed by optional Cloudflare alarm and dashboard setup.
+- [Troubleshooting](docs/troubleshooting.md): investigate a failing or unexpectedly quiet Feed.
+
+### Change the application
+
+These references serve developers and coding agents; they are not prerequisites for using the app.
+
+- [Architecture](docs/architecture.md): implemented module boundaries, data flow, persistence, and observability.
+- [Authentication](docs/auth-flow.md): Access JWT verification and API Token security contracts.
+- [Google Reader API](docs/reference/greader-api.md): reader protocol behavior and client compatibility.
+- [Domain vocabulary](CONTEXT.md): names and meanings used in code and specs.
+- [Decisions](docs/decisions.md): short, dated choices and their reasons.
+- [Agent instructions](AGENTS.md): task-specific reading and repository working rules.
+
+### Consult deferred research
+
+The [native SQL investigation](docs/native-sql-investigation.md) records a migration no-go, and [Current reading signals](docs/design/current-reading-signals.md) records a deferred experiment. Read these only when revisiting those questions.

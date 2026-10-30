@@ -1,5 +1,7 @@
 # Current reading signals over Google Reader sync
 
+Deferred research for issue #41, not routine operator or implementation guidance. No Current runtime experiment has been completed. Consult this note before proposing metrics that infer reading intent.
+
 ## Conclusion
 
 Current distinguishes Mark Read, Release and age-based disappearance in its UI. The reviewed primary sources do not establish whether those actions produce distinguishable FreshRSS/Google Reader requests. Do not interpret read state as actual reading, completion, release or expiration.
@@ -18,9 +20,9 @@ Current's [FAQ](https://www.currentreader.app/docs/faq) says there is no read/un
 
 `src/handlers/greader/state.ts` handles read and starred operations only. Unknown tag operations return compatible `OK` without changing state. Folder labels do not constitute arbitrary Item-label support.
 
-`src/feed/item-state.ts` writes `Date.now()` when receiving read=true, including repeated updates; unread clears the timestamp. Bulk mark-read also writes server time. Its returned Items are eligible requested Items, not necessarily fresh unread-to-read transitions. The API's Analytics Engine metric must not be assumed to count true reading events.
+`src/feed/item-state.ts` writes `Date.now()` when receiving read=true, including repeated updates; unread clears the timestamp. Bulk mark-read stamps only previously unread Items and returns an affected-row count; already-read Items keep their timestamp. None of these receipt times establishes actual reading intent.
 
-`src/feed/activity.ts` groups current read-state rows by that timestamp. Retention can delete those rows. Consequently the D1 chart is neither an append-only event history nor a record of reading duration, completion or release reasons.
+`src/feed/reading.ts` and the Overview projections in `src/feed/activity.ts` group current read-state rows by that timestamp. Retention can delete those rows. Consequently the D1 chart is neither an append-only event history nor a record of reading duration, completion or release reasons.
 
 For now, use labels such as "Items marked read" and explain that dates reflect latest server receipt. Avoid "Articles read", "completion rate", "time reading" or a read-versus-skipped breakdown.
 

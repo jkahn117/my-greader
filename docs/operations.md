@@ -1,10 +1,28 @@
-# Configure operational alerts and dashboards
+# Operate My GReader
 
-Use this runbook to configure Cloudflare Alerts, a Custom Dashboard, and temporary Trace Rules for My GReader. These are manual maintainer actions. The repository does not create them, and the recipes have not been executed against this Cloudflare account.
+Deployment configures telemetry. It does **not** create alarms, notification destinations, a Custom Dashboard, or domain Trace Rules. Those need the optional setup below. There is no polling-stop watchdog: error alarms cannot detect a scheduler that never starts.
 
-The platform references were checked on October 30, 2026. Recheck their linked contracts before setup because the observability products are evolving. Keep production deployment, account configuration, notification delivery, billing, and secret changes separately approved.
+## Check the application
 
-## Verify the deployment and access first
+1. Open Overview and check the latest scheduled Cycle Run. Polling is scheduled every 30 minutes; a completed run with no Feeds due is valid. If activity is unexpectedly old or a run stays unfinished, inspect the `feed-polling` Workflow in Cloudflare. There is no automatic missing-run notification.
+2. Open a failing Feed's detail and attempt history. Use [troubleshooting](troubleshooting.md) to distinguish an isolated upstream problem, normal Backoff, and broader failures.
+3. After a deployment, confirm Access login and Current sync. Check that Overview and Feed detail still show durable history.
+
+D1-backed application views establish durable outcomes. Logs and traces help investigation but can be lost or sampled.
+
+## Verify deployed telemetry
+
+1. In **Workers & Pages → my-greader → Observability**, confirm Workers Logs and Worker traces are enabled. Send a controlled reader request with a harmless, unique query marker. Find its invocation log and custom wide event; confirm the URL has no query string and the marker is absent from application logs. Use no real secret as the marker.
+2. Inspect multiple requests for a sampled Worker trace with the same privacy properties. The configured baseline is 100% logs and 5% Worker traces, so one missing trace is expected. Neither configuration nor a live tail alone proves stored telemetry is redacted.
+3. Review ingestion and storage using [the guidance below](#review-sampling-and-ingestion), especially after a traffic or sampling change.
+
+## Configure optional Cloudflare monitoring
+
+Start with one email monitor for [Workflow failures](#detect-workflow-failures-and-investigate-the-affected-cycle-run). First confirm the query schema, then create the monitor and test delivery. Add the other warnings only after observing enough normal traffic and polling volume to tune them. No monitor is implied by this document or by a successful deployment.
+
+The remaining sections are setup reference, not routine reading. The recipes have not been executed against this account. Platform sources were checked on October 30, 2026; recheck their contracts before setup. Production deployment, account configuration, notification delivery, billing, and secret changes need separate approval.
+
+### Verify access first
 
 1. Confirm that the deployed release includes terminal Feed-attempt telemetry and the [request privacy and sampling configuration](../README.md#verify-request-observability).
 2. Confirm that your Cloudflare account exposes the required observability features and that your role can read the Worker logs and manage the chosen alerts, dashboards, and domain tracing. Record any unavailable feature or permission instead of treating a documentation recipe as proof of account support.

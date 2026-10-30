@@ -1,17 +1,10 @@
 # Google Reader API
 
-## Client Compatibility
+For developers and agents implementing or reviewing reader compatibility. Human connection steps are in [README](../../README.md#4-connect-an-rss-reader).
 
-Current connects to this backend using its **FreshRSS** sync option. In the app:
+## Client compatibility
 
-```
-Settings → Sync → FreshRSS
-Server URL: https://reader.yourdomain.com
-Username:   user@example.com
-Password:   <API token generated from /app/access>
-```
-
-Current does not know or care that FreshRSS is not actually running. It sends standard GReader API requests to the provided URL and this Worker responds with the expected shapes.
+Current connects using FreshRSS sync mode, but this Worker implements the Google Reader protocol rather than running FreshRSS. Reader routes are available directly and under the `/api/greader.php` prefix. Deployment Access bypass policies must cover the paths used by the client; see [README](../../README.md#2-add-the-worker-domain-and-cloudflare-access).
 
 ### Reference implementations
 

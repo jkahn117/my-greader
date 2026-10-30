@@ -1,5 +1,7 @@
 # Native unified SQL investigation
 
+Deferred research for issues #74 and #75, not deployment instructions. Consult this note when reconsidering the native read transport; current implementation boundaries are in [architecture](architecture.md).
+
 ## Decision
 
 **Binding availability: documented. Migration now: no-go.** Cloudflare documents an Analytics SQL Worker binding, and its dataset guide explicitly includes Workers Analytics Engine datasets. However, the existing `fetchPerf` query uses exact `MAX`, which unified SQL rejects on adaptively sampled datasets. A migration must first resolve that query incompatibility and verify the semantics of the supported `APPROX_MAX` alternative. The repository also does not establish that this Cloudflare account has the required Analytics Engine entitlement or that production queries return acceptable data. Keep the existing HTTP adapter and `CF_API_TOKEN` requirement unchanged until all of these gates pass.
@@ -69,4 +71,4 @@ The exact-`MAX` incompatibility is a documented blocker; account eligibility and
 - [Analytics SQL errors](https://developers.cloudflare.com/analytics/sql-api/errors/): status codes and retry guidance.
 - [Workers Analytics Engine SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/): legacy endpoint, authentication, result format, and sampling.
 - [Cloudflare observability announcement](https://blog.cloudflare.com/one-observability-platform/): product announcement only, not the binding contract.
-- Repository references: `src/feed/analytics.ts`, `src/lib/metrics.ts`, `src/handlers/dashboard.ts`, `src/client/components/overview-panels.tsx`, `wrangler.jsonc`, `package.json`, and `docs/adr/0005-d1-and-analytics-engine.md`.
+- Repository references: `src/feed/analytics.ts`, `src/lib/metrics.ts`, `src/handlers/dashboard.ts`, `src/client/components/overview-panels.tsx`, `wrangler.jsonc`, `package.json`, and the [persistence decision](decisions.md#persistence-d1-is-authoritative-and-analytics-engine-is-optional).
